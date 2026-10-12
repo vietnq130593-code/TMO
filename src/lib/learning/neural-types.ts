@@ -154,8 +154,10 @@ export interface NeuralGraph {
 // replay_eval (BRAIN-P3) + thứ 16–19 runtime_policy + 3 cờ organ kill-switch
 // policy_organ_routing/adaptation/tuning (BRAIN-P4) + thứ 20–22 cờ trình
 // bày BRAIN-UX (ui_brain_edit/ui_synapse_fx/ui_hitech — blueprint §9, user
-// chốt 2026-10-12) + thứ 23–25 trọng số composite reward w₁w₂w₃ (UX-2 nhóm
-// C — override qua STORE›ENV›DEFAULT, log-only KHÔNG đổi).
+// chốt 2026-10-12; BRAIN-LIVE cùng ngày hiệu đính default ui_synapse_fx
+// 'off'→'on' — "đài quan sát não" tab BRAIN Smolab, chỉ thị user 2026-10-12)
+// + thứ 23–25 trọng số composite reward w₁w₂w₃ (UX-2 nhóm C — override qua
+// STORE›ENV›DEFAULT, log-only KHÔNG đổi).
 
 export const TUNING_SPECS: readonly TuningSpec[] = [
   {
@@ -479,14 +481,17 @@ export const TUNING_SPECS: readonly TuningSpec[] = [
   },
   {
     // BRAIN-UX §9.4 (UX-3) — cờ hiệu ứng đường dây ánh sáng trên sân khấu não.
+    // BRAIN-LIVE (chỉ thị user 2026-10-12): default 'off' → 'on' — tab BRAIN
+    // (module Smolab) là "đài quan sát não", hiệu ứng lan truyền là NỘI DUNG
+    // CHÍNH không phải trang trí; ui_brain_edit/ui_hitech vẫn giữ 'off'.
     key: 'ui_synapse_fx',
     label: 'UI_SYNAPSE_FX',
     description:
-      'Hiệu ứng synapse trên đồ thị não đang chọn (UX-3): off = đường thẳng tĩnh như cũ; on = cạnh bezier gradient + nét đứt chạy theo hướng lan truyền (tiến/ngược) + inspector nơ-ron/cạnh. Luôn tôn trọng prefers-reduced-motion (bản tĩnh có mũi tên).',
+      'Hiệu ứng synapse trên đồ thị não đang chọn (UX-3): off = đường thẳng tĩnh như cũ; on = cạnh bezier gradient + nét đứt chạy theo hướng lan truyền (tiến/ngược) + inspector nơ-ron/cạnh. Mặc định ON theo chỉ thị user 2026-10-12 (tab BRAIN module Smolab là "đài quan sát não" — hiệu ứng là nội dung chính; các tab khác không dùng cờ này). Luôn tôn trọng prefers-reduced-motion (bản tĩnh có mũi tên).',
     nodeId: 'softmax-policy',
     type: 'enum',
     enumValues: ['off', 'on'],
-    default: 'off',
+    default: 'on',
     envKey: 'UI_SYNAPSE_FX',
     envMap: raw => {
       const v = raw.trim().toLowerCase()

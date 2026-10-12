@@ -55,8 +55,15 @@ export interface StageEdge {
 // ==================== LIMITS (§9.4 — LOD budget) ====================
 
 export const STAGE_LIMITS = {
-  /** Tối đa nơ-ron VẼ mỗi cột — quá thì nén + label ×N (tiền lệ BrainArchDiagram P2) */
-  maxDisplayNeurons: 8,
+  /**
+   * Tối đa nơ-ron VẼ mỗi cột. BRAIN-LIVE (chỉ thị user 2026-10-12 — "mỗi
+   * lớp có bao nhiêu nơ-ron thì hiển thị đúng số điểm nơ-ron đấy"): vẽ
+   * ĐÚNG từng unit của lớp (10→16→1 giờ vẽ đủ 27 nơ-ron thay vì 8+8+1
+   * tượng trưng như bản UX-3). Nén đại diện CHỈ khi vượt 256 — trường hợp
+   * hiếm ngoài khoảng editor 1–256 (stepper Brain Studio §9.2); quá thì
+   * nén đều + label ×N (giữ cơ chế tiền lệ BrainArchDiagram P2).
+   */
+  maxDisplayNeurons: 256,
   /** Tối đa cạnh VẼ (§9.4 LOD ~300) — quá thì sampling đại diện tất định */
   maxEdges: 300,
   /** Số đoạn rời rạc hóa bezier để hit-test (đủ mịn cho touch 44px) */
@@ -78,6 +85,13 @@ export const STAGE_LIMITS = {
  * Dựng toạ độ cột + nơ-ron. viewBox width cố định 340 (đúng tiền lệ
  * BrainArchDiagram 300 — nới chút cho 6 lớp ẩn), chiều cao theo cột cao nhất.
  * Tất định, thuần — cùng input luôn ra cùng output.
+ *
+ * BRAIN-LIVE (chỉ thị user 2026-10-12 — "hiển thị thực"): vẽ ĐÚNG units
+ * từng lớp (display = min(units, maxDisplayNeurons) với cap 256 — vd spec
+ * 10→16→1 giờ vẽ đủ 10+16+1 = 27 nơ-ron, KHÔNG còn nén tượng trưng 8+8+1
+ * như bản UX-3). Cột 256 nơ-ron → height ≈ 4404 viewBox — ĐÚNG thiết kế:
+ * zoom/pan viewBox do component BrainStage v2 lo phần xem. Nén đại diện
+ * (units > 256) giữ nguyên thuật toán cũ: đầu 0, cuối units−1, đơn điệu.
  */
 export function buildStageLayout(columns: readonly StageColumn[]): {
   neurons: StageNeuron[]
@@ -102,7 +116,8 @@ export function buildStageLayout(columns: readonly StageColumn[]): {
     for (let r = 0; r < display; r++) {
       // realIndex: nén đều đại diện (đầu/cuối/giữa) — nơ-ron VẼ gắn chỉ số
       // thật gần nhất để inspector tra bias/|w| đúng unit (units ≤ display:
-      // map thẳng 1-1)
+      // map thẳng 1-1 — với cap 256 BRAIN-LIVE, mọi cột trong khoảng editor
+      // 1–256 đều map thẳng, KHÔNG nén)
       const realIndex = col.units <= STAGE_LIMITS.maxDisplayNeurons
         ? r
         : Math.round((r / Math.max(display - 1, 1)) * (col.units - 1))

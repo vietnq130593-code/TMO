@@ -16,14 +16,14 @@
 //   B3. ARIA — svg role="img" → role="group" (con node là role="button" tương
 //       tác — role=img biến con thành presentational, mâu thuẫn đã backlog từ P1).
 //
-// BRAIN-UX §9.5 (UX-4, 2026-10-12 — blueprint v0.10): tái bố cục dashboard
-//   3 vùng — 3 card giữa (Não vận hành / Bảng điều khiển tham số / Nhật ký
-//   tinh chỉnh) gộp thành MỘT card "Não vận hành": trái = Brain Studio
-//   (UX-1) + ngưỡng thức tỉnh; giữa = Brain Stage (UX-3); phải = tab
-//   Training Console (UX-2) / Tham số runtime / Nhật ký tinh chỉnh. Đồ thị
-//   6 lớp + node inspector + Q-table + SAL GIỮ NGUYÊN. Mobile <1024px:
-//   console thành bottom-sheet nổi (tiền đề P2-M3). State draft não nâng
-//   lên đây (single source cho Studio + Console + Stage — controlled).
+// BRAIN-UX §9.5 (UX-4, 2026-10-12 — blueprint v0.10) → BRAIN-LIVE 15-d
+//   (2026-10-12, chỉ thị user): panel "Não vận hành — MLP-CPU (BRAIN)" ĐÃ
+//   DI CHUYỂN nguyên vẹn sang module Smolab, tab BRAIN
+//   (src/components/smolab/brain-tab.tsx) kèm state draft não + console
+//   3 tab (Training Console / Tham số runtime — giờ mở TuningParamDialog
+//   tại chỗ / Nhật ký tinh chỉnh) + live poll /api/brain/activity.
+//   File này giờ chỉ còn phần CỦA ĐỒ THỊ: sơ đồ 6 lớp + zoom/pan + node
+//   inspector (chỉnh tham số runtime TẠI NỐT) + Q-table + SAL.
 //
 // Tự poll 15s (fail-open giữ dữ liệu cũ); health (qdrant/neo4j/r2) nhận
 // qua prop từ parent (page.tsx poll 10s sẵn).
@@ -32,7 +32,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react'
 import {
   Network, RefreshCw, RotateCcw, Loader2, Settings2, ArrowRight,
-  TriangleAlert, Wrench, Database, Zap, ZoomIn, ZoomOut, Maximize2, History, BrainCircuit, Tags,
+  TriangleAlert, Wrench, Database, ZoomIn, ZoomOut, Maximize2,
 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -49,7 +49,6 @@ import {
 import { toast } from 'sonner'
 import type { HealthResponse } from '@/components/app-shared'
 import type { NeuralGraph, TuningStateEntry, TuningChangeLogEntry } from '@/lib/learning/neural-types'
-import { TUNING_CHANGE_LOG_CAP } from '@/lib/learning/neural-types'
 import {
   NEURAL_GEO, NEURAL_FONTS, NEURAL_ZOOM,
   computeNeuralLayout, edgeVisual, edgeIsActive, edgeDotVisible,
@@ -57,22 +56,6 @@ import {
   clampNeuralZoom, neuralSvgWidth, neuralZoomLabel, zoomStepFrom,
   type NeuralZoom, type PlacedNode,
 } from '@/lib/learning/neural-layout'
-// BRAIN-P1 phần UI (áp dụng sớm 2026-10-12 — BLUEPRINT-BRAIN §4.1 v0.2):
-// registry single-source cho panel "Não vận hành"; API + UI cùng import.
-import {
-  BRAIN_REGISTRY,
-  BRAIN_TRAINABLE_KEYS,
-  computeLabelTotal,
-  type BrainApiResponse, type BrainStatusEntry, type BrainKey,
-} from '@/lib/brain/registry'
-// BRAIN-UX §9.5 (UX-4): 3 component studio (UX-1/UX-2/UX-3) ghép vào
-// dashboard 3 vùng — state draft nâng lên đây (controlled, single source).
-import { BrainStudio } from '@/components/database/brain-studio'
-import { BrainStage } from '@/components/database/brain-stage'
-import { TrainingConsole, type TrainOutcomeUi } from '@/components/database/training-console'
-// BRAIN-UX §9.2: schema nháp single-source — client + server cùng rule
-// (validateBrainDraft/defaultDraftFor import chung với route PUT/train).
-import { defaultDraftFor, validateBrainDraft, type BrainDraftSpec } from '@/lib/brain/spec-schema'
 
 // ==================== API CONTRACT ====================
 
@@ -307,25 +290,9 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
     }
   }, [])
 
-  // BRAIN-P1 UI (2026-10-12): trạng thái 3 brain cho panel "Não vận hành"
-  // — fail-open tuyệt đối: lỗi fetch giữ dữ liệu cũ, chưa từng load thành
-  // công thì UI vẫn render được từ registry tĩnh (đếm hiển thị "—").
-  const [brainData, setBrainData] = useState<BrainApiResponse | null>(null)
-  const [brainError, setBrainError] = useState<string | null>(null)
-  const hasBrainDataRef = useRef(false)
-  const fetchBrainData = useCallback(async () => {
-    try {
-      const res = await fetch('/api/brain')
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const json = (await res.json()) as BrainApiResponse
-      setBrainData(json)
-      hasBrainDataRef.current = true
-      setBrainError(null)
-    } catch (err) {
-      console.error('[Brain] fetch error:', err)
-      if (!hasBrainDataRef.current) setBrainError(err instanceof Error ? err.message : String(err))
-    }
-  }, [])
+  // BRAIN-LIVE 15-d (2026-10-12): toàn bộ state não (draft 3 brain / train /
+  // console 3 tab / bảng Tham số runtime) ĐÃ DI CHUYỂN sang module Smolab
+  // tab BRAIN — src/components/smolab/brain-tab.tsx (chỉ thị user 2026-10-12).
 
   // Mount + poll nền 15s giữ số liệu sống (fail-open giữ dữ liệu cũ).
   // (queueMicrotask: defer để không gọi setState đồng bộ trong body effect —
@@ -334,204 +301,10 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
   // (không fetch vô nghĩa vào tab nền); hiện lại → fetch ngay một lần rồi
   // tiếp tục nhịp 15s. Tab load ngầm (visibilityState=hidden ngay từ đầu)
   // → lần fetch đầu hoãn tới khi user mở tab.
-  // BRAIN-P1 UI: cùng nhịp poll này cũng kéo /api/brain (panel Não vận hành).
-  // ==================== BRAIN-UX §9.5 (UX-4) — STATE DASHBOARD 3 VÙNG ====================
-  // (blueprint §9.5, user chốt 2026-10-12): thanh trái = Brain Studio chọn
-  // não + ngưỡng thức tỉnh; sân khấu giữa = Brain Stage (UX-3) + chú thích
-  // bất biến A1; thanh phải = tab Training Console (UX-2) / Tham số runtime
-  // / Nhật ký tinh chỉnh (gộp từ dưới lên — rút ngắn trang). Mobile <1024px
-  // (NEURAL_DESKTOP_BREAKPOINT — tiền đề P2-M3): console thành bottom-sheet.
-
-  /// Não đang chọn — mặc định 'calibration_v3'; restore từ localStorage
-  /// (queueMicrotask + try/catch — cùng pattern zoom restore phía dưới;
-  /// fail-open giữ mặc định khi private mode).
-  const [selectedBrainKey, setSelectedBrainKey] = useState<BrainKey>('calibration_v3')
-  useEffect(() => {
-    queueMicrotask(() => {
-      try {
-        const saved = localStorage.getItem('tmo-brain-selected')
-        if (saved === 'calibration_v3' || saved === 'surrogate' || saved === 'policy') setSelectedBrainKey(saved)
-      } catch { /* private mode — giữ mặc định */ }
-    })
-  }, [])
-  const selectBrain = useCallback((key: BrainKey) => {
-    setSelectedBrainKey(key)
-    try { localStorage.setItem('tmo-brain-selected', key) } catch { /* bỏ qua */ }
-  }, [])
-
-  /// Bản nháp làm việc từng brain (UX-4 lift state lên đây từ Brain Studio —
-  /// Studio + Training Console + Brain Stage cùng đọc MỘT nguồn)
-  const [draftsByBrain, setDraftsByBrain] = useState<Partial<Record<BrainKey, BrainDraftSpec>>>({})
-  /// Bản nháp đã lưu server (GET /api/brain/spec-draft) — null = chưa có nháp
-  const [savedDrafts, setSavedDrafts] = useState<Partial<Record<BrainKey, BrainDraftSpec | null>>>({})
-  /// Brain đang có chỉnh chưa lưu (chỉ báo "• chưa lưu")
-  const [dirtyBrains, setDirtyBrains] = useState<Set<string>>(new Set())
-  const [savingDraft, setSavingDraft] = useState(false)
-  /// Lỗi server lần PUT cuối (hiện ở Brain Studio cùng lỗi validation cục bộ)
-  const [saveErrors, setSaveErrors] = useState<string[]>([])
-  /// Kết quả train gần nhất (hiển thị ở Training Console — UX-2)
-  const [trainOutcome, setTrainOutcome] = useState<TrainOutcomeUi | null>(null)
-  /// Brain Stage (UX-3) bấm cột lớp ẩn → Brain Studio nháy tới hàng editor
-  const [focusLayerSignal, setFocusLayerSignal] = useState<{ brain: BrainKey; layer: number; nonce: number } | null>(null)
-  /// Tab đang mở của thanh phải
-  const [consoleTab, setConsoleTab] = useState<'train' | 'tuning' | 'log'>('train')
-  /// Mobile: bottom-sheet console (mở bằng nút nổi ⚙ Console)
-  const [consoleSheetOpen, setConsoleSheetOpen] = useState(false)
-
-  // Kéo nháp đã lưu 1 lần lúc mount — fail-open im lặng (lỗi/mạng mất →
-  // draft làm việc = defaultDraftFor chuẩn pipeline, editor vẫn dùng được)
-  useEffect(() => {
-    let alive = true
-    void (async () => {
-      try {
-        const res = await fetch('/api/brain/spec-draft')
-        if (!res.ok) return
-        const json = (await res.json()) as { drafts: Array<{ brain: string; spec: BrainDraftSpec | null }> }
-        if (!alive) return
-        const nextSaved: Partial<Record<BrainKey, BrainDraftSpec | null>> = {}
-        for (const d of json.drafts) {
-          if (d.brain === 'calibration_v3' || d.brain === 'surrogate' || d.brain === 'policy') {
-            nextSaved[d.brain] = d.spec
-          }
-        }
-        setSavedDrafts(nextSaved)
-        // Bản làm việc = bản đã lưu nếu có (seed), ngược lại để defaultDraftFor
-        setDraftsByBrain(prev => {
-          const merged = { ...prev }
-          for (const k of Object.keys(nextSaved) as BrainKey[]) {
-            if (nextSaved[k]) merged[k] = nextSaved[k] as BrainDraftSpec
-          }
-          return merged
-        })
-      } catch { /* fail-open im lặng */ }
-    })()
-    return () => { alive = false }
-  }, [])
-
-  /// Bản nháp làm việc của não đang chọn (fallback default chuẩn pipeline)
-  const draftForSelected = useMemo(
-    () => draftsByBrain[selectedBrainKey] ?? defaultDraftFor(selectedBrainKey),
-    [draftsByBrain, selectedBrainKey],
-  )
-
-  /// Mọi chỉnh sửa draft từ Studio/Console bắn về đây (đánh dấu dirty)
-  const onDraftChange = useCallback((d: BrainDraftSpec) => {
-    setDraftsByBrain(prev => ({ ...prev, [d.brain]: d }))
-    setDirtyBrains(prev => new Set(prev).add(d.brain))
-  }, [])
-
-  /// Lưu nháp (PUT /api/brain/spec-draft) — validate local bằng single-source
-  /// spec-schema trước khi PUT (server validate lại lần nữa — không tin client)
-  const saveDraft = useCallback(async (key: BrainKey) => {
-    const spec = draftsByBrain[key] ?? defaultDraftFor(key)
-    const inputDim = brainData?.brains.find(b => b.key === key)?.inputDim ?? null
-    const v = validateBrainDraft({ ...spec, brain: key }, inputDim)
-    if (!v.ok) {
-      setSaveErrors(v.errors)
-      return
-    }
-    setSavingDraft(true)
-    try {
-      const res = await fetch('/api/brain/spec-draft', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brain: key, spec: v.normalized }),
-      })
-      const json = (await res.json().catch(() => ({}))) as { error?: string; errors?: string[] }
-      if (!res.ok) {
-        setSaveErrors(json.errors ?? [json.error ?? `HTTP ${res.status}`])
-        return
-      }
-      setSavedDrafts(prev => ({ ...prev, [key]: v.normalized }))
-      setDraftsByBrain(prev => ({ ...prev, [key]: v.normalized }))
-      setDirtyBrains(prev => { const n = new Set(prev); n.delete(key); return n })
-      setSaveErrors([])
-    } catch (err) {
-      setSaveErrors([err instanceof Error ? err.message : String(err)])
-    } finally {
-      setSavingDraft(false)
-    }
-  }, [draftsByBrain, brainData])
-
-  // Esc đóng console bottom-sheet (mobile) — listener dọn đúng khi đóng
-  useEffect(() => {
-    if (!consoleSheetOpen) return
-    const onKey = (ev: KeyboardEvent) => { if (ev.key === 'Escape') setConsoleSheetOpen(false) }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [consoleSheetOpen])
-
-  // BRAIN-P2: train xong (nút Huấn luyện) cũng fetchBrainData tươi.
-  // BRAIN-UX §9.3 (UX-2): useDraft=true → POST /api/brain/train đọc bản nháp
-  // ĐÃ LƯU từ DB (server validate lại — bất biến A1 §9.1-1: draft vẫn đi đủ
-  // cổng train → thắng đối chứng CV → thăng cấp, không có đường tắt).
-  const [trainingBrains, setTrainingBrains] = useState<Set<string>>(new Set())
-  const trainBrain = useCallback(async (key: BrainKey, useDraft: boolean) => {
-    setTrainingBrains(prev => new Set(prev).add(key))
-    try {
-      const res = await fetch('/api/brain/train', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brain: key, useDraft: useDraft || undefined }),
-      })
-      const json = (await res.json().catch(() => ({}))) as {
-        error?: string; version?: number; active?: boolean; improved?: boolean; sampleSize?: number
-        cvBrier?: number; brierV2?: number
-        heads?: { success?: { cvBrier?: number; brierBaseline?: number; improved?: boolean } }
-        cv?: { ceMixture?: number; ceBaselineQ?: number; improved?: boolean }
-        history?: Array<{ epoch: number; trainLoss: number; valLoss: number | null }> | { success?: Array<{ epoch: number; trainLoss: number; valLoss: number | null }> }
-      }
-      if (!res.ok) {
-        toast.error('Huấn luyện Brain không chạy', { description: json.error ?? `HTTP ${res.status}` })
-        return
-      }
-      // Chỉ số hiển thị theo brain (cùng bản chất "đối chứng CV ngặt" nhưng
-      // baseline mỗi brain một tên — BRAIN-P3/P4): A so V2 (brierV2) · B so
-      // base-rate (heads.success.brierBaseline) · C so π_Q (cv.ceBaselineQ)
-      const cvText = key === 'policy'
-        ? `CE mixture ${json.cv?.ceMixture?.toFixed(4) ?? '—'}`
-        : key === 'surrogate'
-          ? `Brier ${json.heads?.success?.cvBrier?.toFixed(4) ?? '—'}`
-          : `Brier ${json.cvBrier?.toFixed(4) ?? '—'}`
-      const baselineText = key === 'policy'
-        ? `π_Q ${json.cv?.ceBaselineQ?.toFixed(4) ?? '—'}`
-        : key === 'surrogate'
-          ? `base-rate ${json.heads?.success?.brierBaseline?.toFixed(4) ?? '—'}`
-          : `V2 ${json.brierV2?.toFixed(4) ?? '—'}`
-      const brainName = key === 'surrogate' ? 'Brain-B "Vọng" (surrogate)' : key === 'policy' ? 'Brain-C "Lệnh" (policy)' : 'Brain-A "V3"'
-      const flagName = key === 'surrogate' ? 'REPLAY_EVAL' : key === 'policy' ? 'RUNTIME_POLICY' : 'CALIBRATION_V3'
-      const verdict = json.active
-        ? `v${json.version} ACTIVE — thắng CV (cờ ${flagName} mới có tác dụng khi bật)`
-        : `v${json.version} không thắng CV — giữ hành vi cũ (bản vết audit đã ghi)`
-      toast.success(
-        `${brainName} huấn luyện xong · ${cvText} vs ${baselineText}`,
-        { description: `${verdict} · ${json.sampleSize ?? '?'} mẫu` },
-      )
-      setTrainOutcome({
-        brain: key,
-        useDraft,
-        version: json.version ?? 0,
-        active: Boolean(json.active),
-        cvText,
-        baselineText,
-        history: Array.isArray(json.history) ? json.history : (json.history?.success ?? []),
-        improved: Boolean(json.improved),
-      })
-      void fetchBrainData() // kéo trạng thái mới ngay không chờ nhịp 15s
-    } catch (err) {
-      toast.error('Huấn luyện Brain thất bại', { description: err instanceof Error ? err.message : String(err) })
-    } finally {
-      setTrainingBrains(prev => {
-        const next = new Set(prev)
-        next.delete(key)
-        return next
-      })
-    }
-  }, [fetchBrainData])
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null
     const start = () => {
-      if (timer === null) timer = setInterval(() => { void fetchData(); void fetchBrainData() }, POLL_NEURAL_MS)
+      if (timer === null) timer = setInterval(() => { void fetchData() }, POLL_NEURAL_MS)
     }
     const stop = () => {
       if (timer !== null) {
@@ -542,7 +315,6 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
     if (document.visibilityState !== 'hidden') {
       queueMicrotask(() => {
         void fetchData()
-        void fetchBrainData()
       })
       start()
     }
@@ -551,7 +323,6 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
         stop()
       } else {
         void fetchData()
-        void fetchBrainData()
         start()
       }
     }
@@ -560,7 +331,7 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
       stop()
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [fetchData, fetchBrainData])
+  }, [fetchData])
 
   // P1-1: restore zoom 1 lần SAU mount (localStorage > mobile-fit > 100%)
   // rồi mới bật persist — tránh ghi đè lựa chọn user bằng mặc định khởi tạo.
@@ -652,7 +423,6 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
     }
     return m
   }, [tuning])
-  const tuningByKey = useMemo(() => new Map(tuning.map(t => [t.key, t])), [tuning])
   const paramsChanged = tuning.filter(t => t.source === 'store').length
 
   // Auto-layout (đời từ inline sang module thuần neural-layout — pin test r82)
@@ -681,55 +451,6 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
     return [...fromApi, ...healthLiveFor(health ?? null, selectedNodeId)]
   }, [selectedNodeId, data, health])
 
-  // BRAIN-P1 UI: danh sách brain để render — dữ liệu thật nếu đã load,
-  // còn chưa load/lỗi thì fallback registry tĩnh (đếm null → hiển thị "—",
-  // fail-open không để panel trắng). useMemo chống tạo lại mỗi nhịp poll.
-  const brainEntries = useMemo<BrainStatusEntry[]>(() => {
-    if (brainData) return brainData.brains
-    return BRAIN_REGISTRY.map(spec => ({
-      ...spec,
-      lifecycle: 'dormant' as const,
-      signals: spec.signals.map(s => ({ ...s, current: null, ok: false })),
-      models: [],
-      trainable: BRAIN_TRAINABLE_KEYS.includes(spec.key),
-    }))
-  }, [brainData])
-
-  // UX-1 áp dụng sớm (chỉ thị user 2026-10-12 — blueprint §9.2 v0.4): tổng
-  // số NHÃN VẬN HÀNH TÍCH LŨY — "nguyên liệu dạy não" (EvalResult +
-  // AgentRunRecord + QEntry + ArbiterVerdict). Logic thuần tách xuống
-  // registry.computeLabelTotal (pin được bằng test r84): cộng theo NGUỒN
-  // (khóa signal duy nhất — không đếm trùng khi nhiều brain cùng đọc 1
-  // bảng); null (đếm lỗi) bị bỏ; MỌI nguồn null → ẩn badge (không phải
-  // "0 nhãn" — FB-BRAIN-P1-R1-12).
-  const labelTotal = useMemo<number | null>(() => computeLabelTotal(brainData?.brains), [brainData])
-
-  // ── BRAIN-UX §9.5 (UX-4): giá trị phái sinh cho dashboard 3 vùng ──
-  // Não đang chọn (fallback về đầu danh sách — fail-open với registry tĩnh)
-  const selectedEntry = brainEntries.find(b => b.key === selectedBrainKey) ?? brainEntries[0]
-  // Cờ trình bày (tuning-store STORE › ENV › DEFAULT — mặc định off)
-  const uiBrainEditOn = tuningByKey.get('ui_brain_edit')?.effectiveValue === 'on'
-  const uiSynapseFxOn = tuningByKey.get('ui_synapse_fx')?.effectiveValue === 'on'
-  // Trọng số composite reward hiệu lực (§9.3 nhóm C — LOG-ONLY): đọc từ
-  // tuning state, NaN/Thiếu → fallback 1/3 (0.3333333333333333 — trùng default TUNING_SPECS)
-  const rewardWeightsEffective = useMemo(() => {
-    const read = (k: 'reward_w_outcome' | 'reward_w_efficiency' | 'reward_w_quality'): number => {
-      const n = Number(tuningByKey.get(k)?.effectiveValue)
-      return Number.isFinite(n) ? n : 0.3333333333333333
-    }
-    return {
-      outcome: read('reward_w_outcome'),
-      efficiency: read('reward_w_efficiency'),
-      quality: read('reward_w_quality'),
-    }
-  }, [tuningByKey])
-  // Nguồn hiệu lực của w₁ (cùng SOURCE_BADGE bảng tuning đang dùng)
-  const rewardSourceLabel = SOURCE_BADGE[tuningByKey.get('reward_w_outcome')?.source ?? 'default']?.label ?? 'DEFAULT'
-  // Giá trị cờ runtime của não đang chọn (badge trái — kế thừa BrainCard cũ)
-  const selectedFlagValue = selectedEntry.flagTuningKey !== undefined
-    ? String(tuningByKey.get(selectedEntry.flagTuningKey)?.effectiveValue ?? 'off')
-    : undefined
-
   // P2-M3: mobile (viewport < lg) → chọn node mở bottom-sheet inspector
   // (thay cuộn xuống inspector dưới đồ thị — below-the-fold); desktop giữ
   // inspector cột phải hiển thị thường trực, không cuộn.
@@ -739,168 +460,6 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
     setSelectedNodeId(nodeId)
     if (!isDesktop) setSheetOpen(true)
   }, [isDesktop])
-
-  // ── UX-4: nội dung thanh phải (tab console) — dùng ở CẢ 2 nơi: cột phải
-  // desktop và bottom-sheet mobile. isDesktop loại trừ nhau nên không bao
-  // giờ mount 2 bản cùng lúc (không mất state khi đổi viewport). ──
-  const consolePanel = (
-    <div className="space-y-2.5" role="tabpanel" aria-label="Console não vận hành">
-      {/* Thanh tab 3 nút (style giống tab head brain-stage UX-3) */}
-      <div className="flex overflow-hidden rounded-md border border-stone-700/70" role="tablist" aria-label="Bảng điều khiển não">
-        {([
-          ['train', 'Training Console (UX-2)'],
-          ['tuning', 'Tham số runtime'],
-          ['log', 'Nhật ký tinh chỉnh'],
-        ] as const).map(([id, label]) => (
-          <button
-            key={id}
-            role="tab"
-            aria-selected={consoleTab === id}
-            onClick={() => setConsoleTab(id)}
-            className={`min-h-[44px] md:min-h-[32px] flex-1 px-2 text-[10px] ${consoleTab === id ? 'bg-amber-500/20 text-amber-300' : 'text-stone-400 hover:text-stone-200'}`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {consoleTab === 'train' && (
-        <TrainingConsole
-          brain={selectedEntry}
-          draft={draftForSelected}
-          onDraftChange={onDraftChange}
-          onDraftSave={() => void saveDraft(selectedBrainKey)}
-          draftDirty={dirtyBrains.has(selectedBrainKey)}
-          hasSavedDraft={savedDrafts[selectedBrainKey] != null}
-          editorOn={uiBrainEditOn}
-          onTrain={trainBrain}
-          training={trainingBrains.has(selectedBrainKey)}
-          outcome={trainOutcome}
-          rewardWeights={rewardWeightsEffective}
-          rewardSource={rewardSourceLabel}
-          onSetRewardWeight={(k, v) => void handleSet(k, v)}
-          onResetRewardWeight={k => void handleReset(k)}
-          savingRewardKey={Array.from(savingKeys).find(k => k.startsWith('reward_w_')) ?? null}
-        />
-      )}
-
-      {consoleTab === 'tuning' && (
-        <div>
-          <div className="mb-2 flex flex-wrap items-center gap-1.5">
-            <Zap className="h-3 w-3 shrink-0 text-violet-400" />
-            <span className="text-[10px] text-stone-500">chuỗi hiệu lực: STORE › ENV › DEFAULT · áp dụng tức thì (không restart)</span>
-          </div>
-          <div className="overflow-x-auto max-h-96 overflow-y-auto">
-            <table className="w-full text-[11px]">
-              <thead>
-                <tr className="text-stone-500 border-b border-slate-800">
-                  <th className="text-left py-1.5 pr-2 font-medium">Tham số</th>
-                  <th className="text-left py-1.5 pr-2 font-medium">Nút</th>
-                  <th className="text-left py-1.5 pr-2 font-medium">Hiệu lực</th>
-                  <th className="text-left py-1.5 pr-2 font-medium">Mặc định</th>
-                  <th className="text-left py-1.5 font-medium">Hành động</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tuning.length === 0 && (
-                  <tr><td colSpan={5} className="py-4 text-center text-stone-600">Đang tải…</td></tr>
-                )}
-                {tuning.map(t => {
-                  const node = graph?.nodes.find(n => n.id === t.nodeId)
-                  const src = SOURCE_BADGE[t.source] ?? SOURCE_BADGE.default
-                  return (
-                    <tr key={t.key} className="border-b border-slate-900/80 hover:bg-slate-950/40">
-                      <td className="py-1.5 pr-2">
-                        <p className="text-stone-200 font-medium">{t.label}</p>
-                        <p className="font-mono text-[9px] text-stone-600">{t.key}</p>
-                      </td>
-                      <td className="py-1.5 pr-2">
-                        <button
-                          className="text-cyan-400 hover:text-cyan-300 hover:underline text-left"
-                          onClick={() => selectNode(t.nodeId)}
-                        >
-                          {node?.title ?? t.nodeId}
-                        </button>
-                      </td>
-                      <td className="py-1.5 pr-2">
-                        <span className="inline-flex items-center gap-1.5">
-                          <span className="text-stone-100 font-mono">
-                            {String(t.effectiveValue)}{t.unit ? ` ${t.unit}` : ''}
-                          </span>
-                          <Badge variant="outline" className={`text-[9px] h-3.5 px-1 ${src.cls}`}>{src.label}</Badge>
-                        </span>
-                      </td>
-                      <td className="py-1.5 pr-2 text-stone-500 font-mono">
-                        {String(t.default)}{t.unit ? ` ${t.unit}` : ''}
-                      </td>
-                      <td className="py-1.5">
-                        <span className="inline-flex items-center gap-1">
-                          <button
-                            className="text-stone-400 hover:text-stone-200"
-                            title="Xem & tinh chỉnh tại nút"
-                            aria-label={`Mở tinh chỉnh ${t.label}`}
-                            onClick={() => selectNode(t.nodeId)}
-                          >
-                            <ArrowRight className="h-3 w-3" />
-                          </button>
-                          {t.storeValue !== null && (
-                            <button
-                              className="text-stone-500 hover:text-amber-400 disabled:opacity-40"
-                              title="Trả về mặc định (bỏ override)"
-                              aria-label={`Reset ${t.label}`}
-                              disabled={savingKeys.has(t.key)}
-                              onClick={() => void handleReset(t.key)}
-                            >
-                              <RotateCcw className="h-3 w-3" />
-                            </button>
-                          )}
-                        </span>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {consoleTab === 'log' && (
-        <div>
-          <div className="mb-2 flex flex-wrap items-center gap-2">
-            <History className="h-3.5 w-3.5 text-teal-400" />
-            <h4 className="text-xs font-semibold text-stone-100">Nhật ký tinh chỉnh runtime</h4>
-            <span className="text-[10px] text-stone-500">mọi đặt / trả-mặc-định được ghi audit · giữ tối đa {TUNING_CHANGE_LOG_CAP} dòng mới nhất</span>
-          </div>
-          {(data?.changeLog?.length ?? 0) === 0 ? (
-            <p className="text-[11px] text-stone-500 italic">Chưa có thay đổi nào được ghi (phát sinh khi đặt hoặc trả mặc định một tham số).</p>
-          ) : (
-            <div className="dialog-scrollbar max-h-44 space-y-1.5 overflow-y-auto">
-              {data!.changeLog!.map(c => {
-                const label = tuningByKey.get(c.key)?.label ?? c.key
-                return (
-                  <div
-                    key={c.id}
-                    className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]"
-                    title={`${c.key} · store: ${c.fromStoreValue ?? '—'} → ${c.toStoreValue ?? '—'}`}
-                  >
-                    <span className="shrink-0 tabular-nums text-stone-600">{new Date(c.createdAt).toLocaleString('vi-VN')}</span>
-                    <span className="font-mono text-stone-300">{label}</span>
-                    {c.action === 'set'
-                      ? <Badge variant="outline" className="h-3.5 px-1 border-amber-500/45 bg-amber-950/70 text-[9px] text-amber-400">đặt</Badge>
-                      : <Badge variant="outline" className="h-3.5 px-1 border-stone-600/50 bg-slate-950/70 text-[9px] text-stone-400">về mặc định</Badge>}
-                    <span className="font-mono text-stone-500">{c.fromEffectiveValue}</span>
-                    <ArrowRight className="h-2.5 w-2.5 shrink-0 text-stone-600" />
-                    <span className="font-mono font-medium text-stone-100">{c.toEffectiveValue}</span>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
 
   // ==================== RENDER ====================
 
@@ -1220,152 +779,6 @@ export function NeuralArchitectureSection({ health }: { health?: HealthResponse 
           </div>
         </SheetContent>
       </Sheet>
-
-      {/* ── PANEL "NÃO VẬN HÀNH" (BRAIN-P1 UI → BRAIN-UX §9.5 UX-4: dashboard
-          3 vùng — 3 card cũ [Não vận hành / Bảng điều khiển tham số / Nhật ký
-          tinh chỉnh] gộp về đây thành MỘT card; đồ thị 6 lớp + node inspector
-          + Q-table + SAL ở trên/dưới GIỮ NGUYÊN) ── */}
-      <div className="nc-wrap nc-amber">
-        <Card className="nc-panel nc-md nc-border-amber">
-          <CardContent className="p-4">
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <BrainCircuit className="h-3.5 w-3.5 shrink-0 text-amber-400" />
-              <h4 className="text-xs font-semibold text-stone-100">Não vận hành — MLP-CPU (BRAIN)</h4>
-              <span className="text-[10px] text-stone-500">
-                3 bộ não nhỏ tự huấn luyện khi đủ mẫu · ngủ an toàn khi thiếu · BLUEPRINT-BRAIN-P1-P5 v0.10 (§9 BRAIN-UX)
-              </span>
-              {brainData && (
-                <div className="ml-auto flex shrink-0 items-center gap-1.5">
-                  {labelTotal !== null && (
-                    <Badge
-                      variant="outline"
-                      className="h-3.5 px-1 bg-slate-950/60 text-[9px] text-stone-300 border-stone-600/50"
-                      title="Tổng nhãn vận hành tích lũy — nguyên liệu dạy não (EvalResult + AgentRunRecord + QEntry + ArbiterVerdict, cộng theo nguồn không trùng — blueprint §2/§9.2)"
-                    >
-                      <Tags className="mr-0.5 h-2.5 w-2.5" aria-hidden="true" />
-                      {viNum(labelTotal)} nhãn
-                    </Badge>
-                  )}
-                  <Badge variant="outline" className="text-[9px] h-3.5 px-1 bg-amber-950/60 text-amber-400 border-amber-500/40">
-                    ● sống · {new Date(brainData.generatedAt).toLocaleTimeString('vi-VN')}
-                  </Badge>
-                </div>
-              )}
-            </div>
-            {brainError && !brainData && (
-              <p className="mb-2 text-[11px] text-amber-500/90">
-                Không tải được số liệu mẫu ({brainError}) — hiển thị spec kế hoạch, thử Làm mới ở trên (fail-open).
-              </p>
-            )}
-            {/* Lưới 3 vùng (desktop ≥1280px); dưới xl xếp dọc tự nhiên;
-                mobile <1024px cột phải thay bằng nút nổi ⚙ Console + sheet */}
-            <div className="grid gap-4 xl:grid-cols-[minmax(280px,320px)_minmax(0,1fr)_minmax(340px,420px)]">
-              {/* ── TRÁI: Brain Studio (UX-1) + ngưỡng thức tỉnh + badge ── */}
-              <div className="space-y-2.5">
-                <BrainStudio
-                  brains={brainEntries}
-                  selectedKey={selectedBrainKey}
-                  onSelect={selectBrain}
-                  editorOn={uiBrainEditOn}
-                  draft={draftForSelected}
-                  onDraftChange={onDraftChange}
-                  onDraftSave={() => void saveDraft(selectedBrainKey)}
-                  savingDraft={savingDraft}
-                  draftDirty={dirtyBrains.has(selectedBrainKey)}
-                  saveErrors={saveErrors}
-                  focusLayerSignal={focusLayerSignal}
-                />
-                {/* Thức tỉnh khi đủ mẫu — di chuyển nguyên khối từ BrainCard cũ,
-                    hiển thị signals CỦA NÃO ĐANG CHỌN (label + progress + current/min) */}
-                <div className="space-y-1.5">
-                  <p className="text-[10px] uppercase tracking-wide text-stone-500">Thức tỉnh khi đủ mẫu</p>
-                  {selectedEntry.signals.map(sig => {
-                    const pct = sig.current === null ? 0 : Math.min(100, Math.round((sig.current / sig.min) * 100))
-                    return (
-                      <div
-                        key={sig.key} className="flex items-center gap-2 text-[11px]"
-                        title={`${sig.label} — bảng ${sig.table} · ngưỡng ${sig.min} (${sig.source})`}
-                      >
-                        <span className="min-w-0 flex-1 truncate text-stone-300">{sig.label}</span>
-                        <div className="h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-slate-900" aria-hidden="true">
-                          <div className={`h-full rounded-full ${sig.ok ? 'bg-emerald-500/80' : 'bg-amber-500/70'}`} style={{ width: `${pct}%` }} />
-                        </div>
-                        <span className="w-16 shrink-0 text-right font-mono tabular-nums text-stone-200">
-                          {sig.current === null ? '—' : viNum(sig.current)}/{sig.min}
-                        </span>
-                      </div>
-                    )
-                  })}
-                </div>
-                {/* Hàng badge phase + cờ runtime + inputMode (kế thừa BrainCard cũ) */}
-                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                  <Badge variant="outline" className="h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] text-stone-500 border-stone-600/50">{selectedEntry.phase}</Badge>
-                  <Badge
-                    variant="outline"
-                    className={`h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] border-stone-600/50 ${selectedFlagValue === 'on' ? 'text-emerald-400' : 'text-stone-500'}`}
-                    title={selectedFlagValue !== undefined
-                      ? 'Giá trị hiệu lực thật (STORE › ENV › DEFAULT) — đổi ở tab "Tham số runtime" (cột phải)'
-                      : 'Cờ phase chưa có trong tuning store (mặc định OFF)'}
-                  >
-                    {selectedEntry.flag}={selectedFlagValue ?? 'off'}
-                  </Badge>
-                  <Badge variant="outline" className="h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] text-stone-400 border-stone-600/50">in: {selectedEntry.defaultInputMode}</Badge>
-                </div>
-              </div>
-
-              {/* ── GIỮA: sân khấu UX-3 (đường dây ánh sáng) + chú thích bất biến ── */}
-              <div className="space-y-2.5">
-                <BrainStage
-                  brain={selectedEntry}
-                  draft={draftForSelected}
-                  editorOn={uiBrainEditOn}
-                  fxOn={uiSynapseFxOn}
-                  onEditLayer={layer => setFocusLayerSignal({ brain: selectedBrainKey, layer, nonce: Date.now() })}
-                />
-                <p className="text-[9.5px] leading-relaxed text-stone-500">
-                  ⚠ Bản nháp KHÔNG tự lên runtime — chỉ qua train thắng đối chứng CV (bất biến A1); runtime chỉ
-                  đổi khi cờ bật (STORE › ENV › DEFAULT=off); Brain-B có POST /api/brain/replay (replay-eval
-                  READ-ONLY); 3 organ steering của Brain-C mỗi cái kill-switch riêng.
-                </p>
-              </div>
-
-              {/* ── PHẢI: console 3 tab (desktop — mobile thay bằng bottom-sheet) ── */}
-              {isDesktop && <div>{consolePanel}</div>}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* ── UX-4 MOBILE (<1024px): console thành bottom-sheet — nút nổi mở,
-          Esc/✕ đóng (blueprint §9.5 "<1024px — tiền đề P2") ── */}
-      {!isDesktop && (
-        <>
-          <button
-            onClick={() => setConsoleSheetOpen(true)}
-            className="fixed bottom-4 right-4 z-40 min-h-[44px] rounded-full border border-amber-500/50 bg-slate-950/90 px-4 text-[11px] text-amber-300 hover:border-amber-400/70"
-            aria-label="Mở console não vận hành"
-          >
-            ⚙ Console
-          </button>
-          {consoleSheetOpen && (
-            <div
-              role="dialog"
-              aria-label="Console não vận hành"
-              className="fixed inset-x-0 bottom-0 z-40 max-h-[70vh] overflow-y-auto rounded-t-2xl border-t border-amber-500/40 bg-slate-950/95 p-3"
-            >
-              <div className="mb-2 flex items-center justify-between">
-                <p className="text-xs font-semibold text-stone-100">Console não vận hành</p>
-                <button
-                  onClick={() => setConsoleSheetOpen(false)}
-                  className="min-h-[44px] px-3 text-stone-400 hover:text-amber-300"
-                  aria-label="Đóng console"
-                >✕</button>
-              </div>
-              {consolePanel}
-            </div>
-          )}
-        </>
-      )}
 
       {/* ── HỒ SƠ HỌC GẦN ĐÂY (Q + SAL) ── */}
       <div className="grid gap-4 md:grid-cols-2">

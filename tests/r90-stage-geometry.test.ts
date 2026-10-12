@@ -22,9 +22,11 @@
  *      FB-BRAIN-UX-R1-07 — nguồn đã sửa theo doc).
  *   I. bezierTangentDeg: tiếp tuyến ngang trái→phải ≈ 0° · phải→trái ≈ 180° ·
  *      dọc xuống ≈ 90° (mũi tên bản tĩnh reduced-motion).
- *   J. buildStageLayout: đủ cột · nơ-ron/cột ≤ 8 · units ≤ 8 ánh xạ thẳng
- *      realIndex = row · units > 8 nén đều (đầu 0, cuối units-1, đơn điệu) ·
- *      colX đều nhau.
+ *   J. buildStageLayout (PIN UPDATE BRAIN-LIVE — cap 256 thay 8, chỉ thị
+ *      user 2026-10-12 "hiển thị đúng số nơ-ron từng lớp"): đủ cột · vẽ
+ *      ĐÚNG units (10/16/1 → 10/16/1, tổng 27, KHÔNG nén) · units ≤ 256
+ *      ánh xạ thẳng realIndex = row · units > 256 (300) nén đều (đầu 0,
+ *      cuối units−1, đơn điệu) · colX đều nhau.
  *
  * Ghi nhận nguồn (ĐÃ SỬA đợt fixbug FB-BRAIN-UX-R1-07):
  *   strokeWidthForGrad(0, [0,0]) TRƯỚC đây 1.95 (trung vị [0.7,3.2]) trái
@@ -276,6 +278,7 @@ describe('r90 · I bezierTangentDeg — góc tiếp tuyến (đầu mũi tên ch
 // ==================== J. buildStageLayout ====================
 
 describe('r90 · J buildStageLayout — toạ độ cột + nơ-ron (tất định)', () => {
+  // Spec thật Brain-A (registry planned 10→16→1) — BRAIN-LIVE vẽ đủ 27 nơ-ron
   const columns: StageColumn[] = [
     { units: 10, display: 0, label: '1-hot cfg', activation: 'linear', locked: true },
     { units: 16, display: 0, label: '×16', activation: 'tanh', locked: false },
@@ -290,35 +293,46 @@ describe('r90 · J buildStageLayout — toạ độ cột + nơ-ron (tất đị
     expect(lay.colX[1] - lay.colX[0]).toBeCloseTo(136, 10)
   })
 
-  test('nơ-ron VẼ mỗi cột ≤ 8 (maxDisplayNeurons — quá thì nén + label ×N)', () => {
+  test('PIN UPDATE BRAIN-LIVE: vẽ ĐÚNG units — 10/16/1 → 10/16/1 nơ-ron (tổng 27, KHÔNG nén)', () => {
+    const lay = buildStageLayout(columns)
+    // Chỉ thị user 2026-10-12 "mỗi lớp có bao nhiêu nơ-ron thì hiển thị đúng
+    // số điểm nơ-ron đấy" — cap 256 thay cho 8 tượng trưng của bản UX-3
+    expect(lay.neurons).toHaveLength(27) // 10 + 16 + 1
+    for (let c = 0; c < 3; c++) {
+      const inCol = lay.neurons.filter(n => n.col === c)
+      // display = min(units, 256): 10 → 10 (không còn nén về 8), 16 → 16, 1 → 1
+      expect(inCol.length).toBe(columns[c].units)
+      expect(inCol.length).toBe(Math.min(columns[c].units, STAGE_LIMITS.maxDisplayNeurons))
+    }
+    // Chiều cao theo cột cao nhất (16): height = 26 + 16×17 + 26 = 324
+    // (rowStep 17 giữ nguyên — cột 256 nơ-ron sẽ cao ~4404, zoom/pan lo phần xem)
+    expect(lay.height).toBe(324)
+  })
+
+  test('units ≤ 256 → realIndex = row (ánh xạ thẳng 1-1 cho inspector)', () => {
     const lay = buildStageLayout(columns)
     for (let c = 0; c < 3; c++) {
       const inCol = lay.neurons.filter(n => n.col === c)
-      expect(inCol.length).toBeLessThanOrEqual(STAGE_LIMITS.maxDisplayNeurons)
-      // Cột input 10 units → VẼ đúng 8; 16 → 8; output 1 → 1
-      expect(inCol.length).toBe(Math.min(columns[c].units, STAGE_LIMITS.maxDisplayNeurons))
+      // Mọi cột trong khoảng editor 1–256 đều map thẳng (10 → [0..9], 16 → [0..15], 1 → [0])
+      expect(inCol.map(n => n.realIndex)).toEqual(inCol.map((_, r) => r))
     }
+    // Biên đúng cap: 256 units → vẽ đủ 256, vẫn ánh xạ thẳng (256 ≤ 256)
+    const lay2 = buildStageLayout([{ ...columns[1], units: 256 }, columns[2]])
+    const col0 = lay2.neurons.filter(n => n.col === 0)
+    expect(col0.length).toBe(256)
+    expect(col0[255].realIndex).toBe(255)
+    expect(lay2.height).toBe(26 + 256 * 17 + 26) // 4404 — ĐÚNG thiết kế BRAIN-LIVE
   })
 
-  test('units ≤ 8 → realIndex = row (ánh xạ thẳng 1-1 cho inspector)', () => {
-    const lay = buildStageLayout([{ ...columns[0], units: 3 }, columns[1], columns[2]])
-    const col0 = lay.neurons.filter(n => n.col === 0)
-    expect(col0.map(n => n.realIndex)).toEqual([0, 1, 2]) // = row
-    // Output 1 unit cũng ánh xạ thẳng
-    expect(lay.neurons.filter(n => n.col === 2).map(n => n.realIndex)).toEqual([0])
-  })
-
-  test('units > 8 → nén đều: đầu = 0, cuối = units-1, đơn điệu không giảm', () => {
-    const lay = buildStageLayout(columns)
-    const col0 = lay.neurons.filter(n => n.col === 0) // units 10, vẽ 8
+  test('PIN UPDATE BRAIN-LIVE: units > 256 (300) → vẽ 256 + nén đều: đầu 0, cuối units−1, đơn điệu không giảm', () => {
+    const lay = buildStageLayout([{ ...columns[1], units: 300 }, columns[2]])
+    const col0 = lay.neurons.filter(n => n.col === 0) // units 300, vẽ 256
+    expect(col0.length).toBe(256)
+    expect(col0.length).toBeLessThanOrEqual(STAGE_LIMITS.maxDisplayNeurons)
     const idx = col0.map(n => n.realIndex) as number[]
     expect(idx[0]).toBe(0)
-    expect(idx[idx.length - 1]).toBe(9) // units − 1
+    expect(idx[idx.length - 1]).toBe(299) // units − 1
     expect(idx.every((v, i) => i === 0 || v >= idx[i - 1])).toBe(true)
-    // Cột 16 units nén tương tự: đầu 0, cuối 15
-    const col1 = lay.neurons.filter(n => n.col === 1).map(n => n.realIndex) as number[]
-    expect(col1[0]).toBe(0)
-    expect(col1[col1.length - 1]).toBe(15)
     // Tất định: 2 lần dựng deep-equal
     expect(buildStageLayout(columns)).toEqual(buildStageLayout(columns))
   })

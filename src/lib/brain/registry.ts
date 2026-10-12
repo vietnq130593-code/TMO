@@ -148,6 +148,33 @@ export interface BrainApiResponse {
   generatedAt: string
 }
 
+// ==================== SHARED ACTIVITY CONTRACT (BRAIN-LIVE) ====================
+
+/**
+ * Contract GET /api/brain/activity ↔ BrainStage/BrainTab (BRAIN-LIVE, chỉ
+ * thị user 2026-10-12 — tab BRAIN module Smolab là "đài quan sát não": điểm
+ * sáng nơ-ron + input vector THẬT từ run/eval gần nhất, kể cả khi brain còn
+ * ngủ). Route là nguồn sự thật duy nhất của shape này — UI KHÔNG tự mô phỏng
+ * dữ liệu. Module này vẫn THUẦN HẰNG SỐ (không import db): type chia sẻ
+ * route↔UI đặt cùng registry cho single-source (doctrine #9).
+ */
+export type BrainActivityStatus = 'active' | 'dormant'
+
+export interface BrainActivity {
+  status: BrainActivityStatus
+  /** Có AgentRunRecord status='running' đang chạy không (toàn cục) */
+  agentRunInProgress: boolean
+  /** Vector đặc trưng THẬT từ run/eval gần nhất (one-hot/standardized) — null khi không có dữ liệu nguồn; kể cả dormant vẫn có thể có (one-hot thật) */
+  inputVector: number[] | null
+  /** Activation từng lớp [layer][unit] (layer 0 = input) — CHỈ khi có bản active (status='active'); null khi dormant */
+  activations: number[][] | null
+  /** Tên đặc trưng từng chiều input (tooltip nơ-ron input) */
+  featureNames: string[] | null
+  /** Nhãn nguồn dữ liệu (vd 'run gần nhất · model X · agent Y · 12:34') */
+  sourceLabel: string | null
+  fetchedAt: string
+}
+
 // ==================== REGISTRY (single-source) ====================
 
 export const BRAIN_REGISTRY: readonly BrainSpec[] = [

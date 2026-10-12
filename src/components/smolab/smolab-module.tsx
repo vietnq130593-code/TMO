@@ -6,7 +6,7 @@
 // ========================================================================
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
-import { Network, CheckCircle2, XCircle, Loader2, Brain, Zap, Check, ChevronDown, Activity, AlertTriangle, Play, ShieldOff, MessageSquare, Send, Trash2, Search, Sparkles, X, AlertCircle, ThumbsUp, ThumbsDown, Wrench, Radio, BookMarked, Plus, Download, Pencil, Users, User, Code2, Square, Thermometer, ClipboardList, Mic, AudioLines, Volume2, OctagonX, Scale, Cog, ArrowUpCircle } from 'lucide-react'
+import { Network, CheckCircle2, XCircle, Loader2, Brain, Zap, Check, ChevronDown, Activity, AlertTriangle, Play, ShieldOff, MessageSquare, Send, Trash2, Search, Sparkles, X, AlertCircle, ThumbsUp, ThumbsDown, Wrench, Radio, BookMarked, Plus, Download, Pencil, Users, User, Code2, Square, Thermometer, ClipboardList, Mic, AudioLines, Volume2, OctagonX, Scale, Cog, ArrowUpCircle, BrainCircuit } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -25,6 +25,10 @@ import { LearningTabContent } from '@/components/smolab/learning-tab'
 import { ChannelsTabContent } from '@/components/smolab/channels-tab'
 import { SkillsTabContent } from '@/components/smolab/skills-tab'
 import { AutomationTabContent } from '@/components/smolab/automation-tab'
+// BRAIN-LIVE (15-d): tab BRAIN — toàn bộ panel "Não vận hành — MLP-CPU
+// (BRAIN)" di chuyển từ Database › Kiến trúc sang đây theo chỉ thị user
+// 2026-10-12 (worklog 15-d/15-KEHOACH).
+import { BrainTabContent } from '@/components/smolab/brain-tab'
 import MarkdownText from './markdown-text'
 
 
@@ -1747,6 +1751,10 @@ export const SMOLAB_TABS = [
   { id: 'automation', label: 'Automation', icon: Zap, color: 'orange' },
   { id: 'channels', label: 'Channels', icon: Radio, color: 'teal' },
   { id: 'code', label: 'Code', icon: Code2, color: 'emerald' },
+  // BRAIN-LIVE (chỉ thị user 2026-10-12): tab BRAIN — di chuyển toàn bộ ô
+  // "Não vận hành — MLP-CPU (BRAIN)" từ Database › Kiến trúc sang Smolab
+  // (đài quan sát não: nơ-ron thật + lan truyền + live poll 2.5s — 15-d).
+  { id: 'brain', label: 'BRAIN', icon: BrainCircuit, color: 'amber' },
 ]
 
 
@@ -5549,8 +5557,13 @@ ${manifest}` : rawText
         onMouseDown={handleTopEdgeMouseDown}
         title="Kéo để thay đổi lề trên"
       >
-        {/* Wider hit area for easier grabbing */}
-        <div className="absolute inset-0 -top-1 -bottom-2 group-hover:bg-cyan-500/10 transition-colors duration-150" />
+        {/* Wider hit area for easier grabbing — FB-BRAIN-LIVE-R1-03: bỏ
+            -bottom-2 (đuôi 8px dưới handle) — trước-fix vùng này che TOP
+            thanh tab Smolab (đo live: handle y58-70, hit-area y54-78, tâm
+            nút tab BRAIN y76) → click tâm nút tab trúng resize-handle thay
+            vì nút tab. Giữ -top-1 (đệm 4px trên mép cho dễ nắm) + đúng
+            biên handle (inset-0, ngang đã left-3/right-3 của handle). */}
+        <div className="absolute inset-0 -top-1 group-hover:bg-cyan-500/10 transition-colors duration-150" />
         {/* Persistent thin edge line */}
         <div className="absolute left-0 right-0 bottom-0 h-px bg-cyan-500/20 group-hover:bg-cyan-400/60 transition-colors duration-150" />
         {/* Visual dots indicator */}
@@ -6960,6 +6973,11 @@ ${manifest}` : rawText
               )}
               {activeSmolabTab === 'code' && (
                 <CodeTabContent />
+              )}
+              {/* BRAIN-LIVE (15-d): Não vận hành — MLP-CPU (BRAIN) — panel
+                  di chuyển từ Database › Kiến trúc (chỉ thị user 2026-10-12). */}
+              {activeSmolabTab === 'brain' && (
+                <BrainTabContent />
               )}
             </div>
           </div>

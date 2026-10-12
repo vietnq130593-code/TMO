@@ -241,6 +241,26 @@ export class MLP {
   }
 
   /**
+   * BRAIN-LIVE (chỉ thị user 2026-10-12 — "điểm sáng nơ-ron theo activation
+   * thật khi agent vận hành") — đài quan sát tab BRAIN (module Smolab):
+   * activation của TỪNG LỚP cho 1 mẫu đầu vào, phục vụ
+   * GET /api/brain/activity → BrainStage vẽ điểm sáng theo dữ liệu thật.
+   *
+   * Trả về [layer][unit] với layer 0 = input (a[0] = x), layer L−1 = output
+   * (deep-equal predict(x)). Gọi forwardAll — GIỮ NGUYÊN hợp đồng ném lỗi
+   * khi input sai chiều dài; trả BẢN SAO mảng thường (number[][]) thay vì
+   * Float64Array nội bộ — caller không thể đụng vào buffer của mạng, và
+   * JSON-serializable sẵn cho route API.
+   *
+   * Additive only — không đổi state, không đổi hành vi predict/lossOf/
+   * backward/fit (đều vẫn đi đường cũ của chúng).
+   */
+  forwardActivations(x: readonly number[]): number[][] {
+    const acts = this.forwardAll(x)
+    return acts.map(a => Array.from(a))
+  }
+
+  /**
    * Convenience cho output 1 unit (sigmoid — Brain-A).
    * Ném lỗi nếu lớp cuối có nhiều unit (dùng predict() cho đa lớp).
    */

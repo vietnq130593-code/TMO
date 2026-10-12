@@ -19,7 +19,11 @@
  *      fallback (process.env đọc TRỰC TIẾP trong resolveTuning — không cache
  *      env, chỉ snapshot STORE cần refresh) · STORE thắng ENV.
  *   E. Chuỗi hiệu lực 3 cờ UI (ui_brain_edit/ui_synapse_fx/ui_hitech):
- *      default 'off' → set 'on' → reset 'off' (fail-open trình bày).
+ *      BRAIN-LIVE (chỉ thị user 2026-10-12) tách kỳ vọng — ui_brain_edit
+ *      + ui_hitech default 'off' (fail-open trình bày) nhưng ui_synapse_fx
+ *      default 'on' (tab BRAIN module Smolab là "đài quan sát não" — hiệu
+ *      ứng lan truyền là nội dung chính; reduced-motion vẫn tắt animation).
+ *      Lifecycle set/reset pin trên ui_brain_edit (off→on→off).
  *   F. AUDIT TRAIL §9.3-C: set → TuningChangeLog row action='set'
  *      toStoreValue='0.7' · reset → row action='reset' toStoreValue=null —
  *      log append-only (KHÔNG xóa rows), chỉ đưa store value về default.
@@ -261,11 +265,15 @@ describe('r89 · E chuỗi hiệu lực cờ UI — ui_brain_edit / ui_synapse_f
   beforeAll(wipeUx2State)
   afterAll(wipeUx2State)
 
-  test('mặc định cả 3 cờ = off (fail-open trình bày — theme/fx/editor mặc định TẮT)', async () => {
+  test("mặc định: ui_brain_edit + ui_hitech = 'off' (fail-open trình bày) — CÒN ui_synapse_fx = 'on' (BRAIN-LIVE)", async () => {
     await wipeUx2State()
+    // BRAIN-LIVE (chỉ thị user 2026-10-12): tab BRAIN module Smolab là
+    // "đài quan sát não" — hiệu ứng synapse mặc định BẬT (nội dung chính,
+    // không phải trang trí); editor/theme vẫn mặc định TẮT. Reduced-motion
+    // vẫn tắt animation ở tầng isAnimated (r90-G pin — cờ này không đụng).
     expect(getTuningEnum('ui_brain_edit')).toBe('off')
-    expect(getTuningEnum('ui_synapse_fx')).toBe('off')
     expect(getTuningEnum('ui_hitech')).toBe('off')
+    expect(getTuningEnum('ui_synapse_fx')).toBe('on')
   })
 
   test("setTuningValue('ui_brain_edit','on') → 'on'; resetTuningValue → 'off' — dọn finally", async () => {
