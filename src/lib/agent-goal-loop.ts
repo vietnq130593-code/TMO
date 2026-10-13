@@ -70,6 +70,10 @@ import {
   isSessionCancelled,
   stripInvisibleThoughtNoise,
 } from '@/lib/agent-run-tracker'
+// ROUND 3 (R3-03) — CTO mode cho Opus (meta-agent không thi công). Static
+// import an toàn: opus-agent chỉ import db/fs (động tool-executor bên trong
+// hàm) — không vòng lặp ngược về agent-goal-loop.
+import { OPUS_AGENT_NAME } from '@/lib/opus/opus-agent'
 // CI-2 (Task 11-a) — auto-complete todo theo bằng chứng tool giữa chừng run
 // (helper DB-backed trong TODO section của dev-tools — không đụng git section)
 import { autoCompleteRunTodosByEvidence, evidenceMatchesTodo, extractTodoEvidence } from '@/lib/code-team/dev-tools'
@@ -2366,6 +2370,144 @@ export async function buildPriorTaskSummariesBlock(
  * Thay thế runAgentReActLoop cũ: return shape tương thích (content/iterations/
  * toolCallsExecuted/runId) + thêm goalLoop metadata.
  */
+// ==================== ROUND 3 (R3-03) — CTO CONSULTATION MODE (OPUS) ====================
+//
+// Bất biến kiến trúc (opus-agent.ts — phân giới trách nhiệm):
+//   "NGƯỜI THI CÔNG KHÔNG TỰ CHẤM ĐIỂM MÌNH" + §II.5 "Bạn KHÔNG nhận tác vụ
+//   thi công". Trước đây khi user chọn Opus làm agent chat (vd session
+//   sess_1791902476438 "Đánh giá kiến trúc quy trình thực thi của hệ thống"),
+//   runGoalDrivenLoop chạy Opus qua đủ máy móc THI CÔNG: multi-cycle + tools
+//   xây dựng + EVALUATE tự chấm chính mình (vi phạm cả 2 bất biến — bằng chứng
+//   run_1791902484112_1 agent=Opus). Omega orchestrator đã guard đường
+//   dispatch_agent; đây là guard tương đương ở tầng goal loop.
+//
+// Giờ: user chat với Opus → CHẾ ĐỘ TƯ VẤN CTO — đúng thiết kế "Opus chỉ review
+//   và ra chỉ thị": 1 LLM call duy nhất, KHÔNG vòng thi công multi-cycle,
+//   KHÔNG evaluator tự chấm, KHÔNG tool batch. Phần ủy nhiệm cho agents (nếu
+//   việc cần thi công) nằm trong câu trả lời của Opus — và trong auto mode,
+//   review run-KẾT vẫn qua cơ chế riêng runOpusReview (reviewer.ts) đúng nhịp
+//   "khi agents hoàn thành mới review".
+async function runCtoConsultation(params: {
+  systemPrompt: string
+  userMessage: string
+  chatHistory: Array<{ role: string; content: string }>
+  agentProvider: string
+  agentModel: string
+  agentId: string
+  agentName: string
+  agentTemperature?: number
+  agentMaxTokens?: number
+  agentTools?: string[]
+  agentSessionId?: string | null
+}): Promise<GoalLoopResult> {
+  const {
+    systemPrompt,
+    userMessage,
+    chatHistory,
+    agentProvider,
+    agentModel,
+    agentId,
+    agentName,
+    agentTemperature,
+    agentMaxTokens,
+    agentSessionId,
+  } = params
+
+  const startedAt = Date.now()
+
+  // Thought Process tracking — tracker tự persist AgentRunRecord khi end
+  // (dbPersistBy mặc định 'tracker'): 1 consultation = 1 run, hiện trong
+  // panel Thought Process + runs.feed — Opus trung thực về hoạt động của mình.
+  const runId = startAgentRun({
+    sessionId: agentSessionId,
+    agentName,
+    step: 'cto-consult',
+    task: userMessage.slice(0, 200),
+    mode: 'standalone',
+  })
+
+  console.log(
+    `[GoalLoop] ${agentName} CHẾ ĐỘ TƯ VẤN CTO (R3-03) — 1 LLM call, không multi-cycle, không evaluator tự chấm (bất biến "thi công không tự chấm mình") — mục tiêu: "${userMessage.slice(0, 100)}"`
+  )
+
+  try {
+    // System prompt: instruction Opus gốc + block định vị chế độ tư vấn
+    const ctoSystemPrompt =
+      systemPrompt.trimEnd() +
+      '\n\n--- Chế độ TƯ VẤN CTO (R3-03) ---\n' +
+      'Bạn đang trả lời TRỰC TIẾP Mr. Architect trong khung chat. Theo bất biến kiến trúc, bạn KHÔNG thi công: ' +
+      'không chạy tool xây dựng, không multi-cycle. Hãy PHÁN ĐOÁN và trả lời — đánh giá/phân tích/điều phối là công việc hợp pháp của bạn. ' +
+      'Nếu việc cần agents thi công, hãy nêu rõ ủy nhiệm trong câu trả lời: mục tiêu, giao agent/team nào, tiêu chí nghiệm thu — ' +
+      'hệ thống sẽ thực thi qua cơ chế review + chỉ thị riêng (đúng thiết kế: agents làm, Opus phán đoán run-KẾT).'
+
+    // Chat history compact (30 tin gần nhất) — prefix cho 1 user prompt duy nhất
+    const historyBlock = chatHistory.length > 0
+      ? chatHistory.slice(-30).map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.slice(0, 4000)}`).join('\n\n') + '\n\n---\n\n'
+      : ''
+    const prompt = `${historyBlock}[Tin nhắn mới nhất của user — cần bạn phản hồi]\n${userMessage}`
+
+    const llm = await callLLMForAgent(prompt, { provider: agentProvider, model: agentModel }, ctoSystemPrompt, {
+      temperature: agentTemperature ?? 0.4,
+      // maxTokens <=0 (Opus profile -1 = unlimited) → llm.ts chuẩn hóa thành
+      // "không gửi max_tokens" (Task 30 fix) — giữ nguyên semantics profile.
+      maxTokens: agentMaxTokens ?? 0,
+      agentId,
+      agentName,
+    })
+
+    const durationMs = Date.now() - startedAt
+    const ok = Boolean(llm.content) && !llm.error
+    const content = ok
+      ? (llm.content as string)
+      : `Error: Goal loop LLM failed — CTO consultation (${agentName}): ${llm.error ?? 'model trả rỗng'}`
+
+    try {
+      recordAgentThought(
+        agentSessionId,
+        `⚖️ CTO consultation hoàn tất ${ok ? '✓' : '✗'} — ${(llm.tokensUsed ?? 0).toLocaleString('vi-VN')} tokens, ${Math.round(durationMs / 1000)}s${llm.model ? `, model ${llm.model}` : ''}`,
+        1,
+      )
+    } catch { /* fail-open */ }
+
+    if (runId) {
+      try {
+        endAgentRun(agentSessionId, runId, ok ? 'done' : 'error', `CTO consultation: ${Math.round(durationMs / 1000)}s · ${llm.tokensUsed ?? 0} tokens${llm.model ? ` · ${llm.model}` : ''}`)
+      } catch { /* fail-open */ }
+    }
+
+    console.log(
+      `[GoalLoop] ${agentName} CTO consultation kết thúc ${ok ? '✓' : '✗ LLM lỗi'} — ${Math.round(durationMs / 1000)}s, ${llm.tokensUsed ?? 0} tokens${llm.model ? `, model ${llm.model}` : ''}`
+    )
+
+    return {
+      content,
+      iterations: 1,
+      toolCallsExecuted: 0,
+      runId,
+      goalLoop: {
+        cycles: 1,
+        complete: true,
+        stopReason: 'complete',
+        tokensUsed: llm.tokensUsed ?? 0,
+        finalReport: true,
+      },
+    }
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : String(err)
+    console.error(`[GoalLoop] ${agentName} CTO consultation lỗi hạ tầng:`, reason)
+    if (runId) {
+      try { endAgentRun(agentSessionId, runId, 'error', reason) } catch { /* fail-open */ }
+    }
+    return {
+      content: `Error: Goal loop LLM failed — CTO consultation (${agentName}): ${reason}`,
+      iterations: 1,
+      toolCallsExecuted: 0,
+      runId,
+      goalLoop: { cycles: 1, complete: true, stopReason: 'error', finalReport: true },
+    }
+  }
+}
+
 export async function runGoalDrivenLoop(params: {
   systemPrompt: string
   userMessage: string
@@ -2409,6 +2551,16 @@ export async function runGoalDrivenLoop(params: {
   } = params
 
   const startedAt = Date.now()
+
+  // ===== ROUND 3 (R3-03) — CTO MODE: OPUS KHÔNG THI CÔNG =====
+  // Bất biến kiến trúc: "NGƯỜI THI CÔNG KHÔNG TỰ CHẤM ĐIỂM MÌNH" + §II.5
+  // "Opus KHÔNG nhận tác vụ thi công" (opus-agent.ts). User chat với Opus →
+  // tư vấn CTO (1 call, không multi-cycle, không evaluator tự chấm). Đặt
+  // TRƯỚC mọi init nặng (budget banner, protocol build) để không đốt công sức.
+  if (agentName === OPUS_AGENT_NAME) {
+    return runCtoConsultation(params)
+  }
+
   // [G] Tool hiệu dụng cho protocol injection: agent KHÔNG khai báo whitelist
   // (agentTools=[] → mọi tool đều được phép — agent custom/Omega-created) vẫn
   // thấy delegation + orchestration protocol vì các tool đó thực sự gọi được.

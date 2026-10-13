@@ -55,6 +55,8 @@ import { archiveStaleRunTodos } from '@/lib/code-team/dev-tools'
 import { isSessionDeletedDeep } from '@/lib/session-tombstone'
 import { runOpusReview, markReviewRunning, markReviewDone } from './reviewer'
 import { parseMetadata } from './ledger'
+import { OPUS_AGENT_NAME } from './opus-agent'
+import { observeEvent } from '@/lib/observation/ledger'
 import type { OpusVerdict } from './types'
 
 // ==================== SETTINGS (SINGLETON + KILL SWITCH) ====================
@@ -330,6 +332,11 @@ async function buildDirectiveSystemPrompt(profile: AgentProfile): Promise<string
  * A5/E27 fix: trước đây directive "delegation: Omega" bị RAMPAGE (session agent)
  * nhận → RAMPAGE phải tự delegate_task (không enforcement). Giờ switch session
  * agentProfileId sang delegatee trước khi enqueue → agent ĐÚNG nhận directive.
+ *
+ * ROUND 3 (R3-02): LOẠI OPUS khỏi candidates — delegation nhắc tên Opus
+ * (vd "sau khi agents hoàn thành, Opus review lại") là MÔ TẢ quy trình, KHÔNG
+ * phải lệnh giao thi công cho Opus. Bất biến kiến trúc: Opus là CTO — chỉ
+ * review + ban hành chỉ thị, KHÔNG bao giờ là executor nhận directive.
  */
 async function findDelegateeAgent(delegationStr: string, currentAgentName: string): Promise<string | null> {
   try {
@@ -338,7 +345,10 @@ async function findDelegateeAgent(delegationStr: string, currentAgentName: strin
       where: { enabled: true },
       select: { name: true },
     })
-    const names = agents.map(a => a.name).filter(Boolean)
+    // R3-02: Opus không bao giờ là delegatee (executor). Ngay cả khi session
+    // agent hiện tại là Opus, cũng KHÔNG match-through Opus — caller sẽ re-route
+    // qua guard R3-02 ở dispatchDirectiveGoalLoop.
+    const names = agents.map(a => a.name).filter(Boolean).filter(n => n !== OPUS_AGENT_NAME)
     if (names.length === 0) return null
 
     // Sort by length DESC để match tên dài trước (vd "RAMPAGE" không match trước "RAMPAGE-2")
@@ -415,6 +425,34 @@ async function dispatchDirectiveGoalLoop(sessionId: string, directiveMessage: Ch
         `[Opus][pipeline] dispatch: session ${sessionId} không có AgentProfile (agentProfileId=${session.agentProfileId ?? 'null'}) — directive chỉ nằm lại trong chat, không tự chạy`
       )
       return null
+    }
+
+    // ━━━ ROUND 3 (R3-02) — OPUS KHÔNG BAO GIỜ LÀ EXECUTOR ━━━
+    // Bất biến kiến trúc (opus-agent.ts): "Opus KHÔNG tự thi công — PHÁN ĐOÁN
+    // và CHỈ ĐẠO"; Omega orchestrator đã guard đường dispatch_agent (L702)
+    // nhưng pipeline directive dispatch thiếu guard tương đương: session đang
+    // gắn agent Opus (user chat với Opus — bằng chứng sess_1791902476438) hoặc
+    // delegation rơi về Opus → job sẽ chạy với Opus làm công nhân thi công.
+    // Giờ: gặp Opus → re-route sang OMEGA (cấp dưới trực tiếp của Opus trong
+    // chuỗi chỉ huy USER → OPUS → OMEGA → WORKERS); không có Omega → KHÔNG
+    // dispatch (directive nằm lại trong chat — user/round kế xử), fail-open.
+    if (profile.name === OPUS_AGENT_NAME) {
+      // Full row (không select subset) — gán thẳng vào profile: AgentProfile
+      const omega = await db.agentProfile.findFirst({
+        where: { name: 'Omega', enabled: true },
+      })
+      if (omega) {
+        console.warn(
+          `[Opus][pipeline] R3-02 guard: executor resolve ra OPUS (session agent) — re-route OMEGA. Opus là CTO (chỉ review + chỉ thị), không bao giờ thi công.`
+        )
+        await db.agentSession.update({ where: { sessionId }, data: { agentProfileId: omega.id } })
+        profile = omega
+      } else {
+        console.warn(
+          `[Opus][pipeline] R3-02 guard: executor resolve ra OPUS và không có Omega enabled — BỎ dispatch (directive nằm lại trong chat; Opus không thi công theo bất biến kiến trúc)`
+        )
+        return null
+      }
     }
 
     // 2. Resolve agent tools — mirror chat route: DB-first (AgentProfile.tools)
@@ -690,25 +728,31 @@ const STALLED_DIRECTIVE_MS = 120_000
 const UNAPPLIED_VERDICT_MS = 120_000
 
 /**
- * Gate auto mode — trả pass + reason (để log chẩn đoán). Kiểm tra:
- *   1. AgentSession.opusReviewMode === 'auto'
- *   2. Kill switch KHÔNG bật
- *   3. Không có OpusReview nào của session trong 45s qua
- *   4. Tồn tại ÍT NHẤT 1 trong 4 "tín hiệu cần review" (REVIEW 13-f — trước
- *      đây chỉ có tín hiệu A khiến auto loop STALL ở 4 kịch bản thật):
- *        (A) Assistant message MỚI sau assistant-message-time của review gần
- *            nhất (chưa review nội dung mới — tín hiệu chính)
- *        (B) GoalLoopJob status='failed' hoàn thành SAU review gần nhất —
- *            run crash không sinh assistant message (markFailed/sweepOrphans
- *            không ghi message) — Opus cần biết để FIX
- *        (C) Directive ĐÃ ban hành (decision dispatchable) là message cuối,
- *            KHÔNG có assistant reply, KHÔNG có job queued/running, và đã
- *            > STALLED_DIRECTIVE_MS → dispatch chết → review lại để tự chữa
- *        (D) Review gần nhất có verdict dispatchable nhưng CHƯA bao giờ được
- *            ban hành (không có directive message marker) và đã >
- *            UNAPPLIED_VERDICT_MS → applyOpusVerdict chết giữa chừng (vd PM2
- *            restart ngay sau khi lưu review) → review lại
+ * ROUND 3 (R3-01) — Circuit breaker cho auto-review loop.
+ *
+ * GIAO THỨC QUAN SÁT LƯỢT 3 phát hiện: auto review của session Omega chạy
+ * 94 lần fail liên tiếp mỗi ~67s (18:45→21:35 2026-10-13), kéo PM2 restart
+ * app 103 lần (MemWatchdog RSS≥2.1GB self-exit GIỮA LÚC review đang chạy —
+ * review chưa kịp persist OpusReview row) → gate không thấy review nào "gần
+ * đây" → re-fire CÙNG 1 assistant message mãi mãi. Opus chiếm 95/108 runs
+ * (agents chỉ 13) — đúng hiện tượng user báo cáo "Opus đi thực thi tác vụ
+ * thay agents": toàn bộ năng lực hệ thống bị review-loop đốt, agents không
+ * được chạy.
+ *
+ * 2 lớp sửa (đã áp dụng trong passesAutoGate):
+ *   (a) dedupe + threshold tính theo review ATTEMPT (AgentRunRecord
+ *       agentName='Opus' — persist NGAY lúc review bắt đầu, sống qua crash),
+ *       không chỉ OpusReview row (persist cuối — mất khi process chết).
+ *   (b) Circuit breaker NÀY: ≥ REVIEW_FAILURE_BREAK_THRESHOLD attempt liên
+ *       tiếp fail → ngưng auto-review session đó cho tới khi có attempt
+ *       hoàn thành hoặc user can thiệp. Mỗi lần trip: 1 obs.alert (user thấy
+ *       trên Đài quan sát) + log — KHÔNG im lặng bỏ chạy.
  */
+const REVIEW_FAILURE_BREAK_THRESHOLD = 3
+
+/** Sessions đã trip breaker (log + alert 1 lần; reset khi 1 attempt hoàn thành) */
+const reviewFailureTripped = new Set<string>()
+
 async function passesAutoGate(sessionId: string): Promise<{ pass: boolean; reason: string; modeAuto: boolean }> {
   const session = await db.agentSession.findUnique({
     where: { sessionId },
@@ -726,17 +770,85 @@ async function passesAutoGate(sessionId: string): Promise<{ pass: boolean; reaso
     where: { sessionId },
     orderBy: { createdAt: 'desc' },
   })
+
+  // ━━ R3-01 (a): review ATTEMPT gần nhất — AgentRunRecord agentName='Opus'
+  // persist NGAY đầu review (reviewer.ts bước 1) nên sống qua crash giữa
+  // chừng; OpusReview row chỉ có khi review chạy hết đường (bước 6). Điểm
+  // "đã review tới đâu" = max(2 nguồn) — attempt crash vẫn advances
+  // threshold → gate không re-fire cùng 1 assistant message vô hạn.
+  const lastAttempt = await db.agentRunRecord.findFirst({
+    where: { sessionId, agentName: OPUS_AGENT_NAME },
+    orderBy: { createdAt: 'desc' },
+    select: { createdAt: true, status: true },
+  })
+
   const now = Date.now()
-  if (lastReview && now - lastReview.createdAt.getTime() < AUTO_REVIEW_DEDUPE_MS) {
+  const lastSignalAt = Math.max(
+    lastReview?.createdAt.getTime() ?? 0,
+    lastAttempt?.createdAt.getTime() ?? 0,
+  )
+  if (now - lastSignalAt < AUTO_REVIEW_DEDUPE_MS) {
     return {
       pass: false,
-      reason: `review gần nhất cách ${Math.round((now - lastReview.createdAt.getTime()) / 1000)}s (< ${AUTO_REVIEW_DEDUPE_MS / 1000}s — chống double-fire)`,
+      reason: `review/attempt gần nhất cách ${Math.round((now - lastSignalAt) / 1000)}s (< ${AUTO_REVIEW_DEDUPE_MS / 1000}s — chống double-fire)`,
       modeAuto: true,
     }
   }
 
+  // ━━ R3-01 (b): circuit breaker — đếm attempt liên tiếp gần nhất (mới → cũ)
+  // đến khi gặp attempt completed (đã khắc phục — cho chạy lại bình thường).
+  if (lastAttempt) {
+    const streak = await db.agentRunRecord.findMany({
+      where: { sessionId, agentName: OPUS_AGENT_NAME },
+      orderBy: { createdAt: 'desc' },
+      take: REVIEW_FAILURE_BREAK_THRESHOLD,
+      select: { status: true },
+    })
+    if (
+      streak.length >= REVIEW_FAILURE_BREAK_THRESHOLD &&
+      streak.every(r => r.status === 'failed')
+    ) {
+      if (!reviewFailureTripped.has(sessionId)) {
+        reviewFailureTripped.add(sessionId)
+        const msg = `Opus auto-review tự chữa thất bại ${streak.length} lần liên tiếp — circuit breaker ngưng auto-review session này; cần can thiệp (kiểm tra model chain / MemWatchdog restart) trước khi bật lại.`
+        console.warn(`[Opus][auto] session=${sessionId} ⛔ CIRCUIT BREAKER (R3-01): ${msg}`)
+        try {
+          observeEvent({
+            actor: 'system:opus-pipeline',
+            kind: 'obs.alert',
+            summary: `⛔ Opus auto-review loop tự chữa thất bại ${streak.length} lần liên tiếp — tạm dừng (circuit breaker R3-01)`,
+            payload: {
+              rule: 'opus-review-failure-breaker',
+              sessionId,
+              consecutiveFailures: streak.length,
+              threshold: REVIEW_FAILURE_BREAK_THRESHOLD,
+              lastAttemptAt: lastAttempt.createdAt.toISOString(),
+              action: 'Ngưng auto-review; review kế tiếp chỉ chạy khi attempt mới hoàn thành hoặc user can thiệp',
+              protocol: 'GIAO_THUC_QUAN_SAT lượt 3 (R3-01)',
+            },
+          })
+        } catch { /* fail-open — alert không được chặn gate */ }
+      }
+      return {
+        pass: false,
+        reason: `circuit breaker R3-01: ${streak.length} review attempt liên tiếp fail — ngưng tự chữa, chờ user can thiệp`,
+        modeAuto: true,
+      }
+    }
+    // Có attempt hoàn thành trong các attempt gần nhất → xóa trip (chữa được rồi)
+    if (reviewFailureTripped.has(sessionId) && streak.some(r => r.status === 'completed')) {
+      reviewFailureTripped.delete(sessionId)
+      console.log(`[Opus][auto] session=${sessionId} CIRCUIT BREAKER phục hồi (R3-01) — có attempt hoàn thành, auto-review chạy lại bình thường`)
+    }
+  }
+
   // Ngưỡng "đã review tới đâu": assistant-message-time của review gần nhất
-  // (fallback createdAt của review khi messageId mất/không khớp)
+  // (fallback createdAt của review khi messageId mất/không khớp).
+  // R3-01 (a): nâng threshold lên tối thiểu = thời điểm attempt gần nhất —
+  // attempt crash (không có OpusReview row) vẫn được tính là "đã xử lý tới
+  // đây" → tín hiệu A không re-fire cùng 1 assistant message mãi mãi. Nội
+  // dung chưa review không mất: review kế (assistant message mới hơn) đọc
+  // dossier chứa đầy history đó.
   let threshold: Date | null = null
   if (lastReview) {
     if (lastReview.messageId) {
@@ -747,6 +859,9 @@ async function passesAutoGate(sessionId: string): Promise<{ pass: boolean; reaso
       if (m && m.sessionId === sessionId && m.role === 'assistant') threshold = m.createdAt
     }
     if (!threshold) threshold = lastReview.createdAt
+  }
+  if (lastAttempt && (!threshold || lastAttempt.createdAt > threshold)) {
+    threshold = lastAttempt.createdAt
   }
 
   // ---- TÍN HIỆU A: assistant message mới chưa review (tín hiệu chính) ----
