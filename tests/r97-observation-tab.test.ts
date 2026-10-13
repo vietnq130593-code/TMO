@@ -128,8 +128,10 @@ describe('r97 · B — observation-tab.tsx wiring (§C.5 — Task 26 refactor 4 
     // Hook chia sẻ 3 panel events (timeline/golden/traces) — 1 nguồn logic poll
     expect(tab).toContain('useObsFeed')
     expect(tab).toContain("kind: 'timeline' | 'golden' | 'traces'")
-    // fetch timeline template literal (query động theo mode)
-    expect(tab).toContain('fetch(`/api/observation/timeline?${q.toString()}`')
+    // fetch timeline template literal (query động theo mode) — PIN UPDATE
+    // 2026-11-05: bọc fetchWithTransientRetry (429 gateway retry — user report
+    // console error HTTP 429; template URL + signal giữ nguyên)
+    expect(tab).toContain('fetchWithTransientRetry(`/api/observation/timeline?${q.toString()}`')
   })
 
   test('B3 neurons panel: bảng activation thật từ CÙNG activity prop của đài (không fetch riêng) + chips Agent/ĐANG TRAIN + dòng backprop TRUNG THỰC', () => {

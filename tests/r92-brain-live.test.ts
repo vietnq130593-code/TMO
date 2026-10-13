@@ -815,8 +815,8 @@ describe('r92 · E source-scan wiring BRAIN-LIVE — pin chống hồi quy cấu
     expect(smolab).toContain('BrainCircuit')
   })
 
-  test("brain-tab: fetch '/api/brain/activity' + poll 2.5s (setInterval) + head chỉ surrogate + props v2 (activity/tall/refreshNonce) + TuningParamDialog + ui_synapse_fx", () => {
-    expect(brainTab).toContain("fetch(`/api/brain/activity?brain=${selectedBrainKey}${q}`)")
+  test("brain-tab: fetch '/api/brain/activity' (PIN UPDATE 2026-11-05: bọc fetchWithTransientRetry — 429 gateway retry backoff jitter, user report console error HTTP 429; template URL giữ nguyên) + poll 2.5s (setInterval) + head chỉ surrogate + props v2 (activity/tall/refreshNonce) + TuningParamDialog + ui_synapse_fx", () => {
+    expect(brainTab).toContain("fetchWithTransientRetry(`/api/brain/activity?brain=${selectedBrainKey}${q}`")
     expect(brainTab).toContain('POLL_ACTIVITY_MS = 2_500')
     expect(brainTab).toContain('setInterval(() => { void fetchActivity() }, POLL_ACTIVITY_MS)')
     expect(brainTab).toContain('&head=') // head CHỈ gắn cho surrogate

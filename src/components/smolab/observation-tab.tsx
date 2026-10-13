@@ -53,6 +53,10 @@ import {
 import { OBS_GROUP_CLASSES, obsActorClass, obsKindDef, type ObsKindDef } from '@/lib/observation/kinds'
 import type { BrainActivity } from '@/lib/brain/registry'
 import type { StageBackprop, StageTraining } from '@/components/database/brain-stage'
+// [fetch-retry 429] (user report 2026-11-05): poll timeline bọc retry 429
+// (preview proxy ngoài chặn burst — request chưa tới app) — AbortError vẫn
+// ném lại ngay trong wrapper nên logic abort ở đây KHÔNG đổi.
+import { fetchWithTransientRetry } from '@/lib/fetch-retry'
 
 // ==================== HẰNG SỐ (precedent brain-tab POLL_*) ====================
 
@@ -270,7 +274,7 @@ function useObsFeed(kind: 'timeline' | 'golden' | 'traces', brainKey?: string) {
         if (brainKey) q.set('brain', brainKey)
         q.set('limit', String(TRACES_EVENTS_LIMIT))
       }
-      const res = await fetch(`/api/observation/timeline?${q.toString()}`, { signal: ac.signal })
+      const res = await fetchWithTransientRetry(`/api/observation/timeline?${q.toString()}`, { signal: ac.signal }, { label: 'obs-timeline' })
       if (!mountedRef.current || ac.signal.aborted) return
       if (!res.ok) {
         // 400 (query rác) → bỏ lặng lẽ — poll không toast spam (contract 15-a)
@@ -433,7 +437,7 @@ export function ObsNeuronsPanel({
     const ac = new AbortController()
     flagAbortRef.current = ac
     try {
-      const res = await fetch(`/api/observation/timeline?limit=${TRACES_EVENTS_LIMIT}`, { signal: ac.signal })
+      const res = await fetchWithTransientRetry(`/api/observation/timeline?limit=${TRACES_EVENTS_LIMIT}`, { signal: ac.signal }, { label: 'obs-flag' })
       if (!flagMountedRef.current || ac.signal.aborted) return
       if (!res.ok) { setFlag(null); setFlagError(`HTTP ${res.status}`); return }
       const json = (await res.json()) as TimelineResponse

@@ -55,6 +55,13 @@
 // &head=${activityHead} · initialHead/onHeadChange · activity/refreshNonce
 // · tall · <TuningParamDialog · 'ui_synapse_fx'.
 //
+// [fetch-retry 429] (user report 2026-11-05 — console error "HTTP 429" tại
+// fetchBrainData/fetchFeed): MỌI fetch poll tự động của tab này (feed /
+// brain / activity / spec-draft GET) bọc fetchWithTransientRetry — preview
+// proxy ngoài chặn burst khi nhiều poller cùng bắn (request chưa tới app,
+// dev.log chỉ thấy 200) → 429 được retry backoff jitter ~1-4s thay vì ném
+// console error; template URL giữ nguyên chuỗi pin (chỉ đổi tên hàm bọc).
+//
 // ĐỌC TƯƠNG THÍCH (từ 15-b): TuningStateEntry/TuningSpec import thẳng
 // '@/lib/learning/neural-types' (client-safe) — KHÔNG import barrel
 // '@/lib/learning' vì barrel re-export tuning-store (Prisma) vào client
@@ -100,6 +107,8 @@ import {
 import { defaultDraftFor, validateBrainDraft, type BrainDraftSpec } from '@/lib/brain/spec-schema'
 import { getTuningSpec, NEURAL_NODES, TUNING_CHANGE_LOG_CAP } from '@/lib/learning/neural-types'
 import type { TuningStateEntry, TuningChangeLogEntry } from '@/lib/learning/neural-types'
+// [fetch-retry 429] poll GET bọc retry 429/502/503/504 — xem ghi chú đầu file
+import { fetchWithTransientRetry } from '@/lib/fetch-retry'
 
 // ==================== API CONTRACT (rút gọn — chỉ phần tab này dùng) ====================
 
@@ -142,7 +151,7 @@ export function BrainTabContent() {
   const [feed, setFeed] = useState<TuningFeed | null>(null)
   const fetchFeed = useCallback(async () => {
     try {
-      const res = await fetch('/api/neural-architecture')
+      const res = await fetchWithTransientRetry('/api/neural-architecture', undefined, { label: 'brain-tab feed' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = (await res.json()) as TuningFeed
       setFeed(json)
@@ -159,7 +168,7 @@ export function BrainTabContent() {
   const hasBrainDataRef = useRef(false)
   const fetchBrainData = useCallback(async () => {
     try {
-      const res = await fetch('/api/brain')
+      const res = await fetchWithTransientRetry('/api/brain', undefined, { label: 'brain-tab status' })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = (await res.json()) as BrainApiResponse
       setBrainData(json)
@@ -290,12 +299,13 @@ export function BrainTabContent() {
   const [activityHead, setActivityHead] = useState<SurrogateHead>('success')
 
   const fetchActivity = useCallback(async () => {
-    // request-id chống đua: chỉ response MỚI NHẤT được ghi (fetch giữ nguyên
-    // chuỗi pin r92-E — không thêm option/signal vào lời gọi)
+    // request-id chống đua: chỉ response MỚI NHẤT được ghi (fetch bọc
+    // fetchWithTransientRetry từ 2026-11-05 — 429 gateway retry backoff jitter;
+    // template URL giữ nguyên chuỗi pin r92-E)
     const reqId = ++activityReqIdRef.current
     try {
       const q = selectedBrainKey === 'surrogate' ? `&head=${activityHead}` : ''
-      const res = await fetch(`/api/brain/activity?brain=${selectedBrainKey}${q}`)
+      const res = await fetchWithTransientRetry(`/api/brain/activity?brain=${selectedBrainKey}${q}`, undefined, { label: 'brain-tab activity' })
       // 400 (query rác) → bỏ qua lặng lẽ — poll không toast spam (15-a contract)
       if (!res.ok) return
       const json = (await res.json()) as BrainActivity & {
@@ -396,7 +406,7 @@ export function BrainTabContent() {
     let alive = true
     void (async () => {
       try {
-        const res = await fetch('/api/brain/spec-draft')
+        const res = await fetchWithTransientRetry('/api/brain/spec-draft', undefined, { label: 'brain-tab spec-draft' })
         if (!res.ok) return
         const json = (await res.json()) as { drafts: Array<{ brain: string; spec: BrainDraftSpec | null }> }
         if (!alive) return
