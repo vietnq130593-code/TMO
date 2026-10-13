@@ -9,20 +9,23 @@
  *      kiện impact.estimate: so sánh KPI snapshot NGÀY LIỀN TRƯỚC đổi vs
  *      NGÀY LIỀN SAU đổi (Q5 §7 chốt tại triển khai — KpiSnapshot hạt độ
  *      theo ngày 1 dòng/ngày/KPI nên cửa sổ "N sự kiện" không chiếu được;
- *      tra tối đa ±3 ngày mỗi bên, cần đủ 2 bên mới tính) → ghi 1 sự kiện
- *      kind 'impact.estimate'. FRAMING TRUNG THỰC (RO-6): correlation
+ *      tra tối đa ±3 ngày mỗi bên, cần đủ 2 bên trong cửa sổ mới tính —
+ *      FB-OBS-R1-01/R1-02: ±3 ngày + bỏ snapshot cùng ngày đổi) → ghi 1 sự
+ *      kiện kind 'impact.estimate'. FRAMING TRUNG THỰC (RO-6): correlation
  *      window — KHÔNG claim nhân quả (nhiều thứ đổi song song).
  *   2. Health pass — phát 1 sự kiện kind 'obs.health' mỗi tick: queue/
  *      dropped/failed của ledger + trace (GAP-7 meta-health).
  *
  * Cờ `obs_impact` (off mặc định) — tick kiểm tra cờ MỖI vòng (bật là có
- * hiệu lực ngay, không cần restart). Cờ off → tick rỗng (rẻ).
+ * hiệu lực ngay, không cần restart). Cờ off → tick rỗng (rẻ). Output duy
+ *      nhất của worker là SỰ KIỆN qua ledger — nên obs_ledger off → tick
+ *      rỗng luôn (FB-OBS-R1-11: không quét dedup/KPI vô ích).
  * Mọi DB write trong tick fail-open — worker KHÔNG BAO GIỜ throw.
  */
 
 import { db } from '@/lib/db'
 import { getTuningEnum } from '@/lib/learning/tuning-store'
-import { observeEvent, getObservationHealth, flushObservationQueue } from './ledger'
+import { observeEvent, getObservationHealth, flushObservationQueue, isObsLedgerEnabled } from './ledger'
 import { getTraceHealth } from './trace'
 import { KPI_REGISTRY } from '@/lib/kpi/registry'
 
@@ -54,7 +57,9 @@ export interface KpiImpactEstimate {
   after: number
   afterN: number
   delta: number
-  /** CI 95% thô — CHỈ cho rate KPI (value ∈ [0,1] + 2 mẫu); null còn lại */
+  /** CI 95% thô — CHỈ cho KPI rate:true trong KPI_REGISTRY (tỉ lệ nhị thức
+   * part/total) + value ∈ [0,1] + n>0 (FB-OBS-R1-04: bỏ heuristic value∈[0,1]
+   * vốn bắt nhầm KPI trung bình như eval_ndcg/eval_recall/verdict_f1); null còn lại */
   ciLow: number | null
   ciHigh: number | null
   direction: 'higher' | 'lower' | undefined
@@ -73,8 +78,14 @@ export function estimateKpiImpact(
   direction?: 'higher' | 'lower',
 ): KpiImpactEstimate {
   const delta = after.value - before.value
+  // FB-OBS-R1-04: rate = KPI_REGISTRY đánh dấu rate:true (tỉ lệ nhị thức
+  // part/total) — KHÔNG dùng heuristic value∈[0,1] (bắt nhầm KPI TRUNG BÌNH
+  // nằm [0,1] như eval_ndcg/eval_recall/verdict_f1 → CI binomial sai mô
+  // hình phương sai). Kèm guard dữ liệu (value∈[0,1] + n>0) — lạc quê → null.
+  const reg = KPI_REGISTRY.find(k => k.key === kpiKey)
   const isRate =
-    before.value >= 0 && before.value <= 1 && after.value >= 0 && after.value <= 1
+    reg?.rate === true
+    && before.value >= 0 && before.value <= 1 && after.value >= 0 && after.value <= 1
     && before.sampleSize > 0 && after.sampleSize > 0
   let ciLow: number | null = null
   let ciHigh: number | null = null
@@ -117,6 +128,9 @@ export function kpiDateOf(t: Date): string {
  * được load 1 lần rồi set-lookup.
  */
 export async function computeImpactEstimates(): Promise<number> {
+  // FB-OBS-R1-11: obs_ledger off → mọi observeEvent no-op — quét chỉ đốt DB
+  // (dedup không bao giờ nhúng → rescan mãi mỗi tick) + written đếm giả.
+  if (!isObsLedgerEnabled()) return 0
   const cutoff = new Date(Date.now() - OBS_IMPACT_MIN_AGE_MS)
   const candidates = await db.tuningChangeLog.findMany({
     where: { createdAt: { lte: cutoff } },
@@ -159,19 +173,27 @@ export async function computeImpactEstimates(): Promise<number> {
     const kpis: KpiImpactEstimate[] = []
     for (const [kpiKey, arr] of byKpi) {
       const changeDay = kpiDateOf(change.createdAt)
-      // ngày liền TRƯỚC: lớn nhất date < changeDay (trong ±LOOK ngày)
+      // FB-OBS-R1-01: cửa sổ ±LOOK ngày mỗi bên (Q5 §7 chốt — trước đây
+      // OBS_IMPACT_LOOK_DAYS khai báo nhưng dead, snapshot cách 10 ngày vẫn chấm)
+      const minDay = kpiDateOf(new Date(change.createdAt.getTime() - OBS_IMPACT_LOOK_DAYS * 24 * 3600_000))
+      const maxDay = kpiDateOf(new Date(change.createdAt.getTime() + OBS_IMPACT_LOOK_DAYS * 24 * 3600_000))
       let before: KpiSnapshotLite | null = null
       let after: KpiSnapshotLite | null = null
       for (const s of arr) {
-        if (s.date < changeDay) before = s // arr sorted asc → trước = gần nhất
-        else {
-          after = s // snapshot đầu tiên ≥ changeDay... 
+        if (s.date < changeDay) {
+          // ngày liền TRƯỚC (gần nhất < changeDay) — chỉ nhận trong [minDay, changeDay)
+          if (s.date >= minDay) before = s
+        } else if (s.date === changeDay) {
+          continue // FB-OBS-R1-02: cùng ngày đổi = dữ liệu trộn trước/sau — bỏ, tìm ngày KẾ (trước đây chặn cả KPI)
+        } else {
+          // snapshot đầu tiên > changeDay quyết định — trong maxDay mới nhận
+          if (s.date <= maxDay) after = s
+          break // sau đó chỉ xa hơn — dừng (arr sorted asc)
         }
         if (before && after) break
       }
-      // after phải là ngày SAU change (không phải cùng ngày đổi — cùng ngày
-      // là dữ liệu trộn trước/sau; bỏ qua nếu trùng)
-      if (!before || !after || after.date === changeDay) continue
+      // cần đủ 2 bên TRONG cửa sổ ±LOOK ngày (Q5 §7 chốt)
+      if (!before || !after) continue
       kpis.push(estimateKpiImpact(kpiKey, before, after, directionByKey.get(kpiKey)))
     }
     // Chỉ ghi khi có ít nhất 1 KPI đo được 2 bên
@@ -190,7 +212,8 @@ export async function computeImpactEstimates(): Promise<number> {
         to: change.toEffectiveValue,
         window: {
           granularity: 'daily-snapshot',
-          note: 'so sánh KPI snapshot ngày liền trước vs liền sau change — correlation window, KHÔNG phải nhân quả (nhiều thứ đổi song song)',
+          lookDays: OBS_IMPACT_LOOK_DAYS,
+          note: 'so sánh KPI snapshot ngày liền trước vs liền sau change (tra ±3 ngày mỗi bên) — correlation window, KHÔNG phải nhân quả (nhiều thứ đổi song song)',
         },
         kpis,
       },
@@ -250,7 +273,9 @@ export function isObsImpactEnabled(): boolean {
 async function tick(): Promise<void> {
   const st = workerState()
   if (st.running) return // tick trước chưa xong — bỏ (không xếp chồng)
-  if (!isObsImpactEnabled()) return // cờ off → tick rỗng (rẻ)
+  // FB-OBS-R1-11: output duy nhất của worker là SỰ KIỆN — obs_ledger off
+  // thì tick rỗng (không quét candidates/dedup/KPI vô ích)
+  if (!isObsImpactEnabled() || !isObsLedgerEnabled()) return
   st.running = true
   try {
     await computeImpactEstimates()

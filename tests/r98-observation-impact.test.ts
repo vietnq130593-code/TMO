@@ -3,23 +3,27 @@
  * (BLUEPRINT-OBSERVATION-P1-P4 §C.6 — chốt §7 Q5 Task 23 2026-10-13)
  *
  * Đo lường:
- *   A. estimateKpiImpact PURE (pin bảng tay): rate KPI (value ∈[0,1], n>0) →
- *      delta + CI 95% thô z·√(se²B+se²A); non-rate / n=0 → CI null.
- *      Công thức tay: before p=0.4 n=100, after p=0.5 n=100 →
+ *   A. estimateKpiImpact PURE (pin bảng tay): rate KPI (KPI_REGISTRY rate:true,
+ *      value ∈[0,1], n>0) → delta + CI 95% thô z·√(se²B+se²A); non-rate /
+ *      n=0 → CI null. Công thức tay: before p=0.4 n=100, after p=0.5 n=100 →
  *      seB=√(0.4·0.6/100)=0.049, seA=√(0.5·0.5/100)=0.05 →
  *      half=1.96·√(0.0024+0.0025)=1.96·0.07=0.1372 → CI=[−0.0372, 0.2372].
+ *      A4: KPI trung bình (eval_ndcg) + KPI lạ → CI null (FB-OBS-R1-04).
  *   B. formatImpactDelta: dấu phẩy vi-VN + dấu +.
  *   C. computeImpactEstimates (DB cô lập): TuningChangeLog 25h trước +
  *      KpiSnapshot ngày-trước (0.4/n100) + ngày-sau (0.5/n100) → 1 sự kiện
  *      impact.estimate (payload changeLogId + kpis + window.note correlation
  *      KHÔNG nhân quả — RO-6) — chạy lần 2 → 0 (dedup).
  *   D. Cửa sổ snapshot ngày (Q5 §7 chốt): change CÙNG NGÀY snapshot sau →
- *      KHÔNG tính (trộn trước/sau); thiếu 1 bên → bỏ qua.
+ *      KHÔNG tính (trộn trước/sau); thiếu 1 bên → bỏ qua. C4: cùng ngày nhưng
+ *      có snapshot NGÀY KẾ → dùng ngày kế (FB-OBS-R1-02). C5/C6: ngoài ±3 ngày
+ *      mỗi bên → bỏ (FB-OBS-R1-01 — OBS_IMPACT_LOOK_DAYS sống lại).
  *   E. Batch cap OBS_IMPACT_BATCH=20: 25 change đủ điều kiện → tick 1 ghi 20,
  *      tick 2 ghi nốt 5.
  *   F. emitObservationHealth: 1 sự kiện obs.health với counters ledger+trace.
  *   G. Worker singleton: start ×2 không throw + globalThis guard; stop dọn
- *      sạch (timer null, started false); cờ off → tick no-op.
+ *      sạch (timer null, started false); cờ off → tick no-op. G4: obs_ledger
+ *      off → computeImpactEstimates 0 không đếm giả (FB-OBS-R1-11).
  *
  * DB CÔ LẬP qua preload — cleanup afterAll pattern r92.
  */
@@ -31,7 +35,7 @@ import {
   startObservationImpactWorker, stopObservationImpactWorker, isObsImpactEnabled,
   OBS_IMPACT_BATCH, OBS_IMPACT_MIN_AGE_MS, kpiDateOf,
 } from '@/lib/observation/impact'
-import { flushObservationQueue } from '@/lib/observation/ledger'
+import { flushObservationQueue, isObsLedgerEnabled } from '@/lib/observation/ledger'
 import { resetTuningValue, refreshTuningSnapshot } from '@/lib/learning/tuning-store'
 
 const DAY = 24 * 3600 * 1000
@@ -130,6 +134,37 @@ describe('r98 · A — estimateKpiImpact pure (CI thô rate KPI)', () => {
     )
     expect(r.ciLow).toBeNull()
   })
+
+  test('A4 KPI trung bình nằm [0,1] → CI null (FB-OBS-R1-04 — bỏ heuristic value∈[0,1])', () => {
+    // eval_ndcg là TRUNG BÌNH nDCG per-case ∈[0,1] — heuristic cũ (value∈[0,1]
+    // ∧ n>0) gán CI binomial sai mô hình phương sai; sau fix rate lấy từ
+    // KPI_REGISTRY (đánh dấu rate:true) — trung bình/đếm → null trung thực
+    const r = estimateKpiImpact(
+      'eval_ndcg',
+      { date: '2026-10-10', value: 0.626, sampleSize: 3 },
+      { date: '2026-10-12', value: 0.667, sampleSize: 4 },
+      'higher',
+    )
+    expect(r.delta).toBeCloseTo(0.041, 10)
+    expect(r.ciLow).toBeNull() // heuristic cũ trả CI khác null — lỗi cũ hết sau fix
+    expect(r.ciHigh).toBeNull()
+    // KPI lạ ngoài registry → null (bảo thủ — không đoán rate)
+    const r2 = estimateKpiImpact(
+      'kpi_khong_co_trong_registry',
+      { date: '2026-10-10', value: 0.4, sampleSize: 100 },
+      { date: '2026-10-12', value: 0.5, sampleSize: 100 },
+    )
+    expect(r2.ciLow).toBeNull()
+    expect(r2.ciHigh).toBeNull()
+    // chấm chéo: rate:true thật (mission_success_rate) vẫn có CI — A1 dùng cùng key
+    const r3 = estimateKpiImpact(
+      'mission_success_rate',
+      { date: '2026-10-10', value: 0.4, sampleSize: 100 },
+      { date: '2026-10-12', value: 0.5, sampleSize: 100 },
+    )
+    expect(r3.ciLow).not.toBeNull()
+    expect(r3.ciHigh).not.toBeNull()
+  })
 })
 
 // ==================== B. formatImpactDelta ====================
@@ -214,6 +249,56 @@ describe('r98 · C — computeImpactEstimates (Q5 §7: snapshot ngày liền tr�
     await seedKpi('verdict_precision', changeDay, 0.55, 50)
     expect(await computeImpactEstimates()).toBe(0)
   })
+
+  test('C4 cùng ngày change CÓ snapshot ngày kế → dùng ngày kế (FB-OBS-R1-02)', async () => {
+    // isolate đầy đủ (bài học vòng 1 — xem C2)
+    await db.observationEvent.deleteMany({ where: { kind: 'impact.estimate' } })
+    await db.tuningChangeLog.deleteMany({})
+    await db.kpiSnapshot.deleteMany({})
+    const changeDay = kpiDateOf(new Date(Date.now() - H25))
+    // before −1d · trùng ngày changeDay (bỏ, dữ liệu trộn) · NGÀY KẾ +1d
+    // — code cũ chặn cả KPI (0 event); code fix bỏ snapshot trùng, lấy +1d
+    await seedChange('verdict_precision_case', H25)
+    await seedKpi('verdict_precision', kpiDateOf(new Date(Date.now() - H25 - DAY)), 0.5, 50)
+    await seedKpi('verdict_precision', changeDay, 0.55, 50) // cùng ngày — bị bỏ qua
+    await seedKpi('verdict_precision', kpiDateOf(new Date(Date.now() - H25 + DAY)), 0.6, 50)
+    expect(await computeImpactEstimates()).toBe(1)
+    await flushObservationQueue()
+    const events = await impactEvents()
+    expect(events.length).toBe(1)
+    const p = JSON.parse(events[0].payloadJson) as {
+      kpis: Array<{ kpi: string; before: number; after: number; delta: number }>
+      window: { lookDays: number }
+    }
+    expect(p.kpis.length).toBe(1)
+    expect(p.kpis[0].before).toBe(0.5) // −1d
+    expect(p.kpis[0].after).toBe(0.6) // +1d — KHÔNG dùng 0.55 của ngày trùng
+    expect(p.kpis[0].delta).toBeCloseTo(0.1, 10)
+    expect(p.window.lookDays).toBe(3) // pin hằng số sống lại (FB-OBS-R1-01)
+  })
+
+  test('C5 before NGOÀI ±3 ngày (cách 10 ngày) → bỏ KPI (FB-OBS-R1-01)', async () => {
+    // isolate đầy đủ (bài học vòng 1 — xem C2)
+    await db.observationEvent.deleteMany({ where: { kind: 'impact.estimate' } })
+    await db.tuningChangeLog.deleteMany({})
+    await db.kpiSnapshot.deleteMany({})
+    await seedChange('tool_success_rate_case', H25)
+    // before cách change 10 NGÀY (ngoài ±3) — code cũ vẫn chấm với snapshot 10 ngày trước
+    await seedKpi('tool_success_rate', kpiDateOf(new Date(Date.now() - H25 - 10 * DAY)), 0.4, 100)
+    await seedKpi('tool_success_rate', kpiDateOf(new Date(Date.now() - H25 + DAY)), 0.5, 100)
+    expect(await computeImpactEstimates()).toBe(0)
+  })
+
+  test('C6 after NGOÀI ±3 ngày (cách 5 ngày) → bỏ KPI (FB-OBS-R1-01)', async () => {
+    await db.observationEvent.deleteMany({ where: { kind: 'impact.estimate' } })
+    await db.tuningChangeLog.deleteMany({})
+    await db.kpiSnapshot.deleteMany({})
+    await seedChange('kb_fallback_case', H25)
+    // before −2d (trong cửa sổ) nhưng after +5d (ngoài ±3) — code cũ vẫn chấm
+    await seedKpi('kb_fallback_rate', kpiDateOf(new Date(Date.now() - H25 - 2 * DAY)), 0.3, 40)
+    await seedKpi('kb_fallback_rate', kpiDateOf(new Date(Date.now() - H25 + 5 * DAY)), 0.2, 40)
+    expect(await computeImpactEstimates()).toBe(0)
+  })
 })
 
 // ==================== E. Batch cap ====================
@@ -282,5 +367,32 @@ describe('r98 · G — worker singleton (tick precedent GoalLoopWorker)', () => 
     expect(isObsImpactEnabled()).toBe(true)
     delete process.env.OBS_IMPACT
     expect(isObsImpactEnabled()).toBe(false)
+  })
+
+  test('G4 obs_ledger off (dù obs_impact on) → computeImpactEstimates 0, không đếm giả (FB-OBS-R1-11)', async () => {
+    // dữ kiện ĐỦ điều kiện (change 25h + snapshot ±1d) nhưng obs_ledger off:
+    // code cũ vẫn quét + written++ đếm sự kiện KHÔNG được ghi + dedup không
+    // bao giờ nhúng → rescan vĩnh viễn mỗi tick; code fix guard đầu → 0
+    await db.observationEvent.deleteMany({ where: { kind: 'impact.estimate' } })
+    await db.tuningChangeLog.deleteMany({})
+    await db.kpiSnapshot.deleteMany({})
+    await seedChange('q_learning_beta', H25)
+    await seedKpi('mission_success_rate', kpiDateOf(new Date(Date.now() - H25 - DAY)), 0.4, 100)
+    await seedKpi('mission_success_rate', kpiDateOf(new Date(Date.now() - H25 + DAY)), 0.5, 100)
+    delete process.env.OBS_LEDGER
+    process.env.OBS_IMPACT = 'on' // obs_impact on nhưng obs_ledger off
+    await refreshTuningSnapshot()
+    try {
+      expect(isObsLedgerEnabled()).toBe(false) // pin trạng thái mô phỏng đúng
+      expect(await computeImpactEstimates()).toBe(0) // code cũ trả 1 — lỗi cũ hết
+      await flushObservationQueue()
+      expect((await impactEvents()).length).toBe(0)
+    } finally {
+      process.env.OBS_LEDGER = 'on'
+      delete process.env.OBS_IMPACT
+      await refreshTuningSnapshot()
+      await db.tuningChangeLog.deleteMany({})
+      await db.kpiSnapshot.deleteMany({})
+    }
   })
 })

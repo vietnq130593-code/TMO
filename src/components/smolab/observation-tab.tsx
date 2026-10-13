@@ -36,7 +36,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog'
-import { OBS_GROUP_CLASSES, obsActorClass, type ObsKindDef } from '@/lib/observation/kinds'
+import { OBS_GROUP_CLASSES, obsActorClass, obsKindDef, type ObsKindDef } from '@/lib/observation/kinds'
 import { computeLabelTotal } from '@/lib/brain/registry'
 
 // ==================== HẰNG SỐ (precedent brain-tab POLL_*) ====================
@@ -111,30 +111,13 @@ const fmtDate = (iso: string): string => {
   return d.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' })
 }
 
-/** Chip màu kind — kind lạ rơi nhóm 'db' (fail-open kinds.ts). */
+/**
+ * Chip màu kind — tra kinds.ts single-source (obsKindDef), kind lạ rơi nhóm
+ * 'db' (fail-open). FB-OBS-R1-07: bỏ bản sao map 16-kind cục bộ — thêm kind
+ * mới ở kinds.ts tự động đúng màu (bản cũ thiếu kind → sai màu nhóm 'db').
+ */
 function kindClass(kind: string): string {
-  for (const k of KIND_FALLBACK) {
-    if (k === kind) return KIND_CLASS_MAP[k]
-  }
-  return OBS_GROUP_CLASSES.db
-}
-
-// Map tĩnh an toàn lint (KHÔNG ghép chuỗi động)
-const KIND_FALLBACK = [
-  'run.start', 'run.end', 'db.write', 'qentry.add', 'verdict.add', 'learn.episode',
-  'brain.train', 'brain.infer-ref', 'tuning.change', 'flag.flip', 'reward.log',
-  'search.session', 'search.candidate', 'proposal.apply', 'impact.estimate', 'obs.health',
-] as const
-const KIND_CLASS_MAP: Record<string, string> = {
-  'run.start': OBS_GROUP_CLASSES.run, 'run.end': OBS_GROUP_CLASSES.run,
-  'db.write': OBS_GROUP_CLASSES.db, 'qentry.add': OBS_GROUP_CLASSES.db,
-  'verdict.add': OBS_GROUP_CLASSES.db, 'learn.episode': OBS_GROUP_CLASSES.db,
-  'brain.train': OBS_GROUP_CLASSES.brain, 'brain.infer-ref': OBS_GROUP_CLASSES.brain,
-  'tuning.change': OBS_GROUP_CLASSES.tuning, 'flag.flip': OBS_GROUP_CLASSES.tuning,
-  'reward.log': OBS_GROUP_CLASSES.reward,
-  'search.session': OBS_GROUP_CLASSES.search, 'search.candidate': OBS_GROUP_CLASSES.search,
-  'proposal.apply': OBS_GROUP_CLASSES.search,
-  'impact.estimate': OBS_GROUP_CLASSES.impact, 'obs.health': OBS_GROUP_CLASSES.impact,
+  return OBS_GROUP_CLASSES[obsKindDef(kind)?.group ?? 'db']
 }
 
 const LIFECYCLE_BADGE: Record<BrainFeedEntry['lifecycle'], { label: string; cls: string }> = {
@@ -198,7 +181,7 @@ export function ObservationTabContent({ onOpenBrainTab }: { onOpenBrainTab?: () 
       }
       if (top !== null) lastSeqRef.current = Math.max(lastSeqRef.current ?? 0, top)
     } catch {
-      setLoadError('Mất kết nối — giữ dữ liệu cũ, đang thử lại') // fail-open giữ dữ liệu
+      setLoadError('Mất kết nối — giữ dữ liệu cũ') // fail-open giữ dữ liệu — phần "thử lại" do hậu tố spinner đảm nhiệm (FB-OBS-LIVE-01: tránh lặp "đang thử lại — thử lại")
     }
   }, [kindFilter, actorFilter, runIdActive, sinceIso])
 
@@ -368,7 +351,14 @@ export function ObservationTabContent({ onOpenBrainTab }: { onOpenBrainTab?: () 
       {initialLoading && (
         <div className="flex items-center gap-2 py-6 text-[11px] text-stone-500" aria-live="polite">
           <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-          Đang tải timeline quan sát…
+          {/* FB-OBS-R1-12: lỗi fetch phải hiển thị cả khi data===null — trước đây
+              loadError chỉ render trong nhánh ĐÃ có data → fetch hỏng kéo dài
+              treo spinner "Đang tải…" vô hạn */}
+          {loadError ? (
+            <span className="text-amber-400">{loadError} — thử lại</span>
+          ) : (
+            'Đang tải timeline quan sát…'
+          )}
         </div>
       )}
 

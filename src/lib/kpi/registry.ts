@@ -50,6 +50,14 @@ export interface KpiDef {
   goal: 'higher' | 'lower'
   /** Ngưỡng hiển thị — undefined = KPI informative (không status) */
   target?: number
+  /**
+   * FB-OBS-R1-04: true = TỈ LỆ NHỊ THỨC part/total (mission_success_rate,
+   * tool_success_rate, verdict_precision, kb_fallback_rate, delegation_ratio,
+   * digest_gate_fallback_rate) — CI binomial §C.6 impact.ts hợp mô hình.
+   * false/mặc định (đếm, trung bình như eval_ndcg/verdict_f1) → CI null —
+   * heuristic value∈[0,1] bắt nhầm KPI trung bình, bỏ từ FB-OBS-R1-04.
+   */
+  rate?: boolean
   compute: () => Promise<KpiComputeResult>
 }
 
@@ -102,6 +110,7 @@ export const KPI_REGISTRY: KpiDef[] = [
     key: 'mission_success_rate',
     label: 'Mission success rate (24h)',
     goal: 'higher',
+    rate: true, // tỉ lệ nhị thức completed/total — FB-OBS-R1-04
     // Đặt ban đầu 0.8 — hiệu chỉnh theo dữ liệu baseline P1
     target: 0.8,
     compute: async () => {
@@ -121,6 +130,7 @@ export const KPI_REGISTRY: KpiDef[] = [
     key: 'verdict_precision',
     label: 'Verdict precision — trọng tài (30 ngày)',
     goal: 'higher',
+    rate: true, // tỉ lệ nhị thức tp/(tp+fp) — FB-OBS-R1-04
     // FP = tuyên bố "complete" giả — chỉ số an toàn quan trọng nhất của evaluator
     target: 0.9,
     compute: async () => {
@@ -150,6 +160,7 @@ export const KPI_REGISTRY: KpiDef[] = [
     key: 'tool_success_rate',
     label: 'Tool success rate (24h)',
     goal: 'higher',
+    rate: true, // tỉ lệ nhị thức success/total — FB-OBS-R1-04
     target: 0.9,
     compute: async () => {
       const since = sinceHours(24)
@@ -213,6 +224,7 @@ export const KPI_REGISTRY: KpiDef[] = [
     key: 'kb_fallback_rate',
     label: 'KB fallback rate (Model-Knowledge, eval queries)',
     goal: 'lower',
+    rate: true, // tỉ lệ nhị thức fallback/usable — FB-OBS-R1-04
     target: 0.2,
     compute: async () => {
       const rows = await db.evalResult.findMany({
@@ -239,6 +251,7 @@ export const KPI_REGISTRY: KpiDef[] = [
     key: 'delegation_ratio',
     label: 'Delegation ratio (24h)',
     goal: 'lower',
+    rate: true, // tỉ lệ nhị thức delegated/total — FB-OBS-R1-04
     target: 0.5,
     compute: async () => {
       const since = sinceHours(24)
@@ -257,6 +270,7 @@ export const KPI_REGISTRY: KpiDef[] = [
     key: 'digest_gate_fallback_rate',
     label: 'Digest gate fallback rate (7 ngày — P3-M4)',
     goal: 'lower',
+    rate: true, // tỉ lệ nhị thức fallback/total — FB-OBS-R1-04
     // Fallback là đường AN TOÀN (evidence-preserving) nên hệ thống không hỏng
     // khi tỉ lệ cao — nhưng fallback cao = digest/summary LLM hay mất dẫn
     // chứng, đáng khảo sát prompt/model utility. 0.3 đặt ban đầu, chỉnh theo

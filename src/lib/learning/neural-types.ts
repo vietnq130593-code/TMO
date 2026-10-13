@@ -610,7 +610,7 @@ export const TUNING_SPECS: readonly TuningSpec[] = [
     key: 'obs_impact',
     label: 'OBS_IMPACT',
     description:
-      'Bật job nền ước lượng tác động (impact tracker OBS-P4): với mỗi lần đổi tuning đã ≥ 24h, so sánh KPI snapshot ngày liền trước vs liền sau → ghi sự kiện impact.estimate (correlation — KHÔNG claim nhân quả) + obs.health (độ khỏe của chính ledger).',
+      'Bật job nền ước lượng tác động (impact tracker OBS-P4): với mỗi lần đổi tuning đã ≥ 24h, so sánh KPI snapshot ngày liền trước vs liền sau (tra ±3 ngày mỗi bên) → ghi sự kiện impact.estimate (correlation — KHÔNG claim nhân quả) + obs.health (độ khỏe của chính ledger). Cần obs_ledger on để ghi — obs_ledger off thì tick rỗng (FB-OBS-R1-11).',
     nodeId: 'hist-feedback',
     type: 'enum',
     enumValues: ['off', 'on'],

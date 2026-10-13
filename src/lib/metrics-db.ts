@@ -219,7 +219,7 @@ export async function insertArbiterVerdict(params: {
   forcedDowngrade?: boolean
 }): Promise<void> {
   if (hasArbiterVerdictDelegate()) {
-    await db.arbiterVerdict.create({
+    const created = await db.arbiterVerdict.create({
       data: {
         sessionId: params.sessionId,
         messageId: params.messageId ?? null,
@@ -239,6 +239,7 @@ export async function insertArbiterVerdict(params: {
       kind: 'verdict.add',
       sessionId: params.sessionId,
       table: 'ArbiterVerdict',
+      rowKey: created.id, // FB-OBS-R1-08: kim tuyến trỏ dòng ArbiterVerdict thật (đối xứng nhánh raw)
       summary: `Phán quyết cycle ${params.cycle}: ${params.complete ? 'đủ' : 'thiếu'} · conf ${params.confidence.toFixed(2)} · ${params.verified ? 'verified' : 'unverified'}`,
       payload: {
         sessionId: params.sessionId, cycle: params.cycle, complete: params.complete,

@@ -38,7 +38,9 @@ export const OBS_EVENTS_KEEP = 50_000
 export const OBS_EVENTS_MAX_AGE_DAYS = 30
 /** Chu kỳ chạy prune: sau mỗi 1.000 sự kiện ghi (C.2 — không cron thêm). */
 export const OBS_PRUNE_EVERY = 1_000
-/** Payload JSON tối đa 4KB (C.2 — overflow truncate + flag truncated:true). */
+/** Payload JSON tối đa 4KB THEO BYTE UTF-8 (C.2 — overflow truncate + flag
+ * truncated:true; FB-OBS-R1-03: đếm .length UTF-16 cho phép payload ký tự
+ * đa byte vượt cap thật ~3× — tiếng Việt 3 byte/char). */
 export const OBS_PAYLOAD_MAX_BYTES = 4_096
 
 // ==================== INPUT ====================
@@ -194,32 +196,56 @@ async function writeOne(evt: ObserveEventInput): Promise<void> {
   })
 }
 
-/** Payload ≤ 4KB — overflow cắt + đánh dấu truncated:true (C.2/RO-2). */
+/** Độ dài BYTE UTF-8 của chuỗi — khác .length (đếm đơn vị UTF-16 — FB-OBS-R1-03). */
+function byteLen(s: string): number {
+  return Buffer.byteLength(s, 'utf8')
+}
+
+/** Cắt chuỗi theo BYTE UTF-8 — có thể rơi giữa 1 codepoint (→ U+FFFD cuối,
+ * chấp nhận cho đường "cắt thô" chẩn đoán). */
+function utf8ByteSlice(s: string, maxBytes: number): string {
+  return Buffer.from(s, 'utf8').subarray(0, maxBytes).toString('utf8')
+}
+
+/** Payload ≤ 4KB theo byte — overflow cắt + đánh dấu truncated:true (C.2/RO-2). */
 export function capPayload(payload?: Record<string, unknown>): string {
   if (!payload || Object.keys(payload).length === 0) return '{}'
   let json = JSON.stringify(payload)
-  if (json.length <= OBS_PAYLOAD_MAX_BYTES) return json
+  if (byteLen(json) <= OBS_PAYLOAD_MAX_BYTES) return json
   const capped = { ...payload, truncated: true }
   json = JSON.stringify(capped)
-  if (json.length <= OBS_PAYLOAD_MAX_BYTES) return json
-  // Vẫn vượt (1 trường quá lớn) — cắt thô + đánh dấu
-  return JSON.stringify({ truncated: true, note: 'payload vượt 4KB — đã cắt', head: json.slice(0, OBS_PAYLOAD_MAX_BYTES - 80) })
+  if (byteLen(json) <= OBS_PAYLOAD_MAX_BYTES) return json
+  // Vẫn vượt (1 trường quá lớn) — cắt thô THEO BYTE + đánh dấu
+  // (head budget −160: đủ chỗ cho vỏ JSON quanh head — FB-OBS-R1-03)
+  return JSON.stringify({
+    truncated: true,
+    note: 'payload vượt 4KB — đã cắt',
+    head: utf8ByteSlice(json, OBS_PAYLOAD_MAX_BYTES - 160),
+  })
 }
 
 // ==================== PRUNE (Q3 §7 chốt — 50K dòng / 30 ngày) ====================
 
-/** Xoá sự kiện cũ: > 30 ngày HOẶC ngoài 50K dòng mới nhất. Idempotent, fail-open. */
-export async function pruneObservationEvents(): Promise<{ deleted: number }> {
+/**
+ * Xoá sự kiện cũ: > N ngày HOẶC ngoài K dòng mới nhất. Idempotent, fail-open.
+ * opts (keep/maxAgeDays) chỉ định cho TEST (FB-OBS-R1-06: pin count-cap mà
+ * không phải seed 50K dòng) — production gọi KHÔNG tham số (mặc định hằng số Q3 §7).
+ */
+export async function pruneObservationEvents(
+  opts?: { keep?: number; maxAgeDays?: number },
+): Promise<{ deleted: number }> {
+  const keep = opts?.keep ?? OBS_EVENTS_KEEP
+  const maxAgeDays = opts?.maxAgeDays ?? OBS_EVENTS_MAX_AGE_DAYS
   try {
-    const cutoff = new Date(Date.now() - OBS_EVENTS_MAX_AGE_DAYS * 24 * 3600 * 1000)
+    const cutoff = new Date(Date.now() - maxAgeDays * 24 * 3600 * 1000)
     const byAge = await db.observationEvent.deleteMany({ where: { ts: { lt: cutoff } } })
     let byCount = 0
     const total = await db.observationEvent.count()
-    if (total > OBS_EVENTS_KEEP) {
-      // Giữ OBS_EVENTS_KEEP dòng MỚI NHẤT: tìm seq cắt rồi deleteMany seq < đó
+    if (total > keep) {
+      // Giữ `keep` dòng MỚI NHẤT: tìm seq cắt rồi deleteMany seq < đó
       const kth = await db.observationEvent.findFirst({
         orderBy: { seq: 'desc' },
-        skip: OBS_EVENTS_KEEP - 1,
+        skip: keep - 1,
         select: { seq: true },
       })
       if (kth) {

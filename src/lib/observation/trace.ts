@@ -31,7 +31,8 @@ export const OBS_TRACE_KEEP = 20_000
 export const OBS_TRACE_MAX_AGE_DAYS = 14
 /** Chu kỳ prune: sau mỗi 1.000 vết ghi (C.2). */
 export const OBS_TRACE_PRUNE_EVERY = 1_000
-/** inputJson/outputJson capped 2KB (§C.2 — vượt thì cắt + flag truncated). */
+/** inputJson/outputJson capped 2KB THEO BYTE UTF-8 (§C.2 — vượt thì cắt +
+ * flag truncated; FB-OBS-R1-03: đếm .length cho phép vector đa byte vượt ~3×). */
 export const OBS_TRACE_JSON_MAX_BYTES = 2_048
 /** Queue vết có-hạn — đối xứng OBS_QUEUE_MAX (ledger.ts). */
 export const OBS_TRACE_QUEUE_MAX = 512
@@ -62,6 +63,8 @@ interface ObsTraceState {
   dropped: number
   failed: number
   sincePrune: number
+  /** chống prune chồng chéo — đối xứng ledger (FB-OBS-R1-13) */
+  pruning: boolean
 }
 
 const globalForObsTrace = globalThis as unknown as { __tmoObsTrace?: ObsTraceState }
@@ -75,6 +78,7 @@ function state(): ObsTraceState {
       dropped: 0,
       failed: 0,
       sincePrune: 0,
+      pruning: false,
     }
   }
   return globalForObsTrace.__tmoObsTrace
@@ -139,9 +143,12 @@ async function drainTrace(): Promise<void> {
     } catch {
       st.failed++
     }
-    if (st.sincePrune >= OBS_TRACE_PRUNE_EVERY) {
+    if (st.sincePrune >= OBS_TRACE_PRUNE_EVERY && !st.pruning) {
       st.sincePrune = 0
-      void pruneBrainInferenceTraces()
+      st.pruning = true
+      void pruneBrainInferenceTraces().finally(() => {
+        state().pruning = false
+      })
     }
   }
 }
@@ -151,12 +158,15 @@ export function hashObsInput(input: unknown): string {
   return createHash('sha256').update(JSON.stringify(input ?? null)).digest('hex')
 }
 
-/** Cap JSON 2KB — vượt thì cắt + flag truncated (§C.2). */
+/** Cap JSON 2KB THEO BYTE — vượt thì cắt + flag truncated (§C.2; FB-OBS-R1-03). */
 export function capTraceJson(value: unknown): string | null {
   if (value === undefined || value === null) return null
   const json = JSON.stringify(value)
-  if (json.length <= OBS_TRACE_JSON_MAX_BYTES) return json
-  return JSON.stringify({ truncated: true, head: json.slice(0, OBS_TRACE_JSON_MAX_BYTES - 60) })
+  if (Buffer.byteLength(json, 'utf8') <= OBS_TRACE_JSON_MAX_BYTES) return json
+  return JSON.stringify({
+    truncated: true,
+    head: Buffer.from(json, 'utf8').subarray(0, OBS_TRACE_JSON_MAX_BYTES - 60).toString('utf8'),
+  })
 }
 
 async function writeOneTrace(item: TraceInferenceInput): Promise<void> {
@@ -208,18 +218,27 @@ async function writeOneTrace(item: TraceInferenceInput): Promise<void> {
 
 // ==================== PRUNE (Q3 §7 — 20K / 14 ngày) ====================
 
-export async function pruneBrainInferenceTraces(): Promise<{ deleted: number }> {
+/**
+ * Xoá vết cũ: > N ngày HOẶC ngoài K dòng mới nhất. Idempotent, fail-open.
+ * opts (keep/maxAgeDays) chỉ định cho TEST (FB-OBS-R1-06: pin count-cap mà
+ * không phải seed 20K dòng) — production gọi KHÔNG tham số (mặc định hằng số Q3 §7).
+ */
+export async function pruneBrainInferenceTraces(
+  opts?: { keep?: number; maxAgeDays?: number },
+): Promise<{ deleted: number }> {
+  const keep = opts?.keep ?? OBS_TRACE_KEEP
+  const maxAgeDays = opts?.maxAgeDays ?? OBS_TRACE_MAX_AGE_DAYS
   try {
-    const cutoff = new Date(Date.now() - OBS_TRACE_MAX_AGE_DAYS * 24 * 3600 * 1000)
+    const cutoff = new Date(Date.now() - maxAgeDays * 24 * 3600 * 1000)
     const byAge = await db.brainInferenceTrace.deleteMany({ where: { ts: { lt: cutoff } } })
     let byCount = 0
     const total = await db.brainInferenceTrace.count()
-    if (total > OBS_TRACE_KEEP) {
-      // Giữ OBS_TRACE_KEEP dòng MỚI NHẤT: mốc = createdAt của dòng thứ KEEP
-      // mới nhất → xoá mọi dòng cũ hơn mốc (đối xứng ledger.prune)
+    if (total > keep) {
+      // Giữ `keep` dòng MỚI NHẤT: mốc = createdAt của dòng thứ KEEP mới nhất
+      // → xoá mọi dòng cũ hơn mốc (đối xứng ledger.prune)
       const kth = await db.brainInferenceTrace.findFirst({
         orderBy: { createdAt: 'desc' },
-        skip: OBS_TRACE_KEEP - 1,
+        skip: keep - 1,
         select: { createdAt: true },
       })
       if (kth) {

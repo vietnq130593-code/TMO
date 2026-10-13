@@ -134,6 +134,18 @@ describe('r97 · B — observation-tab.tsx wiring (§C.5)', () => {
   test('B9 import kinds từ lib (single-source doctrine #9 — KHÔNG định nghĩa kind trong UI)', () => {
     expect(tab).toContain("from '@/lib/observation/kinds'")
     expect(tab).not.toContain("kind: 'run.start',") // không khai báo kind mới trong UI
+    // FB-OBS-R1-07: bỏ bản sao map 16-kind cục bộ — chip màu tra obsKindDef
+    // single-source (thêm kind mới ở kinds.ts tự đúng màu, không trùng lặp map)
+    expect(tab).not.toContain('KIND_CLASS_MAP')
+    expect(tab).not.toContain('KIND_FALLBACK')
+    expect(tab).toContain('obsKindDef(kind)?.group')
+  })
+
+  test('B10 lỗi tải phải hiển thị cả khi chưa có data (FB-OBS-R1-12 — không treo spinner vô hạn)', () => {
+    // trước đây loadError chỉ render trong nhánh ĐÃ có data (data≠null) —
+    // fetch hỏng kéo dài → spinner "Đang tải…" vô hạn, không bao giờ hiện lỗi
+    expect(tab).toContain('— thử lại')
+    expect(tab).toMatch(/initialLoading &&[\s\S]*?loadError/)
   })
 })
 

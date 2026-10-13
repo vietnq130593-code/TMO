@@ -8,7 +8,7 @@
  *      inputJson/outputJson NULL, latencyMs + modelVersion provenance; kèm 1
  *      sự kiện brain.infer-ref (table/rowKey trỏ trace — timeline 1 nguồn C.4).
  *   B. obs_brain_trace on → inputJson/outputJson đầy đủ; vector lớn → cap 2KB
- *      + truncated.
+ *      + truncated; B2 đa byte — cap theo BYTE UTF-8 không .length (FB-OBS-R1-03).
  *   C. hashObsInput tất định — cùng input cùng hash, khác input khác hash.
  *   D. GET /api/observation/timeline (gọi handler trực tiếp — pattern r92-C):
  *      shape pin (ok/flags/events/hasMore/nextBefore/total/traces/kinds) ·
@@ -19,21 +19,28 @@
  *      TuningParam) trước/sau chuỗi GET GIỐNG HỆT (r86 precedent).
  *   F. Cờ off (env xóa + STORE dọn) → GET vẫn 200 ok, flags.obsLedger=false
  *      (timeline đọc những gì có — không phụ thuộc cờ).
+ *   G. Prune vết 20K/14 ngày (FB-OBS-R1-06): age (ts cũ) + count-cap qua opts
+ *      keep; guard chống prune chồng chéo (FB-OBS-R1-13 — source-scan).
  *
  * DB CÔ LẬP qua preload — cleanup afterAll theo pattern r92.
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { db } from '@/lib/db'
 import {
   traceInference, flushTraceQueue, hashObsInput, capTraceJson,
-  OBS_TRACE_JSON_MAX_BYTES,
+  pruneBrainInferenceTraces,
+  OBS_TRACE_JSON_MAX_BYTES, OBS_TRACE_KEEP, OBS_TRACE_MAX_AGE_DAYS,
 } from '@/lib/observation/trace'
 import { observeEvent, flushObservationQueue } from '@/lib/observation/ledger'
 import { GET } from '@/app/api/observation/timeline/route'
 import { resetTuningValue, refreshTuningSnapshot } from '@/lib/learning/tuning-store'
 
 const call = (q: string) => GET(new Request(`http://t/api/observation/timeline${q}`))
+
+const readSrc = (rel: string): string => readFileSync(join(process.cwd(), rel), 'utf-8')
 
 beforeAll(async () => {
   process.env.OBS_LEDGER = 'on' // ENV layer — STORE›ENV›DEFAULT
@@ -128,6 +135,21 @@ describe('r96 · B — cờ obs_brain_trace nâng full vector', () => {
     expect(big?.inputJson!.length).toBeLessThanOrEqual(OBS_TRACE_JSON_MAX_BYTES)
     expect(big?.inputJson).toContain('"truncated":true')
     expect(OBS_TRACE_JSON_MAX_BYTES).toBe(2048) // pin §C.2
+  })
+
+  test('B2 đa byte — cap theo BYTE UTF-8, không theo .length (FB-OBS-R1-03)', () => {
+    // 1.502 ký tự (≈4.506 byte UTF-8) — qua cap cũ .length nhưng vượt 2KB thật
+    // (code cũ giữ nguyên → vector ~2.2× vượt cap)
+    const v = 'ụ'.repeat(1_500)
+    const json = JSON.stringify(v)
+    expect(json.length).toBeLessThanOrEqual(OBS_TRACE_JSON_MAX_BYTES) // .length lừa cap cũ
+    expect(Buffer.byteLength(json, 'utf8')).toBeGreaterThan(OBS_TRACE_JSON_MAX_BYTES) // byte thật
+    const out = capTraceJson(v)
+    expect(out).toContain('"truncated":true')
+    expect(Buffer.byteLength(out!, 'utf8')).toBeLessThanOrEqual(OBS_TRACE_JSON_MAX_BYTES) // sau fix đúng 2KB
+    const parsed = JSON.parse(out!) as { truncated: boolean; head: string }
+    expect(parsed.truncated).toBe(true)
+    expect(parsed.head.length).toBeGreaterThan(500) // cắt thô vẫn giữ nội dung đáng kể
   })
 })
 
@@ -291,5 +313,65 @@ describe('r96 · F — cờ off: response vẫn ok + flags phản ánh đúng', 
     expect(json.ok).toBe(true)
     expect(json.flags.obsLedger).toBe(false)
     expect(json.events.length).toBeGreaterThan(0) // lịch sử có trước vẫn hiển thị
+  })
+})
+
+// ==================== G. Prune vết 20K/14 ngày (FB-OBS-R1-06/R1-13) ====================
+
+describe('r96 · G — pruneBrainInferenceTraces (Q3 §7)', () => {
+  beforeAll(() => {
+    process.env.OBS_LEDGER = 'on' // trả lại từ F — G cần cờ on để seed qua traceInference?
+  })
+
+  test('G1 age: vết ts > 14 ngày bị xoá, vết mới giữ (seed thẳng DB)', async () => {
+    await db.brainInferenceTrace.deleteMany({})
+    const old = new Date(Date.now() - 40 * 24 * 3600 * 1000)
+    for (let i = 1; i <= 3; i++) {
+      await db.brainInferenceTrace.create({
+        data: {
+          brain: 'surrogate', organ: 'replay_eval', modelVersion: 1,
+          inputHash: `deadbeef${i}`.padEnd(64, '0'), inputJson: null, outputJson: null,
+          latencyMs: 1, ts: old, createdAt: old,
+        },
+      })
+    }
+    traceInference({ brain: 'policy', organ: 'policy_mixture', modelVersion: 1, input: [1], output: [0.5], latencyMs: 2 })
+    await flushTraceQueue()
+    expect(await db.brainInferenceTrace.count()).toBe(4)
+    const res = await pruneBrainInferenceTraces()
+    expect(res.deleted).toBe(3)
+    const remain = await db.brainInferenceTrace.findMany()
+    expect(remain.length).toBe(1)
+    expect(remain[0].brain).toBe('policy')
+  })
+
+  test('G2 count-cap: giữ đúng N vết mới nhất theo createdAt (opts keep — FB-OBS-R1-06)', async () => {
+    await db.brainInferenceTrace.deleteMany({})
+    // seed thẳng DB 8 vết createdAt cách nhau 1 phút — ordering tất định
+    for (let i = 1; i <= 8; i++) {
+      await db.brainInferenceTrace.create({
+        data: {
+          brain: 'surrogate', organ: 'replay_eval', modelVersion: 1,
+          inputHash: `cap${i}`.padEnd(64, '0'), inputJson: null, outputJson: null,
+          latencyMs: 1, createdAt: new Date(Date.now() - i * 60_000),
+        },
+      })
+    }
+    const res = await pruneBrainInferenceTraces({ keep: 5 })
+    expect(res.deleted).toBe(3) // 8 − 5 vết cũ nhất theo createdAt
+    const remain = await db.brainInferenceTrace.findMany({ orderBy: { createdAt: 'asc' } })
+    expect(remain.length).toBe(5)
+    // mới nhất sống sót: createdAt cao nhất = vết 1 (i=1 → now−1 phút)
+    expect(remain.map(r => r.inputHash.slice(0, 4))).toEqual(['cap5', 'cap4', 'cap3', 'cap2', 'cap1'])
+    expect(await db.brainInferenceTrace.findFirst({ where: { inputHash: { startsWith: 'cap8' } } })).toBeNull()
+    expect(OBS_TRACE_KEEP).toBe(20_000) // pin hằng số — production gọi không opts
+    expect(OBS_TRACE_MAX_AGE_DAYS).toBe(14)
+  })
+
+  test('G3 drainTrace có pruning guard đối xứng ledger (FB-OBS-R1-13 — source-scan)', () => {
+    const src = readSrc('src/lib/observation/trace.ts')
+    expect(src).toContain('!st.pruning')
+    expect(src).toContain('st.pruning = true')
+    expect(src).toContain("state().pruning = false")
   })
 })

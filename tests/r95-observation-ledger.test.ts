@@ -8,12 +8,13 @@
  *   B. Cờ on (ENV OBS_LEDGER=on — chuỗi STORE›ENV›DEFAULT) → ghi đúng
  *      actor/kind/summary/runId; seq đơn điệu tăng strict (RO-4 single-writer).
  *   C. capPayload ≤ 4KB: payload thường nguyên vẹn; payload 5KB → truncate +
- *      flag truncated:true; capPayload({}) = '{}'.
+ *      flag truncated:true; capPayload({}) = '{}'; C4 đa byte — cap theo BYTE
+ *      UTF-8 không theo .length (FB-OBS-R1-03).
  *   D. Queue có-hạn 512: đẩy 600 sự kiện ĐỒNG BỘ (drain treo ở await đầu —
  *      không kịp tiêu) → dropped = 600 − 513 = 87 đúng công thức, written
  *      tăng đúng 513 (1 shifted + 512 queued).
  *   E. Prune 50K/30 ngày: dòng ts 40 ngày trước (seed thẳng DB, seq cao độc
- *      nhất) bị xoá; dòng mới giữ nguyên.
+ *      nhất) bị xoá; dòng mới giữ nguyên; E2 count-cap qua opts keep (FB-OBS-R1-06).
  *   F. Hook tuning (writeChangeLog): setTuningValue số → kind tuning.change;
  *      setTuningValue cờ off/on → kind flag.flip (payload from/to đúng).
  *   G. Hook run (agent-run-tracker): startAgentRun → run.start + endAgentRun
@@ -21,6 +22,7 @@
  *   H. Source-scan wiring (r92-E precedent): reward.log (GAP-4) + 3 pipeline
  *      observeBrainTrain + qentry.add + verdict.add + learn.episode + auto-learn
  *      db.write + 4 cờ TUNING_SPECS (26–29).
+ *   I. verdict.add nhánh DELEGATE có rowKey trỏ dòng ArbiterVerdict thật (FB-OBS-R1-08).
  *
  * DB CÔ LẬP qua preload (tests/db-isolation-preload.ts) — không đụng
  * db/custom.db của app. Cleanup afterAll: xóa env + TuningParam 4 cờ obs +
@@ -40,6 +42,7 @@ import { OBS_KINDS } from '@/lib/observation/kinds'
 import { setTuningValue, resetTuningValue, refreshTuningSnapshot } from '@/lib/learning/tuning-store'
 import { TUNING_SPECS, getTuningSpec } from '@/lib/learning/neural-types'
 import { startAgentRun, endAgentRun } from '@/lib/agent-run-tracker'
+import { insertArbiterVerdict } from '@/lib/metrics-db'
 
 const readSrc = (rel: string): string => readFileSync(join(process.cwd(), rel), 'utf-8')
 
@@ -167,6 +170,21 @@ describe('r95 · C — capPayload truncate 4KB', () => {
     expect(OBS_QUEUE_MAX).toBe(512) // C.3 "bounded queue 512"
     expect(OBS_EVENTS_MAX_AGE_DAYS).toBe(30) // Q3 §7 chốt
   })
+
+  test('C4 đa byte — cap theo BYTE UTF-8, không theo .length (FB-OBS-R1-03)', () => {
+    // 3.013 KÝ TỰ (≈9.039 byte UTF-8) — qua được cap cũ đếm .length nhưng
+    // vượt 4KB thật theo byte (code cũ giữ nguyên → payload ~2.2× vượt cap)
+    const mb = { blob: 'ụ'.repeat(3_000) }
+    const json = JSON.stringify(mb)
+    expect(json.length).toBeLessThanOrEqual(OBS_PAYLOAD_MAX_BYTES) // .length lừa cap cũ
+    expect(Buffer.byteLength(json, 'utf8')).toBeGreaterThan(OBS_PAYLOAD_MAX_BYTES) // byte thật
+    const out = capPayload(mb)
+    expect(out).toContain('"truncated":true')
+    expect(Buffer.byteLength(out, 'utf8')).toBeLessThanOrEqual(OBS_PAYLOAD_MAX_BYTES) // sau fix đúng 4KB
+    const parsed = JSON.parse(out) as { truncated: boolean; head: string }
+    expect(parsed.truncated).toBe(true)
+    expect(parsed.head.length).toBeGreaterThan(1_000) // cắt thô vẫn giữ nội dung đáng kể
+  })
 })
 
 // ==================== D. Queue có-hạn 512 — drop + đếm (C.3) ====================
@@ -207,6 +225,25 @@ describe('r95 · E — prune theo tuổi', () => {
     const remain = await db.observationEvent.findMany()
     expect(remain.length).toBe(1)
     expect(remain[0].summary).toBe('mới')
+  })
+
+  test('E2 count-cap giữ đúng N dòng mới nhất theo seq (FB-OBS-R1-06)', async () => {
+    await wipeObsTables()
+    // seed thẳng DB 8 dòng ts mới (không dính age-based) — opts keep=5
+    // (production gọi không tham số — hằng số 50K không seed nổi trong test)
+    for (let i = 1; i <= 8; i++) {
+      await db.observationEvent.create({
+        data: { seq: 901_000 + i, actor: 'system', kind: 'db.write', summary: `cap ${i}`, payloadJson: '{}' },
+      })
+    }
+    const res = await pruneObservationEvents({ keep: 5 })
+    expect(res.deleted).toBe(3) // 8 − 5 dòng cũ nhất theo seq
+    const remain = await db.observationEvent.findMany({ orderBy: { seq: 'asc' } })
+    expect(remain.length).toBe(5)
+    expect(remain.map(r => r.seq)).toEqual([901_004, 901_005, 901_006, 901_007, 901_008])
+    // thứ tự giữ là MỚI NHẤT — 901_008 (đúng nhất) sống sót, 901_001..003 bị xoá
+    expect(await db.observationEvent.findFirst({ where: { seq: 901_001 } })).toBeNull()
+    expect(await db.observationEvent.findFirst({ where: { seq: 901_008 } })).toBeDefined()
   })
 })
 
@@ -300,7 +337,7 @@ describe('r95 · H — source-scan wiring đợt 1+2 (OBS-P1/P2 hooks)', () => {
     expect(mdb.split("kind: 'verdict.add'").length).toBe(3) // 2 nhánh delegate+raw
     const epi = readSrc('src/lib/episodic-memory/episodic-db.ts')
     expect(epi).toContain("kind: 'learn.episode'")
-    expect(epi.split("kind: 'learn.episode'").length).toBe(5) // episode(2 nhánh) + lesson(2 nhánh) + 1 định nghĩa kinds
+    expect(epi.split("kind: 'learn.episode'").length).toBe(5) // 4 occurrence `kind:` (episode 2 nhánh + lesson 2 nhánh) → split 5 đoạn — FB-OBS-R1-10 sửa comment (không có "định nghĩa kinds" nào trong file)
     expect(readSrc('src/lib/auto-learn.ts')).toContain("kind: 'db.write'")
   })
 
@@ -336,5 +373,26 @@ describe('r95 · H — source-scan wiring đợt 1+2 (OBS-P1/P2 hooks)', () => {
     expect(smolab).toContain("activeSmolabTab === 'observation'")
     expect(smolab).toContain('ObservationTabContent')
     expect(smolab).toContain("onOpenBrainTab={() => setActiveSmolabTab('brain')}")
+  })
+})
+
+// ==================== I. verdict.add delegate — rowKey kim tuyến (FB-OBS-R1-08) ====================
+
+describe('r95 · I — hook verdict.add nhánh delegate có rowKey', () => {
+  test('I1 insertArbiterVerdict (delegate path) → event rowKey = id dòng ArbiterVerdict thật', async () => {
+    await wipeObsTables()
+    await insertArbiterVerdict({
+      sessionId: 'sess_obs_i1', cycle: 7, complete: true, confidence: 0.9, verified: true,
+    })
+    await settleAndFlush()
+    const evt = await db.observationEvent.findFirst({ where: { kind: 'verdict.add' } })
+    expect(evt).toBeDefined()
+    expect(evt?.table).toBe('ArbiterVerdict')
+    // FB-OBS-R1-08: trước đây nhánh delegate bỏ rowKey — event không trỏ về
+    // dòng ArbiterVerdict cụ thể (mất kim tuyến cho phán quyết)
+    expect(evt?.rowKey).toBeDefined()
+    const row = await db.arbiterVerdict.findFirst({ where: { sessionId: 'sess_obs_i1' } })
+    expect(row).toBeDefined()
+    expect(evt?.rowKey).toBe(row!.id)
   })
 })

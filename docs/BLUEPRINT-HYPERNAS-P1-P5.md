@@ -1,8 +1,11 @@
 # BLUEPRINT TRIỂN KHAI HYBRID HYPERNAS P1 → P5 — "PHÒNG THÍ NGHIỆM TÌM KIẾN TRÚC NÃO" CHO TMO
 
-> **Phiên bản:** 0.2 — **DRAFT — §8 ĐÃ CHỐT 2026-10-13 (user: "theo đề xuất") —
+> **Phiên bản:** 0.2.1 — **§8 ĐÃ CHỐT 2026-10-13 (user: "theo đề xuất") —
 > triển khai theo thứ tự Observation trước (chỉ thị user cùng ngày), HN-P1
-> xếp hàng kế tiếp theo Q1.** Bổ sung cho
+> xếp hàng kế tiếp theo Q1.** *(Hiệu đính 0.2→0.2.1, Task 24 2026-10-13 —
+> đợt FB-OBS R1-05: §9 "proposal.applied" → "proposal.apply" cho khớp 3 nguồn
+> còn lại kinds.ts / OBS §C.2 / schema.prisma — doctrine #9 thống nhất
+> kind-name. Không đổi thiết kế nào khác.)* Bổ sung cho
 > [BLUEPRINT-BRAIN-P1-P5.md](./BLUEPRINT-BRAIN-P1-P5.md) (v0.12, P1→P4 đã hoàn tất):
 > sau khi 3 brain A/B/C + editor draft + tab BRAIN 3 phần đã sống, phase tiếp theo
 > là **tự động hoá việc LỰA CHỌN kiến trúc** — đúng vai trò *Neural Predictors /
@@ -452,12 +455,12 @@ Không thiết kế chi tiết ở v0.1.
 
 ## 9. TÍCH HỢP GIAO THỨC QUAN SÁT (tham chiếu chéo)
 
-Toàn bộ sự kiện search (session start/end, candidate evaluated, proposal applied)
+Toàn bộ sự kiện search (session start/end, candidate evaluated, proposal apply)
 phát **ObservationEvent** theo [BLUEPRINT-OBSERVATION-P1-P4.md](./BLUEPRINT-OBSERVATION-P1-P4.md)
 §3 (kind `search.*`) — nhờ vậy giao thức quan sát V2 thấy được cả quá trình tìm
 kiến trúc, đúng yêu cầu user "toàn cảnh… đến cấp độ xác định vấn đề tinh chỉnh
 kiến trúc". Hai blueprint triển khai độc lập nhưng kind-name thống nhất từ v0.1
-này để không phải đổi tên sau. Sự kiện `proposal.applied` (user bấm nút áp dụng
+này để không phải đổi tên sau. Sự kiện `proposal.apply` (user bấm nút áp dụng
 ở §10.3) cũng phát — nhờ vậy tab Quan sát thấy được cả hành động duyệt.
 
 ---
