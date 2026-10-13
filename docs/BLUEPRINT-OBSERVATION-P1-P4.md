@@ -1,6 +1,10 @@
 # BLUEPRINT GIAO THỨC QUAN SÁT V2 P1 → P4 — "TOÀN CẢNH VẬN HÀNH DATABASE · NÃO · TỰ HỌC"
 
-> **Phiên bản:** 0.1 — **DRAFT, CHƯA TRIỂN KHAI — chờ user chốt §7.**
+> **Phiên bản:** 0.1.1 — **DRAFT, CHƯA TRIỂN KHAI — chờ user chốt §7.**
+> *(Hiệu đính 0.1→0.1.1, Task 22 2026-10-13: sửa 3 sai số kiện chứng — poll
+> activity thực tế 2,5s chứ không phải 5s (A.1/C.4/C.5 — code `POLL_ACTIVITY_MS
+> = 2_500`), đồng bộ poll thích ứng 2,5s/15s với §10.1-6 BLUEPRINT-HYPERNAS v0.2.
+> Không đổi thiết kế.)*
 > Sinh từ yêu cầu user (2026-10-13): *"rất nhiều nâng cấp xoay quanh kiến trúc
 > database, kiến trúc học, triển khai tác vụ của agent nên sau này khi kích hoạt
 > giao thức quan sát bạn sẽ cần làm nhiều việc hơn — cần hiểu giao thức quan sát
@@ -34,7 +38,7 @@
 
 | Bề mặt | Nội dung quan sát | Hạn chế |
 |---|---|---|
-| **Tab BRAIN** (Smolab — "đài quan sát não") | Điểm sáng nơ-ron real-time (poll `/api/brain/activity` 5s) + input vector THẬT + activation từng lớp (khi active) + Brain Stage lan truyền tiến/xanh ngược/vàng + Training Console (train + quỹ đạo loss) + Tham số runtime dialog + Nhật ký tinh chỉnh (changeLog) + tab Hàm & công thức (9 activation + 4 loss) | Chỉ là **snapshot gần nhất** — không persist lịch sử inference; poll 5s bỏ lỡ sự kiện giữa 2 lần poll |
+| **Tab BRAIN** (Smolab — "đài quan sát não") | Điểm sáng nơ-ron real-time (poll `/api/brain/activity` 2,5s *(hiệu đính Task 22: v0.1 ghi 5s — code là `POLL_ACTIVITY_MS = 2_500`)* + poll feed `/api/brain` 15s) + input vector THẬT + activation từng lớp (khi active) + Brain Stage lan truyền tiến/xanh ngược/vàng + Training Console (train + quỹ đạo loss) + Tham số runtime dialog + Nhật ký tinh chỉnh (changeLog) + tab Hàm & công thức (9 activation + 4 loss) | Chỉ là **snapshot gần nhất** — không persist lịch sử inference; poll 2,5s bỏ lỡ sự kiện giữa 2 lần poll |
 | **Tab Kiến trúc** (Database) | Graph kiến trúc não + Q-table (QEntry) + SAL + dashboard 3 vùng cũ | Tĩnh theo lần mở; không nối chuỗi với run agent |
 | **Database → analytics** | Stats + embedding status + health | Vận hành KB, không phải vận hành não |
 | **Analytics module** | `runtime-metrics-panel` (ToolMetric/Daily) + `episodic-memory-panel` | Chỉ tool-usage + episodic; không có não/tuning |
@@ -198,11 +202,13 @@ bằng 0 (check cờ trước khi ghi).
 `GET /api/observation/timeline?runId=|actor=|kind=|since=|before=|limit=`
 — trả sự kiện mới→cũ, paginate bằng `before=seq`, join `BrainInferenceTrace`
 theo runId, **cả 2 nguồn trong 1 response** (kind `brain.infer`). Read-only,
-không ghi gì. Rate-guard nhẹ (poll 5s precedent — tái dùng pattern tab BRAIN).
+không ghi gì. Rate-guard nhẹ (poll thích ứng 2,5s chạy / 15s idle precedent —
+tái dùng pattern tab BRAIN).
 
 ### C.5 UI Tab "Quan sát" (OBS-P3 — module Smolab, tab mới cạnh BRAIN)
 
-1. **Timeline dọc** live-poll 5s: mỗi sự kiện 1 dòng (ts · actor badge · kind chip
+1. **Timeline dọc** live-poll thích ứng (2,5s khi có activity mới / 15s idle —
+   precedent tab BRAIN): mỗi sự kiện 1 dòng (ts · actor badge · kind chip
    màu theo nhóm · summary); click → drill-down payload JSON viewer (dialog precedent
    tuning-param-dialog).
 2. **Filter bar:** actor · kind (multi-select) · runId · khoảng ts.
