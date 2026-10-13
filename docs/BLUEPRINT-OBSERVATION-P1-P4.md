@@ -1,6 +1,8 @@
 # BLUEPRINT GIAO THỨC QUAN SÁT V2 P1 → P4 — "TOÀN CẢNH VẬN HÀNH DATABASE · NÃO · TỰ HỌC"
 
-> **Phiên bản:** 0.1.1 — **DRAFT, CHƯA TRIỂN KHAI — chờ user chốt §7.**
+> **Phiên bản:** 0.2 — **§7 ĐÃ CHỐT 2026-10-13 (Task 23 — user chỉ thị triển
+> khai: "7 câu hỏi mở hãy theo đề xuất của bạn đi. Sau đó tiến hành triển khai
+> Blueprint Observation") — bắt đầu triển khai OBS-P1→P4 cùng phiên.**
 > *(Hiệu đính 0.1→0.1.1, Task 22 2026-10-13: sửa 3 sai số kiện chứng — poll
 > activity thực tế 2,5s chứ không phải 5s (A.1/C.4/C.5 — code `POLL_ACTIVITY_MS
 > = 2_500`), đồng bộ poll thích ứng 2,5s/15s với §10.1-6 BLUEPRINT-HYPERNAS v0.2.
@@ -273,15 +275,15 @@ UI panorama (P3) cần API (P2) đủ ổn.
 
 ---
 
-## 7. DANH SÁCH CHỜ USER CHỐT
+## 7. DANH SÁCH CHỐT — **☑ TẤT CẢ 5 CÂU CHỐT THEO KHUYẾN NGHỊ 2026-10-13 (Task 23)**
 
-| # | Câu hỏi | Khuyến nghị |
-|---|---|---|
-| Q1 | Triển khai OBS V2 ngay hay chờ? | **OBS-P1 có thể triển khai ngay** (ledger rỗng chạy vô hại, cờ off overhead 0) — dữ liệu bắt đầu được bảo toàn từ sớm |
-| Q2 | Mặc định payload inference chỉ hash (tiết kiệm) hay full vector (chi tiết)? | Hash mặc định (`obs_brain_trace` bật full khi cần điều tra) |
-| Q3 | Prune 50K/30 ngày đủ chưa? | Đủ cho sandbox; chỉnh bằng cờ nếu cần |
-| Q4 | Tab "Quan sát" để module Smolab (khuyến nghị — cạnh BRAIN) hay module riêng? | Smolab — đúng trung tâm thí nghiệm |
-| Q5 | Impact tracker 24h window có hợp lý (agents vận hành không đều)? | Cửa sổ trượt theo "N sự kiện vận hành" thay vì giờ cố định — chốt khi triển khai OBS-P4 |
+| # | Câu hỏi | Khuyến nghị | Trạng thái chốt |
+|---|---|---|---|
+| Q1 | Triển khai OBS V2 ngay hay chờ? | **OBS-P1 có thể triển khai ngay** (ledger rỗng chạy vô hại, cờ off overhead 0) — dữ liệu bắt đầu được bảo toàn từ sớm | ☑ CHỐT triển khai ngay — user chỉ thị triển khai toàn bộ P1→P4 |
+| Q2 | Mặc định payload inference chỉ hash (tiết kiệm) hay full vector (chi tiết)? | Hash mặc định (`obs_brain_trace` bật full khi cần điều tra) | ☑ CHỐT hash mặc định |
+| Q3 | Prune 50K/30 ngày đủ chưa? | Đủ cho sandbox; chỉnh bằng cờ nếu cần | ☑ CHỐT 50K/30 ngày (event) + 20K/14 ngày (trace) — hardcode kèm nguồn |
+| Q4 | Tab "Quan sát" để module Smolab (khuyến nghị) hay module riêng? | Smolab — đúng trung tâm thí nghiệm | ☑ CHỐT Smolab, tab cạnh BRAIN (id 'observation') |
+| Q5 | Impact tracker 24h window có hợp lý (agents vận hành không đều)? | Cửa sổ trượt theo "N sự kiện vận hành" thay vì giờ cố định — chốt khi triển khai OBS-P4 | ☑ CHỐT TẠI TRIỂN KHAI: KpiSnapshot có hạt độ THEO NGÀY (1 dòng/ngày/KPI) nên cửa sổ "N sự kiện" không chiếu được vào nguồn dữ liệu này — cửa sổ chốt = **snapshot ngày liền trước đổi vs snapshot ngày liền sau đổi** (tra tối đa ±3 ngày mỗi bên, cần đủ cả 2 bên mới tính, đợi tối thiểu 24h sau change), payload ghi rõ granularity + framing "correlation — KHÔNG claim nhân quả" (RO-6). Trung thực với nguồn dữ liệu hơn là vẽ cửa sổ giả chính xác |
 
 ---
 

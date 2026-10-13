@@ -1,6 +1,8 @@
 # BLUEPRINT TRIỂN KHAI HYBRID HYPERNAS P1 → P5 — "PHÒNG THÍ NGHIỆM TÌM KIẾN TRÚC NÃO" CHO TMO
 
-> **Phiên bản:** 0.2 — **DRAFT, CHƯA TRIỂN KHAI — chờ user chốt §8.** Bổ sung cho
+> **Phiên bản:** 0.2 — **DRAFT — §8 ĐÃ CHỐT 2026-10-13 (user: "theo đề xuất") —
+> triển khai theo thứ tự Observation trước (chỉ thị user cùng ngày), HN-P1
+> xếp hàng kế tiếp theo Q1.** Bổ sung cho
 > [BLUEPRINT-BRAIN-P1-P5.md](./BLUEPRINT-BRAIN-P1-P5.md) (v0.12, P1→P4 đã hoàn tất):
 > sau khi 3 brain A/B/C + editor draft + tab BRAIN 3 phần đã sống, phase tiếp theo
 > là **tự động hoá việc LỰA CHỌN kiến trúc** — đúng vai trò *Neural Predictors /
@@ -35,6 +37,9 @@
 >   encoding (§4.3-3). Thêm Q7 (§8) + R7 liên kết §10.
 > - **0.1 (2026-10-13, Task 21):** bản đầu — kiến trúc hybrid 3+1 lớp, bất biến
 >   H1–H6, encoding, model 101/102, phase HN-P1→P5, 6 câu hỏi mở.
+> - **0.2.1 (2026-10-13, Task 23):** §8 Q1–Q7 **CHỐT THEO KHUYẾN NGHỊ** (user:
+>   "7 câu hỏi mở hãy theo đề xuất của bạn đi") — xem cột Trạng thái §8. Thứ tự
+>   triển khai user chỉ định: BLUEPRINT-OBSERVATION trước, HN-P1 kế tiếp.
 
 ---
 
@@ -431,17 +436,17 @@ Không thiết kế chi tiết ở v0.1.
 
 ---
 
-## 8. DANH SÁCH CHỜ USER CHỐT TRƯỚC KHI TRIỂN KHAI
+## 8. DANH SÁCH CHỐT — **☑ TẤT CẢ 7 CÂU CHỐT THEO KHUYẾN NGHỊ 2026-10-13 (Task 23 — user: "theo đề xuất của bạn đi")**
 
-| # | Câu hỏi | Khuyến nghị |
-|---|---|---|
-| Q1 | Triển khai HN-P1 ngay (thuần lib + test, không cần dữ liệu) hay chờ brain thức tỉnh? | **Triển khai HN-P1 ngay** — nền sẵn sàng, khi data đến là chạy được |
-| Q2 | Ngân sách mặc định 24 ứng viên × 10 phút/session — hợp lý chưa? | 24 ứng viên ≈ 1–3 phút với MLP nhỏ — an toàn để mặc định |
-| Q3 | Cho phép nút **"Thăng cấp 1-click"** ứng viên `beatActive=true` (vẫn là nút user bấm, vẫn qua kiểm tra CV cùng fold) hay bắt buộc đi đường dài qua draft → train lại? | **Đường qua draft** (H2 nguyên vẹn) ở v0.1; xem xét 1-click sau vài session khi tin CV |
-| Q4 | Khi mẫu ≥ 100: chuyển nested hold-out (chính xác hơn, chậm hơn) — chốt trước hay để mặc định k-fold? | Để mặc định k-fold + CI; nested khi dữ liệu thật sự lớn |
-| Q5 | HN-P4 (SMASH sinh weights thật) có đáng làm không? | **Chờ** HN-P3 chạy ≥ 4 session + Spearman > 0.5 ổn định |
-| Q6 | Predictor HN-P3 riêng từng brain (khuyến nghị) hay multi-task chung (MET_NAS_013)? | Riêng từng brain — data còn nhỏ |
-| Q7 *(v0.2)* | Vị trí giao diện: tab "Tìm kiếm" thứ 5 ngay trong SECTION 3 tab BRAIN (khuyến nghị — đúng nguyên tắc "mọi giao diện mới nằm trong tab console", không thêm module mới) hay dialog riêng? | Tab thứ 5 trong SECTION 3 — cùng không gian làm việc với nháp + train, luồng duyệt liền tay (đã thiết kế sẵn §10 — chỉ cần user xác nhận) |
+| # | Câu hỏi | Khuyến nghị | Trạng thái chốt |
+|---|---|---|---|
+| Q1 | Triển khai HN-P1 ngay (thuần lib + test, không cần dữ liệu) hay chờ brain thức tỉnh? | **Triển khai HN-P1 ngay** — nền sẵn sàng, khi data đến là chạy được | ☑ CHỐT triển khai ngay — xếp sau BLUEPRINT-OBSERVATION theo chỉ thị user 2026-10-13 |
+| Q2 | Ngân sách mặc định 24 ứng viên × 10 phút/session — hợp lý chưa? | 24 ứng viên ≈ 1–3 phút với MLP nhỏ — an toàn để mặc định | ☑ CHỐT mặc định 24 × 10 phút (H3) |
+| Q3 | Cho phép nút **"Thăng cấp 1-click"** ứng viên `beatActive=true` (vẫn là nút user bấm, vẫn qua kiểm tra CV cùng fold) hay bắt buộc đi đường dài qua draft → train lại? | **Đường qua draft** (H2 nguyên vẹn) ở v0.1; xem xét 1-click sau vài session khi tin CV | ☑ CHỐT đường qua draft (H2) — 1-click chỉ xem xét SAU vài session thật |
+| Q4 | Khi mẫu ≥ 100: chuyển nested hold-out (chính xác hơn, chậm hơn) — chốt trước hay để mặc định k-fold? | Để mặc định k-fold + CI; nested khi dữ liệu thật sự lớn | ☑ CHỐT k-fold + CI mặc định |
+| Q5 | HN-P4 (SMASH sinh weights thật) có đáng làm không? | **Chờ** HN-P3 chạy ≥ 4 session + Spearman > 0.5 ổn định | ☑ CHỐT chờ — điều kiện mở ≥ 4 session + ρ > 0,5 ổn định |
+| Q6 | Predictor HN-P3 riêng từng brain (khuyến nghị) hay multi-task chung (MET_NAS_013)? | Riêng từng brain — data còn nhỏ | ☑ CHỐT riêng từng brain |
+| Q7 *(v0.2)* | Vị trí giao diện: tab "Tìm kiếm" thứ 5 ngay trong SECTION 3 tab BRAIN (khuyến nghị — đúng nguyên tắc "mọi giao diện mới nằm trong tab console", không thêm module mới) hay dialog riêng? | Tab thứ 5 trong SECTION 3 — cùng không gian làm việc với nháp + train, luồng duyệt liền tay (đã thiết kế sẵn §10 — chỉ cần user xác nhận) | ☑ CHỐT tab thứ 5 SECTION 3 (thiết kế §10) |
 
 ---
 
