@@ -565,6 +565,80 @@ export const TUNING_SPECS: readonly TuningSpec[] = [
     warning: 'Override chỉ đổi trọng số GHI LOG (log-only) — không tự tham gia quyết định tới khi đủ 2 đợt quan sát.',
     appliesTo: 'resolveRewardWeightsFromTuning (src/lib/brain/reward.ts) — logCompositeRewardForRun + report policy',
   },
+  // OBS-P1 (BLUEPRINT-OBSERVATION §C.3 — 4 cờ giao thức quan sát V2, chốt §7
+  // Task 23 2026-10-13): toàn bộ off mặc định — check cờ TRƯỚC khi ghi nên
+  // overhead bằng 0 khi tắt (C.3). Thứ 26–29 của TUNING_SPECS (PIN UPDATE
+  // r86/r87/r92: 25 → 29).
+  {
+    // Cờ tổng ghi sổ cái sự kiện (đợt 1+2 — gate MỌI ghi ObservationEvent +
+    // BrainInferenceTrace, C.3). Off = hệ thống quan sát ngủ yên tuyệt đối.
+    key: 'obs_ledger',
+    label: 'OBS_LEDGER',
+    description:
+      'Bật sổ cái quan sát (ObservationEvent model 103): ghi mọi sự kiện vận hành — run agent, đổi tuning/flag, brain train, reward log, QEntry/verdict/episode, vết suy diễn não (hash-only). Append-only + prune 50K/30 ngày. Off = overhead 0 (không ghi gì).',
+    nodeId: 'hist-feedback',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'off',
+    envKey: 'OBS_LEDGER',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' || v === '1' || v === 'true' ? 'on' : v === 'off' || v === '0' || v === 'false' ? 'off' : undefined
+    },
+    appliesTo: 'observeEvent/traceInference (src/lib/observation/) — gate ghi mọi sự kiện',
+  },
+  {
+    // Q2 §7 chốt: hash mặc định — cờ này NÂNG CẤP vết inference lên full
+    // vector (điều tra sâu), KHÔNG bật/tắt việc ghi vết (việc đó do obs_ledger).
+    key: 'obs_brain_trace',
+    label: 'OBS_BRAIN_TRACE',
+    description:
+      'Nâng vết suy diễn não (BrainInferenceTrace model 104) từ hash-only (mặc định — tiết kiệm) lên LƯU ĐẦY ĐỦ vector input/output (capped 2KB) để điều tra chi tiết. Chỉ có tác dụng khi OBS_LEDGER cũng bật.',
+    nodeId: 'hist-feedback',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'off',
+    envKey: 'OBS_BRAIN_TRACE',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' || v === '1' || v === 'true' ? 'on' : v === 'off' || v === '0' || v === 'false' ? 'off' : undefined
+    },
+    appliesTo: 'traceInference (src/lib/observation/trace.ts) — lưu inputJson/outputJson đầy đủ',
+  },
+  {
+    // OBS-P4 — job nền impact tracker + obs.health (tick 10 phút).
+    key: 'obs_impact',
+    label: 'OBS_IMPACT',
+    description:
+      'Bật job nền ước lượng tác động (impact tracker OBS-P4): với mỗi lần đổi tuning đã ≥ 24h, so sánh KPI snapshot ngày liền trước vs liền sau → ghi sự kiện impact.estimate (correlation — KHÔNG claim nhân quả) + obs.health (độ khỏe của chính ledger).',
+    nodeId: 'hist-feedback',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'off',
+    envKey: 'OBS_IMPACT',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' || v === '1' || v === 'true' ? 'on' : v === 'off' || v === '0' || v === 'false' ? 'off' : undefined
+    },
+    appliesTo: 'observation impact worker (src/lib/observation/impact.ts) — tick nền',
+  },
+  {
+    // OBS-P3 — cờ trình bày UI tab "Quan sát" (module Smolab, cạnh BRAIN — Q4 §7 chốt).
+    key: 'ui_observation',
+    label: 'UI_OBSERVATION',
+    description:
+      'Bật tab "Quan sát" (module Smolab — cạnh tab BRAIN): timeline sự kiện live + kim tuyến runId ("toàn cảnh mỗi khi agent vận hành") + panel nhãn & não. Thuần trình bày — đọc API read-only, không đổi vận hành.',
+    nodeId: 'hist-feedback',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'off',
+    envKey: 'UI_OBSERVATION',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' || v === '1' || v === 'true' ? 'on' : v === 'off' || v === '0' || v === 'false' ? 'off' : undefined
+    },
+    appliesTo: 'ObservationTabContent (src/components/smolab/observation-tab.tsx) — hiển thị tab',
+  },
 ] as readonly TuningSpec[]
 
 /** Tra spec theo key (O(1) qua Map dựng sẵn). */
@@ -841,7 +915,7 @@ export const NEURAL_NODES: readonly NeuralNode[] = [
     functions: [
       { name: 'TRUST_MIN_N / TRUST_MAX_CI_WIDTH', file: 'src/lib/learning/historical-feedback.ts', line: 25 },
     ],
-    paramKeys: [],
+    paramKeys: ['obs_ledger', 'obs_brain_trace', 'obs_impact', 'ui_observation'],
   },
   {
     id: 'anomaly',

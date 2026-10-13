@@ -21,6 +21,8 @@
  */
 
 import { db } from '@/lib/db'
+// OBS-P2 hook (§C.3 đợt 2) — verdict.add (static — không chu trình)
+import { observeEvent } from '@/lib/observation/ledger'
 
 /** Shape 1 row AgentRunRecord (đủ field cho overview + 20-c wire sau) */
 export interface AgentRunRecordRow {
@@ -231,6 +233,19 @@ export async function insertArbiterVerdict(params: {
         forcedDowngrade: params.forcedDowngrade ?? false,
       },
     })
+    // OBS-P2 hook (§C.3 đợt 2 — verdict.add, nhánh delegate)
+    observeEvent({
+      actor: params.agentName ? `agent:${params.agentName}` : 'system',
+      kind: 'verdict.add',
+      sessionId: params.sessionId,
+      table: 'ArbiterVerdict',
+      summary: `Phán quyết cycle ${params.cycle}: ${params.complete ? 'đủ' : 'thiếu'} · conf ${params.confidence.toFixed(2)} · ${params.verified ? 'verified' : 'unverified'}`,
+      payload: {
+        sessionId: params.sessionId, cycle: params.cycle, complete: params.complete,
+        confidence: params.confidence, verified: params.verified,
+        forcedDowngrade: params.forcedDowngrade ?? false,
+      },
+    })
     return
   }
 
@@ -247,6 +262,20 @@ export async function insertArbiterVerdict(params: {
       NULL, NULL, NULL, NULL, ${createdAt}
     )
   `
+  // OBS-P2 hook (§C.3 đợt 2 — verdict.add, nhánh raw fallback)
+  observeEvent({
+    actor: params.agentName ? `agent:${params.agentName}` : 'system',
+    kind: 'verdict.add',
+    sessionId: params.sessionId,
+    table: 'ArbiterVerdict',
+    rowKey: id,
+    summary: `Phán quyết cycle ${params.cycle}: ${params.complete ? 'đủ' : 'thiếu'} · conf ${params.confidence.toFixed(2)} · ${params.verified ? 'verified' : 'unverified'}`,
+    payload: {
+      sessionId: params.sessionId, cycle: params.cycle, complete: params.complete,
+      confidence: params.confidence, verified: params.verified,
+      forcedDowngrade: params.forcedDowngrade ?? false,
+    },
+  })
 }
 
 /** Shape 1 ArbiterVerdict ĐÃ resolve — dữ liệu tính Brier/ECE của trọng tài */

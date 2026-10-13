@@ -66,6 +66,10 @@ import { MLP, type MlpSerialized, type MlpSpec, type FitResult, type FitOptions,
 import { lossScalePerHead, type BrainDraftSpec } from '../spec-schema'
 import { makeRng } from '../init'
 import { acquireTrainLock, releaseTrainLock } from '../train-lock'
+// OBS-P1 hook (§C.3 đợt 1) — brain.train start/end (static — không chu trình)
+import { observeBrainTrain } from '@/lib/observation/ledger'
+// OBS-P2 hook (§C.3 đợt 2) — vết suy diễn organ replay_eval
+import { traceInference } from '@/lib/observation/trace'
 import { BRAIN_VERSIONS_KEEP } from '../registry'
 import {
   computeColumnStats,
@@ -565,8 +569,20 @@ export async function trainBrainSurrogate(
       error: 'single-flight (A7): train khác của brain surrogate đang chạy — bỏ lệnh trùng',
     }
   }
+  // OBS-P1 hook (§C.3 đợt 1 — brain.train start/end; bỏ lệnh trùng A7 không phát)
+  observeBrainTrain('surrogate', 'start', { inputMode, useDraft: override != null })
+  const t0 = Date.now()
   try {
-    return await trainBrainSurrogateLocked(inputMode, override)
+    const result = await trainBrainSurrogateLocked(inputMode, override)
+    observeBrainTrain('surrogate', 'end', {
+      inputMode, useDraft: override != null, durationMs: Date.now() - t0, result,
+    })
+    return result
+  } catch (err) {
+    observeBrainTrain('surrogate', 'end', {
+      inputMode, useDraft: override != null, durationMs: Date.now() - t0, error: err,
+    })
+    throw err
   } finally {
     releaseTrainLock('surrogate')
   }
@@ -1252,7 +1268,18 @@ export async function buildReplayReport(config: SurrogateFeatureCtx): Promise<Re
       // Ba đầu độc lập — per-head NaN tự null (R1-08); try/catch chỉ còn
       // bắt model-level throw (means/stds hỏng) → mọi đầu null đúng nghĩa
       try {
+        const tHead = Date.now()
         const est = applySurrogateHead(active, config)
+        // OBS-P2 hook (§C.3 đợt 2 — organ replay_eval): vết suy diễn Brain-B
+        // khi chấm cấu hình qua surrogate (fire-and-forget — KHÔNG đụng report)
+        traceInference({
+          brain: 'surrogate',
+          organ: 'replay_eval',
+          modelVersion: active.version,
+          input: config,
+          output: est,
+          latencyMs: Date.now() - tHead,
+        })
         if (est.success !== null) {
           surrogateBlock.heads.success = {
             pSuccess: est.success,

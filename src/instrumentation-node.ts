@@ -1141,6 +1141,28 @@ if (!globalForGlw.__tmoGoalLoopWorkerStarted) {
 }
 
 // ============================================================================
+// OBS-P4 (BLUEPRINT-OBSERVATION §C.6 — Task 23 2026-10-13): OBSERVATION
+// IMPACT WORKER — job nền 10 phút chấm impact.estimate (KPI window quanh
+// mỗi TuningChangeLog) + obs.health (meta-health ledger). Cờ obs_impact off
+// mặc định → tick rỗng (rẻ); check cờ MỖI tick nên bật là hiệu lực ngay.
+// globalThis guard chống double-register HMR (pattern GoalLoopWorker trên).
+// ============================================================================
+const globalForObsImpactBoot = globalThis as unknown as { __tmoObsImpactBooted?: boolean }
+if (!globalForObsImpactBoot.__tmoObsImpactBooted) {
+  globalForObsImpactBoot.__tmoObsImpactBooted = true
+  void import('@/lib/observation/impact')
+    .then(({ startObservationImpactWorker }) => {
+      startObservationImpactWorker()
+    })
+    .catch(err => {
+      console.warn(
+        '[instrumentation] ObservationImpactWorker start thất bại (quan sát tác động không chạy — app vẫn hoạt động bình thường):',
+        err instanceof Error ? err.message : String(err),
+      )
+    })
+}
+
+// ============================================================================
 // SELF-DIRECTION SCHEDULER (fix 2026-08-29 — kiến trúc review)
 // ============================================================================
 // Trước đây promoteDueProposals()/autoReviewPendingIfDelegated() CHỈ chạy khi

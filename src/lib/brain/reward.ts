@@ -338,6 +338,30 @@ export async function logCompositeRewardForRun(input: {
     console.log(
       `[Brain-C] composite reward LOG-ONLY (đợt quan sát — chưa tham gia quyết định): model=${input.model} agent=${input.agentName ?? '—'} R=${result.reward.toFixed(4)} (outcome*=${result.components.outcome} · efficiency*=${eff === null ? 'null' : eff.toFixed(4)} · quality*=null-renormalize · w=${result.weightsUsed.outcome.toFixed(2)}/${result.weightsUsed.efficiency.toFixed(2)}/${result.weightsUsed.quality.toFixed(2)}) — updateQ giữ nguyên W2 nhị phân ±1`,
     )
+    // OBS-P1 hook (BLUEPRINT-OBSERVATION §C.3 đợt 1 — GAP-4): composite reward
+    // từ console.log (mất theo rotation dev.log) → ledger quan sát — VẪN
+    // LOG-ONLY tuyệt đối (không đụng updateQ/decisions — Q1 đợt quan sát 1
+    // giữ nguyên). Fire-and-forget fail-open.
+    void import('@/lib/observation/ledger')
+      .then(m =>
+        m.observeEvent({
+          actor: 'brain:policy',
+          kind: 'reward.log',
+          runId: null,
+          summary: `Reward log-only ${input.model}: R=${result.reward.toFixed(4)} (w=${result.weightsUsed.outcome.toFixed(2)}/${result.weightsUsed.efficiency.toFixed(2)}/${result.weightsUsed.quality.toFixed(2)})`,
+          payload: {
+            model: input.model,
+            agentName: input.agentName ?? null,
+            complete: input.complete,
+            tokensUsed: input.tokensUsed,
+            reward: result.reward,
+            components: result.components,
+            weightsUsed: result.weightsUsed,
+            logOnly: true,
+          },
+        }),
+      )
+      .catch(() => {})
     return result
   } catch (err) {
     console.warn(

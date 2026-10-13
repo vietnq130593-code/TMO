@@ -990,12 +990,14 @@ describe('r87 · G composite reward — chuẩn hóa + renormalize + log-only + 
 // ==================== H. Cờ + kill-switch organs ====================
 
 describe('r87 · H cờ P4 + kill-switch — TUNING_SPECS/NEURAL_NODES/route/registry', () => {
-  test('H1 TUNING_SPECS 25 mục; 4 cờ P4 pin đủ trường', () => {
+  test('H1 TUNING_SPECS 29 mục; 4 cờ P4 pin đủ trường', () => {
     // PIN UPDATE (r88-r91 task, Task 11 worklog): 19 → 25 — BRAIN-UX §9
     // (UX-1/2) thêm 6 key: ui_brain_edit/ui_synapse_fx/ui_hitech (cờ trình
     // bày) + reward_w_outcome/efficiency/quality (UX-2 nhóm C — blueprinted
     // §9.3, neural-types.ts 'BRAIN-UX §9' block).
-    expect(TUNING_SPECS).toHaveLength(25)
+    // PIN UPDATE (Task 23 OBS-P1 2026-10-13): 25 → 29 — thêm 4 cờ quan sát
+    // V2 (obs_ledger/obs_brain_trace/obs_impact/ui_observation).
+    expect(TUNING_SPECS).toHaveLength(29)
     const keys = TUNING_SPECS.map(s => s.key)
     for (const k of P4_FLAG_KEYS) expect(keys).toContain(k)
     for (const key of P4_FLAG_KEYS) {

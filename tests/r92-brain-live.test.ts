@@ -801,9 +801,11 @@ describe('r92 · F cờ UI mặc định BRAIN-LIVE — TUNING_SPECS chống h�
     await refreshTuningSnapshot()
   })
 
-  test('TUNING_SPECS giữ đúng 25 entry + 3 cờ UI đủ enumValues/default/envKey đúng nguồn', () => {
-    // Count không đổi qua BRAIN-LIVE (15-a chỉ ĐỔI default, không thêm key)
-    expect(TUNING_SPECS.length).toBe(25)
+  test('TUNING_SPECS giữ đúng 29 entry + 3 cờ UI đủ enumValues/default/envKey đúng nguồn', () => {
+    // Count không đổi qua BRAIN-LIVE (15-a chỉ ĐỔI default, không thêm key).
+    // PIN UPDATE (Task 23 OBS-P1 2026-10-13): 25 → 29 — thêm 4 cờ quan sát V2
+    // (obs_ledger/obs_brain_trace/obs_impact/ui_observation — không đụng 3 cờ UI pin dưới).
+    expect(TUNING_SPECS.length).toBe(29)
     // ui_synapse_fx — default 'on' (chỉ thị user 2026-10-12: tab BRAIN là
     // đài quan sát não, hiệu ứng lan truyền là NỘI DUNG CHÍNH)
     const fx = getTuningSpec('ui_synapse_fx')!

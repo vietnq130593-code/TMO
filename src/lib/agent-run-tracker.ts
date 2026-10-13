@@ -514,6 +514,28 @@ export function startAgentRun(params: {
       type: 'run_start',
       text: run.task,
     })
+    // OBS-P1 hook (BLUEPRINT-OBSERVATION §C.3 đợt 1 — run.start): kim tuyến
+    // bắt đầu từ đây — mọi sự kiện sau nối theo runId này thành "toàn cảnh 1
+    // run" (GAP-1/3). Dynamic import — giữ nguyên pattern file này (client
+    // an toàn — db chỉ nạp khi flag on thật sự có ghi). Fire-and-forget.
+    void import('@/lib/observation/ledger')
+      .then(m =>
+        m.observeEvent({
+          actor: `agent:${run.agentName}`,
+          kind: 'run.start',
+          runId: run.runId,
+          sessionId,
+          summary: `${run.agentName} bắt đầu run${run.task ? ` — ${run.task.slice(0, 80)}` : ''}`,
+          payload: {
+            agentName: run.agentName,
+            agentPosition: run.agentPosition,
+            mode: run.mode,
+            step: run.step,
+            task: run.task,
+          },
+        }),
+      )
+      .catch(() => {}) // fail-open — quan sát không được làm hỏng run
     return run.runId
   } catch {
     return null
@@ -579,6 +601,30 @@ export function endAgentRun(
       if (next) reg.activeRunBySession.set(sessionId, next.runId)
     }
     if (wasRunning && run.dbPersistBy !== 'caller') persistAgentRunRecord(run)
+    // OBS-P1 hook (§C.3 đợt 1 — run.end): đóng kim tuyến run (status + tokens
+    // + stopReason — cùng dữ liệu AgentRunRecord persist). Chỉ phát khi
+    // wasRunning (chuyển đổi đầu — không phát trùng khi end gọi 2 lần).
+    if (wasRunning) {
+      void import('@/lib/observation/ledger')
+        .then(m =>
+          m.observeEvent({
+            actor: `agent:${run.agentName}`,
+            kind: 'run.end',
+            runId: run.runId,
+            sessionId,
+            summary: `${run.agentName} kết thúc run (${status})${summary ? ` — ${truncateText(summary, 80)}` : ''}`,
+            payload: {
+              status,
+              success: status === 'done',
+              tokensUsed: run.tokensUsed ?? null,
+              stopReason: run.stopReasonFinal ?? null,
+              durationMs: (run.endedAt ?? Date.now()) - run.startedAt,
+              summary: truncateText(summary, 200),
+            },
+          }),
+        )
+        .catch(() => {})
+    }
   } catch { /* fail-open */ }
 }
 

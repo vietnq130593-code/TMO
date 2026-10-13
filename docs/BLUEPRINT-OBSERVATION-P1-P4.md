@@ -1,8 +1,9 @@
 # BLUEPRINT GIAO THỨC QUAN SÁT V2 P1 → P4 — "TOÀN CẢNH VẬN HÀNH DATABASE · NÃO · TỰ HỌC"
 
-> **Phiên bản:** 0.2 — **§7 ĐÃ CHỐT 2026-10-13 (Task 23 — user chỉ thị triển
-> khai: "7 câu hỏi mở hãy theo đề xuất của bạn đi. Sau đó tiến hành triển khai
-> Blueprint Observation") — bắt đầu triển khai OBS-P1→P4 cùng phiên.**
+> **Phiên bản:** 0.3 — **☑ TRIỂN KHAI HOÀN TẤT OBS-P1→P4 2026-10-13 (Task 23)
+> — §7 chốt theo khuyến nghị, gate 4 tầng PASS, live verify agent-browser.**
+> *(0.2 — §7 chốt cùng ngày, user chỉ thị: "7 câu hỏi mở hãy theo đề xuất của
+> bạn đi. Sau đó tiến hành triển khai Blueprint Observation".)*
 > *(Hiệu đính 0.1→0.1.1, Task 22 2026-10-13: sửa 3 sai số kiện chứng — poll
 > activity thực tế 2,5s chứ không phải 5s (A.1/C.4/C.5 — code `POLL_ACTIVITY_MS
 > = 2_500`), đồng bộ poll thích ứng 2,5s/15s với §10.1-6 BLUEPRINT-HYPERNAS v0.2.
@@ -30,7 +31,15 @@
 | **OBS-P3** | UI Panorama + Kim tuyến | Tab "Quan sát" mới (module Smolab): timeline dọc live-poll + filter + drill-down payload + chế độ "kim tuyến" nhập runId → chuỗi sự kiện trọn vẹn của run | `src/components/smolab/observation-tab.tsx` | `ui_observation` (off) | r97 |
 | **OBS-P4** | Impact Tracker + Meta-health | Job nền so sánh KPI window trước/sau mỗi TuningChangeLog (correlation, KHÔNG claim nhân quả) + sự kiện search.* HyperNAS + sức khỏe của chính ledger (độ trễ ghi, queue drop) | `src/lib/observation/impact.ts` | `obs_impact` (off) | r98 |
 
-**Tiến độ:** ☐ OBS-P1 ☐ OBS-P2 ☐ OBS-P3 ☐ OBS-P4 — tất cả CHƯA triển khai.
+**Tiến độ:** ☑ OBS-P1 ☑ OBS-P2 ☑ OBS-P3 ☑ OBS-P4 — **HOÀN TẤT 2026-10-13
+(Task 23)**: model 103/104 + ledger/trace/kinds/impact (src/lib/observation/)
++ timeline API + 13 hook call-site + tab "Quan sát" Smolab + 4 cờ
+(TUNING_SPECS 26–29, node hist-feedback) + test r95–r98 (64 test) — gate 4
+tầng PASS (tsc · eslint · check:imports · full suite 1491/1491 ×2). Quyết
+định triển khai ghi thêm: hook gắn node **hist-feedback** (Historical
+Feedback — learning layer) thay vì node riêng (giữ 23 node, r81 khớp 2 chiều
+nodeId↔paramKeys); Câu hỏi mở HN-P2 (HyperNAS) không đụng — kind search.*
+đã reserve từ v0.1.
 
 ---
 

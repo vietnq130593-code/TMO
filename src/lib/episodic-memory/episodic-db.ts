@@ -16,6 +16,8 @@
  */
 
 import { db } from '@/lib/db'
+// OBS-P2 hook (§C.3 đợt 2) — learn.episode (static — không chu trình)
+import { observeEvent } from '@/lib/observation/ledger'
 import { clampSqlLimit } from '@/lib/sql-policy'
 import type { EpisodeNode, LessonNode } from './types'
 
@@ -103,6 +105,16 @@ export async function upsertEpisodeRecord(params: {
         startedAt: e.startedAt, endedAt: e.endedAt,
       },
     })
+    // OBS-P2 hook (§C.3 đợt 2 — learn.episode, nhánh delegate)
+    observeEvent({
+      actor: e.agent ? `agent:${e.agent}` : 'system',
+      kind: 'learn.episode',
+      sessionId: e.sessionId ?? null,
+      table: 'EpisodeRecord',
+      rowKey: e.id,
+      summary: `Episode "${(e.title ?? '').slice(0, 60)}" — ${e.outcome ?? '?'} (conf ${e.confidence.toFixed(2)})`,
+      payload: { id: e.id, title: e.title, outcome: e.outcome, confidence: e.confidence, agent: e.agent },
+    })
     return
   }
 
@@ -132,6 +144,16 @@ export async function upsertEpisodeRecord(params: {
       embeddingId = excluded.embeddingId,
       startedAt = excluded.startedAt, endedAt = excluded.endedAt
   `
+  // OBS-P2 hook (§C.3 đợt 2 — learn.episode, nhánh raw fallback)
+  observeEvent({
+    actor: e.agent ? `agent:${e.agent}` : 'system',
+    kind: 'learn.episode',
+    sessionId: e.sessionId ?? null,
+    table: 'EpisodeRecord',
+    rowKey: e.id,
+    summary: `Episode "${(e.title ?? '').slice(0, 60)}" — ${e.outcome ?? '?'} (conf ${e.confidence.toFixed(2)})`,
+    payload: { id: e.id, title: e.title, outcome: e.outcome, confidence: e.confidence, agent: e.agent },
+  })
 }
 
 /** Đếm episode records (dashboard + health) */
@@ -212,6 +234,15 @@ export async function upsertLessonRecord(lesson: LessonNode): Promise<void> {
         embeddingId: lesson.embeddingId ?? null,
       },
     })
+    // OBS-P2 hook (§C.3 đợt 2 — learn.episode cho LessonRecord, nhánh delegate)
+    observeEvent({
+      actor: 'system',
+      kind: 'learn.episode',
+      table: 'LessonRecord',
+      rowKey: lesson.id,
+      summary: `Lesson: "${lesson.statement.slice(0, 70)}" (conf ${lesson.confidence.toFixed(2)}${lesson.needsReview ? ' · cần duyệt' : ''})`,
+      payload: { id: lesson.id, statement: lesson.statement.slice(0, 200), confidence: lesson.confidence, needsReview: lesson.needsReview ?? false },
+    })
     return
   }
 
@@ -239,6 +270,15 @@ export async function upsertLessonRecord(lesson: LessonNode): Promise<void> {
       embeddingId = excluded.embeddingId,
       updatedAt = excluded.updatedAt
   `
+  // OBS-P2 hook (§C.3 đợt 2 — learn.episode cho LessonRecord, nhánh raw fallback)
+  observeEvent({
+    actor: 'system',
+    kind: 'learn.episode',
+    table: 'LessonRecord',
+    rowKey: lesson.id,
+    summary: `Lesson: "${lesson.statement.slice(0, 70)}" (conf ${lesson.confidence.toFixed(2)}${lesson.needsReview ? ' · cần duyệt' : ''})`,
+    payload: { id: lesson.id, statement: lesson.statement.slice(0, 200), confidence: lesson.confidence, needsReview: lesson.needsReview ?? false },
+  })
 }
 
 /** Tìm lesson theo statement contains (check trùng khi sinh lesson mới) */

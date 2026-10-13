@@ -2586,3 +2586,71 @@ model BrainSpecDraft {
   updatedAt DateTime @updatedAt
   createdAt DateTime @default(now())
 }
+
+// ==========================================================================
+// OBS-P1 (BLUEPRINT-OBSERVATION-P1-P4 §C.2 — chốt §7 Task 23 2026-10-13) —
+// SỐ CÁI SỰ KIỆN QUAN SÁT (append-only) — "bảng bệnh án toàn thân" nối
+// chuỗi run → QEntry → tuning → brain inference → reward theo kim tuyến
+// runId (GAP-1/3). KHÔNG update/xoá dòng cũ (trừ prune policy 50K/30 ngày
+// — OBS_EVENTS_KEEP/OBS_EVENTS_MAX_AGE_DAYS trong ledger.ts). Ledger là
+// XƯƠNG SỐNG SỰ KIỆN — KHÔNG thay thế bảng chuyên khoa hiện có (doctrine #7
+// additive). Model thứ 103.
+// ==========================================================================
+model ObservationEvent {
+  id        String   @id @default(cuid())
+  /// Thứ tự đơn điệu — cấp bởi ledger (single-writer queue, MAX(seq)+1 trong
+  /// transaction ngắn — RO-4; SQLite serialise tự nhiên + pm2 fork 1 process)
+  seq       Int      @unique
+  ts        DateTime @default(now())
+  /// 'agent:<name>' | 'user' | 'system' | 'brain:<key>' | 'search'
+  actor     String
+  /// enum chuỗi mở (single-source src/lib/observation/kinds.ts):
+  /// run.start|run.end|db.write|brain.train|brain.infer-ref|tuning.change|
+  /// reward.log|qentry.add|verdict.add|learn.episode|flag.flip|
+  /// search.session|search.candidate|proposal.apply|impact.estimate|obs.health
+  kind      String
+  /// FK logic (không ràng buộc cứng — multi-table): id AgentRunRecord/…
+  runId     String?
+  sessionId String?
+  /// bảng SQLite bị ảnh hưởng (kind=db.write / brain.infer-ref) — vd 'QEntry'
+  table     String?
+  rowKey    String?
+  /// 1 dòng tóm tắt hiển thị timeline (không JSON)
+  summary   String
+  /// Chi tiết ≤ 4KB (JSON-stringify; overflow truncate + flag truncated:true —
+  /// RO-2 KHÔNG lưu full context nhạy cảm, chỉ metadata + hash + summary ngắn)
+  payloadJson String
+  createdAt DateTime @default(now())
+
+  @@index([ts])
+  @@index([runId, ts])
+  @@index([kind, ts])
+}
+
+/// OBS-P2 — VẾT SUY DIỄN NÃO (tần suất cao → bảng riêng, prune riêng
+/// 20K/14 ngày — OBS_TRACE_KEEP/OBS_TRACE_MAX_AGE_DAYS trong trace.ts).
+/// Mỗi lần brain predict ở organ runtime (calibrate / replay_eval /
+/// policy_mixture) lưu 1 dòng — trả lời "não đã tư duy gì, dùng weights
+/// nào, lúc mấy giờ?" (GAP-2). Model thứ 104 (additive).
+model BrainInferenceTrace {
+  id           String   @id @default(cuid())
+  ts           DateTime @default(now())
+  /// 'calibration_v3' | 'surrogate' | 'policy' — khớp BRAIN_REGISTRY
+  brain        String
+  /// Bản BrainModel dùng (provenance — biết weights nào đang tư duy)
+  modelVersion Int
+  /// 'calibrate' | 'replay_eval' | 'policy_mixture' | …
+  organ        String?
+  runId        String?
+  /// SHA-256 vector input (nhẹ, so khớp được — mặc định hash-only, Q2 §7 chốt)
+  inputHash    String
+  /// Vector input capped 2KB — CHỈ lưu khi cờ obs_brain_trace on (điều tra)
+  inputJson    String?
+  /// Output capped 2KB — cùng cờ obs_brain_trace
+  outputJson   String?
+  latencyMs    Int
+  createdAt    DateTime @default(now())
+
+  @@index([brain, ts])
+  @@index([runId, ts])
+}

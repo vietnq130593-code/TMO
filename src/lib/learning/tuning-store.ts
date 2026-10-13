@@ -210,6 +210,33 @@ async function writeChangeLog(row: {
   try {
     await db.tuningChangeLog.create({ data: row })
     await pruneChangeLog()
+    // OBS-P1 hook (BLUEPRINT-OBSERVATION §C.3 đợt 1 — tuning change/flag flip):
+    // 1 dòng dynamic import() — chống chu trình tĩnh (ledger static-import
+    // tuning-store — tiền đề check-imports; đối xứng agent-run-tracker↔metrics-db).
+    // Fire-and-forget: quan sát KHÔNG BAO GIỜ làm hỏng đổi tham số (RO-3).
+    void import('@/lib/observation/ledger')
+      .then(m => {
+        const spec = getTuningSpec(row.key)
+        const isFlag =
+          spec?.type === 'enum'
+          && spec.enumValues?.length === 2
+          && spec.enumValues.includes('off')
+          && spec.enumValues.includes('on')
+        m.observeEvent({
+          actor: 'user',
+          kind: isFlag ? 'flag.flip' : 'tuning.change',
+          summary: `${row.key} ${row.action}: ${row.fromEffectiveValue} → ${row.toEffectiveValue}`,
+          payload: {
+            key: row.key,
+            action: row.action,
+            from: row.fromEffectiveValue,
+            to: row.toEffectiveValue,
+            fromStore: row.fromStoreValue,
+            toStore: row.toStoreValue,
+          },
+        })
+      })
+      .catch(() => {}) // fail-open — hook lỗi im lặng
   } catch (err) {
     console.warn('[TuningStore] change-log write failed (fail-open):', err instanceof Error ? err.message : String(err))
   }

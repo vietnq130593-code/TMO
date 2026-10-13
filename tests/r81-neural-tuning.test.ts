@@ -49,8 +49,10 @@ describe('r81 · TUNING_SPECS integrity', () => {
     // thêm 6 key (ui_brain_edit/ui_synapse_fx/ui_hitech + reward_w_outcome/
     // efficiency/quality) vào neural-types.ts TUNING_SPECS.
     const keys = TUNING_SPECS.map(s => s.key)
-    expect(keys.length).toBe(25)
-    expect(new Set(keys).size).toBe(25)
+    // PIN UPDATE (Task 23 OBS-P1 2026-10-13): 25 → 29 — thêm 4 cờ quan sát V2
+    // (obs_ledger/obs_brain_trace/obs_impact/ui_observation — gắn node hist-feedback).
+    expect(keys.length).toBe(29)
+    expect(new Set(keys).size).toBe(29)
     for (const k of keys) expect(getTuningSpec(k)?.key).toBe(k)
     expect(getTuningSpec('khong-ton-tai')).toBeUndefined()
   })
@@ -262,11 +264,12 @@ describe('r81 · resolve STORE > ENV > DEFAULT', () => {
     expect(getTuningNumber('q_learning_alpha')).toBe(0.1)
   })
 
-  test('getTuningState: đủ 25 entry, effectiveValue/source/storeValue khớp', async () => {
+  test('getTuningState: đủ 29 entry, effectiveValue/source/storeValue khớp', async () => {
     // PIN UPDATE (r88-r91 task, Task 11 worklog): 19 → 25 (BRAIN-UX §9 +6 key)
     await setTuningValue('anomaly_iqr_k', '2.5')
     const state = await getTuningState()
-    expect(state.length).toBe(25)
+    // PIN UPDATE (Task 23 OBS-P1): 25 → 29 — 4 cờ quan sát V2 (node hist-feedback)
+    expect(state.length).toBe(29)
     const iqr = state.find(s => s.key === 'anomaly_iqr_k')!
     expect(iqr.source).toBe('store')
     expect(iqr.storeValue).toBe('2.5')
@@ -430,7 +433,7 @@ describe('r81 · API /api/neural-architecture', () => {
     await resetTuningValue('runtime_model_policy')
   })
 
-  test('GET: graph 6 lớp · 23 node · 37 cạnh · 25 tuning · live là map', async () => {
+  test('GET: graph 6 lớp · 23 node · 37 cạnh · 29 tuning · live là map', async () => {
     const res = await GET()
     expect(res.status).toBe(200)
     const json = await res.json()
@@ -438,7 +441,8 @@ describe('r81 · API /api/neural-architecture', () => {
     expect(json.graph.nodes.length).toBe(23)
     expect(json.graph.edges.length).toBe(37)
     // PIN UPDATE (r88-r91 task, Task 11 worklog): 19 → 25 (BRAIN-UX §9 +6 key)
-    expect(json.tuning.length).toBe(25)
+    // PIN UPDATE (Task 23 OBS-P1): 25 → 29 — 4 cờ quan sát V2
+    expect(json.tuning.length).toBe(29)
     expect(typeof json.live).toBe('object')
     expect(json.live['q-table'][0].label).toBe('Q entries')
     expect(json.generatedAt).toBeTruthy()

@@ -1,0 +1,190 @@
+/**
+ * ROUND-97 TESTS — OBS-P3 · UI TAB "QUAN SÁT" (module Smolab)
+ * (BLUEPRINT-OBSERVATION-P1-P4 §C.5 — chốt §7 Task 23 2026-10-13)
+ *
+ * Pattern: SOURCE-SCAN (r92-E precedent — pin chống hồi quy cấu trúc wiring
+ * UI, không render thật) + PURE helper kinds.ts (import trực tiếp).
+ *
+ * Đo lường:
+ *   A. kinds.ts pure: 16 kind · obsKindDef tra đúng nhóm · kind lạ → null
+ *      (fail-open) · OBS_GROUP_CLASSES đủ 7 nhóm (token tĩnh) · obsActorClass
+ *      map đúng 4 nhánh actor.
+ *   B. observation-tab.tsx wiring: fetch '/api/observation/timeline' +
+ *      '/api/brain' (panel nhãn&não single-source) · poll thích ứng
+ *      POLL_ACTIVE_MS=2_500 / POLL_IDLE_MS=15_000 + visibilitychange (pattern
+ *      brain-tab 15-d) · kim tuyến (input runId + 'Theo dõi' + GitBranch +
+ *      runSummary durationMs) · filter bar (select kind + actor + since) ·
+ *      drill-down Dialog payload (precedent tuning-param-dialog) ·
+ *      max-h-96 overflow-y-auto (long-list rule) · min-h-[44px] (touch) ·
+ *      aria-live + aria-label · off-state cờ ui_observation + nút bật nhanh
+ *      POST /api/neural-architecture (precedent hitech-toggle) · chip 4 cờ.
+ *   C. smolab-module.tsx: tab 'observation' đăng ký cạnh BRAIN + render
+ *      ObservationTabContent + onOpenBrainTab → setActiveSmolabTab('brain')
+ *      (đã pin r95-H7 — đây pin sâu hơn icon/label).
+ *   D. timeline route: contract source — validate limit/before/since + KHÔNG
+ *      có lệnh ghi (create/update/deleteMany) trong route (READ-ONLY §C.4 —
+ *      đối chứng behavioral r96-E).
+ */
+
+import { describe, test, expect } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import {
+  OBS_KINDS, obsKindDef, OBS_GROUP_CLASSES, obsActorClass,
+  type ObsKindGroup,
+} from '@/lib/observation/kinds'
+
+const readSrc = (rel: string): string => readFileSync(join(process.cwd(), rel), 'utf-8')
+const tab = readSrc('src/components/smolab/observation-tab.tsx')
+const smolab = readSrc('src/components/smolab/smolab-module.tsx')
+const route = readSrc('src/app/api/observation/timeline/route.ts')
+
+// ==================== A. kinds.ts — pure (single-source kind) ====================
+
+describe('r97 · A — kinds.ts pure helpers', () => {
+  test('A1 OBS_KINDS 16 kind đủ nhóm + nhãn tiếng Việt', () => {
+    expect(OBS_KINDS.length).toBe(16)
+    expect(OBS_KINDS.every(k => k.label.length > 0 && k.kind.includes('.'))).toBe(true)
+    const groups = new Set(OBS_KINDS.map(k => k.group))
+    expect([...groups].sort()).toEqual(['brain', 'db', 'impact', 'reward', 'run', 'search', 'tuning'])
+  })
+
+  test('A2 obsKindDef — tra đúng, kind lạ null (fail-open)', () => {
+    expect(obsKindDef('run.start')?.group).toBe('run')
+    expect(obsKindDef('brain.infer-ref')?.group).toBe('brain')
+    expect(obsKindDef('impact.estimate')?.group).toBe('impact')
+    expect(obsKindDef('khong-ton.tai')).toBeNull()
+  })
+
+  test('A3 OBS_GROUP_CLASSES 7 nhóm — token Tailwind tĩnh (không ghép chuỗi)', () => {
+    const groups: ObsKindGroup[] = ['run', 'db', 'brain', 'tuning', 'reward', 'search', 'impact']
+    for (const g of groups) {
+      expect(OBS_GROUP_CLASSES[g]).toMatch(/^bg-\S+ \S+ border-\S+$/)
+    }
+  })
+
+  test('A4 obsActorClass — 4 nhánh actor + default', () => {
+    expect(obsActorClass('agent:opus')).toContain('emerald')
+    expect(obsActorClass('brain:policy')).toContain('violet')
+    expect(obsActorClass('user')).toContain('sky')
+    expect(obsActorClass('search')).toContain('cyan')
+    expect(obsActorClass('system')).toContain('stone') // default fail-open
+  })
+})
+
+// ==================== B. observation-tab wiring (source-scan) ====================
+
+describe('r97 · B — observation-tab.tsx wiring (§C.5)', () => {
+  test('B1 nguồn dữ liệu: timeline + /api/brain (panel nhãn&não — C.5-4)', () => {
+    expect(tab).toContain('fetch(`/api/observation/timeline?') // template literal — query động
+    expect(tab).toContain("fetch('/api/brain')")
+    expect(tab).toContain('computeLabelTotal') // breakdown tổng nhãn GAP-8 — tái dùng registry (single-source)
+  })
+
+  test('B2 poll thích ứng 2,5s/15s + visibilitychange (pattern brain-tab 15-d)', () => {
+    expect(tab).toContain('POLL_ACTIVE_MS = 2_500')
+    expect(tab).toContain('POLL_IDLE_MS = 15_000')
+    expect(tab).toContain('visibilitychange')
+    expect(tab).toContain("document.visibilityState === 'hidden'")
+  })
+
+  test('B3 kim tuyến (C.5-3): input runId + Theo dõi + runSummary + traces join', () => {
+    expect(tab).toContain('Kim tuyến runId')
+    expect(tab).toContain('runIdInput')
+    expect(tab).toContain('startGoldenThread')
+    expect(tab).toContain('runSummary')
+    expect(tab).toContain('data.traces') // vết suy diễn não của run (C.4 join)
+    expect(tab).toContain('đang chạy') // trạng thái run chưa kết thúc
+  })
+
+  test('B4 filter bar (C.5-2): kind select từ response.kinds + actor + since', () => {
+    expect(tab).toContain('value={kindFilter}')
+    expect(tab).toContain('data?.kinds ?? []') // single-source kinds từ API — không hardcode UI
+    expect(tab).toContain('value={actorFilter}')
+    expect(tab).toContain('value={sinceFilter}')
+  })
+
+  test('B5 drill-down payload Dialog (precedent tuning-param-dialog)', () => {
+    expect(tab).toContain('Dialog open={detail !== null}')
+    expect(tab).toContain('JSON.stringify(detail.payload, null, 2)')
+    expect(tab).toContain('seq {detail?.seq}')
+  })
+
+  test('B6 long-list + touch + a11y: max-h-96 scroll · min-h-[44px] · aria-live · role region', () => {
+    expect(tab).toContain('max-h-96 overflow-y-auto')
+    expect(tab).toContain('min-h-[44px]')
+    expect(tab).toContain('aria-live="polite"')
+    expect(tab).toContain('role="region"')
+    expect(tab).toContain('aria-label="Quan sát vận hành')
+  })
+
+  test('B7 off-state cờ ui_observation: chip 4 cờ + nút bật nhanh qua neural-architecture', () => {
+    expect(tab).toContain('ui_observation')
+    expect(tab).toContain('obs_ledger') // chip trạng thái
+    expect(tab).toContain("fetch('/api/neural-architecture'")
+    expect(tab).toContain("{ action: 'set', key: 'ui_observation', value: 'on' }")
+    expect(tab).toContain('Bật ngay')
+  })
+
+  test('B8 cảnh báo trung thực khi obs_ledger off (dữ liệu ngừng ghi mới)', () => {
+    expect(tab).toContain('không có sự kiện MỚI được')
+    expect(tab).toContain('OBS_LEDGER')
+  })
+
+  test('B9 import kinds từ lib (single-source doctrine #9 — KHÔNG định nghĩa kind trong UI)', () => {
+    expect(tab).toContain("from '@/lib/observation/kinds'")
+    expect(tab).not.toContain("kind: 'run.start',") // không khai báo kind mới trong UI
+  })
+})
+
+// ==================== C. smolab-module đăng ký tab ====================
+
+describe('r97 · C — smolab-module tab Quan sát (Q4 §7 chốt: cạnh BRAIN)', () => {
+  test('C1 entry SMOLAB_TABS sau brain + icon Eye màu cyan', () => {
+    const brainIdx = smolab.indexOf("{ id: 'brain', label: 'BRAIN', icon: BrainCircuit, color: 'amber' }")
+    const obsIdx = smolab.indexOf("{ id: 'observation', label: 'Quan sát', icon: Eye, color: 'cyan' }")
+    expect(brainIdx).toBeGreaterThan(0)
+    expect(obsIdx).toBeGreaterThan(brainIdx) // ĐÚNG SAU brain — cạnh BRAIN
+  })
+
+  test('C2 render switch + onOpenBrainTab nhảy tab BRAIN', () => {
+    expect(smolab).toContain("activeSmolabTab === 'observation'")
+    expect(smolab).toContain("<ObservationTabContent onOpenBrainTab={() => setActiveSmolabTab('brain')} />")
+  })
+
+  test('C3 import ObservationTabContent tồn tại', () => {
+    expect(smolab).toContain("import { ObservationTabContent } from '@/components/smolab/observation-tab'")
+  })
+})
+
+// ==================== D. timeline route — contract source ====================
+
+describe('r97 · D — timeline route contract (đối chứng behavioral r96)', () => {
+  test('D1 validate: limit 1–200 + before ≥ 1 + since ISO (400 rác)', () => {
+    expect(route).toContain('MAX_LIMIT = 200')
+    expect(route).toContain('DEFAULT_LIMIT = 50')
+    expect(route).toContain('status: 400')
+  })
+
+  test('D2 READ-ONLY source — KHÔNG có create/update/delete trong route', () => {
+    expect(route).not.toContain('.create(')
+    expect(route).not.toContain('.update(')
+    expect(route).not.toContain('.deleteMany(')
+    expect(route).not.toContain('.upsert(')
+    expect(route).toContain('findMany') // chỉ SELECT
+    expect(route).toContain('count')
+  })
+
+  test('D3 join traces CHỈ khi có runId + trả kinds catalog (C.4)', () => {
+    expect(route).toContain('if (runId)')
+    expect(route).toContain('brainInferenceTrace.findMany')
+    expect(route).toContain('kinds: OBS_KINDS')
+  })
+
+  test('D4 flags 4 cờ trong response (UI hiển thị trạng thái quan sát)', () => {
+    expect(route).toContain("safeFlag('obs_ledger')")
+    expect(route).toContain("safeFlag('obs_brain_trace')")
+    expect(route).toContain("safeFlag('obs_impact')")
+    expect(route).toContain("safeFlag('ui_observation')")
+  })
+})

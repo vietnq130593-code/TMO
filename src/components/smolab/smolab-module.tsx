@@ -6,7 +6,7 @@
 // ========================================================================
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
-import { Network, CheckCircle2, XCircle, Loader2, Brain, Zap, Check, ChevronDown, Activity, AlertTriangle, Play, ShieldOff, MessageSquare, Send, Trash2, Search, Sparkles, X, AlertCircle, ThumbsUp, ThumbsDown, Wrench, Radio, BookMarked, Plus, Download, Pencil, Users, User, Code2, Square, Thermometer, ClipboardList, Mic, AudioLines, Volume2, OctagonX, Scale, Cog, ArrowUpCircle, BrainCircuit } from 'lucide-react'
+import { Network, CheckCircle2, XCircle, Loader2, Brain, Zap, Check, ChevronDown, Activity, AlertTriangle, Play, ShieldOff, MessageSquare, Send, Trash2, Search, Sparkles, X, AlertCircle, ThumbsUp, ThumbsDown, Wrench, Radio, BookMarked, Plus, Download, Pencil, Users, User, Code2, Square, Thermometer, ClipboardList, Mic, AudioLines, Volume2, OctagonX, Scale, Cog, ArrowUpCircle, BrainCircuit, Eye } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -29,6 +29,9 @@ import { AutomationTabContent } from '@/components/smolab/automation-tab'
 // (BRAIN)" di chuyển từ Database › Kiến trúc sang đây theo chỉ thị user
 // 2026-10-12 (worklog 15-d/15-KEHOACH).
 import { BrainTabContent } from '@/components/smolab/brain-tab'
+// OBS-P3 (BLUEPRINT-OBSERVATION §C.5 — Task 23): tab "Quan sát" — timeline
+// sự kiện + kim tuyến runId + panel nhãn & não (đặt cạnh BRAIN — Q4 §7 chốt)
+import { ObservationTabContent } from '@/components/smolab/observation-tab'
 import MarkdownText from './markdown-text'
 
 
@@ -1755,6 +1758,10 @@ export const SMOLAB_TABS = [
   // "Não vận hành — MLP-CPU (BRAIN)" từ Database › Kiến trúc sang Smolab
   // (đài quan sát não: nơ-ron thật + lan truyền + live poll 2.5s — 15-d).
   { id: 'brain', label: 'BRAIN', icon: BrainCircuit, color: 'amber' },
+  // OBS-P3 (Task 23 — Q4 §7 chốt): tab Quan sát cạnh BRAIN — "bảng bệnh án
+  // toàn thân": timeline sự kiện live + kim tuyến runId (toàn cảnh mỗi run
+  // agent) + panel nhãn & não. Cờ ui_observation off → nội dung tối giản.
+  { id: 'observation', label: 'Quan sát', icon: Eye, color: 'cyan' },
 ]
 
 
@@ -6978,6 +6985,11 @@ ${manifest}` : rawText
                   di chuyển từ Database › Kiến trúc (chỉ thị user 2026-10-12). */}
               {activeSmolabTab === 'brain' && (
                 <BrainTabContent />
+              )}
+              {/* OBS-P3 (Task 23): Quan sát — timeline + kim tuyến + nhãn&não.
+                  onOpenBrainTab: nhảy sang tab BRAIN (panel nhãn & não link). */}
+              {activeSmolabTab === 'observation' && (
+                <ObservationTabContent onOpenBrainTab={() => setActiveSmolabTab('brain')} />
               )}
             </div>
           </div>

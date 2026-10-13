@@ -53,6 +53,11 @@ import {
   BRAIN_VERSIONS_KEEP,
 } from './registry'
 import { acquireTrainLock, releaseTrainLock } from './train-lock'
+// OBS-P1 hook (§C.3 đợt 1) — brain.train start/end; static import an toàn
+// (ledger KHÔNG import ngược pipeline — check-imports sạch)
+import { observeBrainTrain } from '@/lib/observation/ledger'
+// OBS-P2 hook (§C.3 đợt 2) — vết suy diễn organ calibrate
+import { traceInference } from '@/lib/observation/trace'
 import {
   FEATURE_NAMES,
   FAITHFULNESS_THRESHOLD,
@@ -319,8 +324,20 @@ export async function trainBrainCalibrationV3(
       error: 'single-flight (A7): train khác của brain calibration_v3 đang chạy — bỏ lệnh trùng',
     }
   }
+  // OBS-P1 hook (§C.3 đợt 1 — brain.train start/end; bỏ lệnh trùng A7 không phát)
+  observeBrainTrain('calibration_v3', 'start', { inputMode, useDraft: override != null })
+  const t0 = Date.now()
   try {
-    return await trainBrainCalibrationV3Locked(inputMode, override)
+    const result = await trainBrainCalibrationV3Locked(inputMode, override)
+    observeBrainTrain('calibration_v3', 'end', {
+      inputMode, useDraft: override != null, durationMs: Date.now() - t0, result,
+    })
+    return result
+  } catch (err) {
+    observeBrainTrain('calibration_v3', 'end', {
+      inputMode, useDraft: override != null, durationMs: Date.now() - t0, error: err,
+    })
+    throw err
   } finally {
     releaseTrainLock('calibration_v3')
   }
@@ -663,7 +680,19 @@ export async function tryCalibrationV3(
     if (!isCalibrationV3Enabled()) return null
     const model = await loadActiveV3()
     if (!model) return null
-    return applyV3Model(model, { rawConfidence, ...features })
+    const tInfer = Date.now()
+    const p = applyV3Model(model, { rawConfidence, ...features })
+    // OBS-P2 hook (§C.3 đợt 2 — organ calibrate): vết suy diễn Brain-A khi
+    // áp V3 vào chuỗi hiệu lực (fire-and-forget — fail-open không đụng V2)
+    traceInference({
+      brain: 'calibration_v3',
+      organ: 'calibrate',
+      modelVersion: model.version,
+      input: { rawConfidence, ...features },
+      output: [p],
+      latencyMs: Date.now() - tInfer,
+    })
+    return p
   } catch {
     return null
   }

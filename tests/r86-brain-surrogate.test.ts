@@ -973,7 +973,10 @@ describe('r86 · F cờ replay_eval + registry pins', () => {
     // PIN UPDATE (r88-r91 task, Task 11 worklog): 19 → 25 — BRAIN-UX §9
     // (UX-1/2) thêm 6 key (ui_brain_edit/ui_synapse_fx/ui_hitech +
     // reward_w_outcome/efficiency/quality) vào neural-types.ts.
-    expect(TUNING_SPECS.length).toBe(25) // 19 (sau BRAIN-P4) + 6 cờ BRAIN-UX §9
+    // PIN UPDATE (Task 23 OBS-P1 2026-10-13): 25 → 29 — thêm 4 cờ giao thức
+    // quan sát V2 (obs_ledger/obs_brain_trace/obs_impact/ui_observation —
+    // BLUEPRINT-OBSERVATION §C.3, neural-types.ts block 'OBS-P1').
+    expect(TUNING_SPECS.length).toBe(29) // 19 BRAIN-P4 + 6 BRAIN-UX §9 + 4 OBS-P1
   })
 
   test('F2 NEURAL_NODES softmax-policy paramKeys gồm replay_eval (gắn đúng node)', () => {

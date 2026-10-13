@@ -27,6 +27,8 @@
 import { generateEmbedding, getEmbeddingDimension, getCurrentEmbeddingModelVersion } from '@/lib/embeddings'
 import { callUtilityLLM, addTokensUsedByAgent } from '@/lib/llm'
 import { db } from '@/lib/db'
+// OBS-P2 hook (§C.3 đợt 2) — db.write AutoLearnRecord
+import { observeEvent } from '@/lib/observation/ledger'
 import { chunkText } from '@/lib/chunking'
 
 // ==================== TYPES ====================
@@ -227,6 +229,20 @@ export async function autoLearnFromAnswer(input: AutoLearnInput): Promise<boolea
       },
     })
     recordId = record.id
+    // OBS-P2 hook (§C.3 đợt 2 — db.write AutoLearnRecord): batch auto-learn
+    // bắt đầu (status pending) — RO-2: KHÔNG lưu answer, chỉ metadata
+    observeEvent({
+      actor: `agent:${input.agentName}`,
+      kind: 'db.write',
+      table: 'AutoLearnRecord',
+      rowKey: record.id,
+      summary: `Auto-learn "${input.query.slice(0, 60)}" (conf ${input.confidence.toFixed(2)}, ${input.model})`,
+      payload: {
+        recordId: record.id, agentName: input.agentName, provider: input.provider,
+        model: input.model, confidence: input.confidence, queryHead: input.query.slice(0, 120),
+        documentId,
+      },
+    })
 
     // 3. Extract entities/relationships from answer using LLM
     //    Pass agentId/agentName so extraction tokens are tracked per-agent

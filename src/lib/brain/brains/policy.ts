@@ -81,8 +81,12 @@ import { createHash } from 'node:crypto'
 import { db } from '@/lib/db'
 import { MLP, type MlpSerialized, type MlpSpec, type FitResult, type FitOptions, type EpochStat } from '../mlp'
 import { acquireTrainLock, releaseTrainLock } from '../train-lock'
+// OBS-P1 hook (§C.3 đợt 1) — brain.train start/end (static — không chu trình)
+import { observeBrainTrain } from '@/lib/observation/ledger'
 import type { BrainDraftSpec } from '../spec-schema'
 import { BRAIN_VERSIONS_KEEP } from '../registry'
+// OBS-P2 hook (§C.3 đợt 2) — vết suy diễn organ policy_mixture (không chu trình)
+import { traceInference } from '@/lib/observation/trace'
 import { computeColumnStats, stratifiedFoldAssignments } from '@/lib/calibration-multifeature'
 import { meanCI, wilsonCI } from '@/lib/stats'
 import { getTuningEnum, getTuningNumber } from '@/lib/learning/tuning-store'
@@ -522,8 +526,20 @@ export async function trainBrainPolicy(
       error: 'single-flight (A7): train khác của brain policy đang chạy — bỏ lệnh trùng',
     }
   }
+  // OBS-P1 hook (§C.3 đợt 1 — brain.train start/end; bỏ lệnh trùng A7 không phát)
+  observeBrainTrain('policy', 'start', { inputMode, useDraft: override != null })
+  const t0 = Date.now()
   try {
-    return await trainBrainPolicyLocked(inputMode, override)
+    const result = await trainBrainPolicyLocked(inputMode, override)
+    observeBrainTrain('policy', 'end', {
+      inputMode, useDraft: override != null, durationMs: Date.now() - t0, result,
+    })
+    return result
+  } catch (err) {
+    observeBrainTrain('policy', 'end', {
+      inputMode, useDraft: override != null, durationMs: Date.now() - t0, error: err,
+    })
+    throw err
   } finally {
     releaseTrainLock('policy')
   }
@@ -924,6 +940,7 @@ export function applyPolicyMixture(
   candidates: readonly string[],
   ctx: PolicyFeatureCtx,
 ): PolicyMixtureResult {
+  const tMix = Date.now() // OBS-P2 — đo latency vết suy diễn (chỉ dùng khi trộn THẬT)
   const d = policyFeatureNames(active.vocab).length
   if (active.means.length !== d || active.stds.length !== d) {
     throw new Error(
@@ -992,6 +1009,16 @@ export function applyPolicyMixture(
       version: active.version,
     }
   }
+  // OBS-P2 hook (§C.3 đợt 2 — organ policy_mixture): vết suy diễn Brain-C khi
+  // π_net trộn thật với π_Q (fire-and-forget — KHÔNG đụng phân phối trả về)
+  traceInference({
+    brain: 'policy',
+    organ: 'policy_mixture',
+    modelVersion: active.version,
+    input: x,
+    output: out,
+    latencyMs: Date.now() - tMix,
+  })
   return { probs: out.map(v => v / outSum), lambda, netShare, version: active.version }
 }
 

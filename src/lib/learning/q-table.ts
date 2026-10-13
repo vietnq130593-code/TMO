@@ -33,6 +33,8 @@
 
 import { db } from '@/lib/db'
 import { getTuningNumber } from './tuning-store'
+// OBS-P2 hook (§C.3 đợt 2) — db.write QEntry (static — ledger không import q-table)
+import { observeEvent } from '@/lib/observation/ledger'
 
 // ==================== HẰNG SỐ (nguồn: spec §P6-M2) ====================
 
@@ -320,6 +322,16 @@ async function updateQStepInner(
       where: { stateKey_actionKey: { stateKey, actionKey } },
       create: { stateKey, actionKey, qValue: newQ, visits: visits + 1 },
       update: { qValue: newQ, visits: { increment: 1 } },
+    })
+    // OBS-P2 hook (§C.3 đợt 2 — db.write bảng học): QEntry ghi xong mới phát
+    // (fire-and-forget — learning side-channel KHÔNG bao giờ bị quan sát làm chậm)
+    observeEvent({
+      actor: 'system',
+      kind: 'qentry.add',
+      table: 'QEntry',
+      rowKey: `${stateKey}|${actionKey}`,
+      summary: `Q[${stateKey.slice(0, 24)}][${actionKey.slice(0, 24)}] = ${newQ.toFixed(4)} (lần ${visits + 1})`,
+      payload: { stateKey, actionKey, qValue: newQ, visits: visits + 1, reward, maxNextQ },
     })
   } catch (err) {
     console.warn(
