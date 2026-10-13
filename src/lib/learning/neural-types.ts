@@ -623,11 +623,12 @@ export const TUNING_SPECS: readonly TuningSpec[] = [
     appliesTo: 'observation impact worker (src/lib/observation/impact.ts) — tick nền',
   },
   {
-    // OBS-P3 — cờ trình bày UI tab "Quan sát" (module Smolab, cạnh BRAIN — Q4 §7 chốt).
+    // OBS-P3 — cờ trình bày UI tab "Quan sát" (Task 25: tích hợp VÀO tab BRAIN
+    // › SECTION 3 — tab console thứ 5; trước đây tab riêng cạnh BRAIN).
     key: 'ui_observation',
     label: 'UI_OBSERVATION',
     description:
-      'Bật tab "Quan sát" (module Smolab — cạnh tab BRAIN): timeline sự kiện live + kim tuyến runId ("toàn cảnh mỗi khi agent vận hành") + panel nhãn & não. Thuần trình bày — đọc API read-only, không đổi vận hành.',
+      'Bật nội dung tab "Quan sát" (tab BRAIN › SECTION 3 › tab console "Quan sát"): timeline sự kiện live + kim tuyến runId ("toàn cảnh mỗi khi agent vận hành") + panel nhãn & não. Thuần trình bày — đọc API read-only, không đổi vận hành.',
     nodeId: 'hist-feedback',
     type: 'enum',
     enumValues: ['off', 'on'],
@@ -637,7 +638,7 @@ export const TUNING_SPECS: readonly TuningSpec[] = [
       const v = raw.trim().toLowerCase()
       return v === 'on' || v === '1' || v === 'true' ? 'on' : v === 'off' || v === '0' || v === 'false' ? 'off' : undefined
     },
-    appliesTo: 'ObservationTabContent (src/components/smolab/observation-tab.tsx) — hiển thị tab',
+    appliesTo: 'ObservationTabContent (src/components/smolab/observation-tab.tsx — render bởi brain-tab SECTION 3) — hiển thị nội dung tab',
   },
 ] as readonly TuningSpec[]
 

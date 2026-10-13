@@ -35,11 +35,12 @@
  *      null (D động) → validateBrainDraft ok → normalized giữ đủ →
  *      buildSurrogateSpecs truyền đúng → engine new MLP(spec) NHẬN (không
  *      throw + forward finite — validateSpec engine chặn thật).
- *   C. Source-scan wiring 3 SECTION + 4 tab console (pattern stripComments
+ *   C. Source-scan wiring 3 SECTION + 5 tab console (pattern stripComments
  *      của r92-E — helper copy NGUYÊN, string-aware FB-BRAIN-LIVE-R1-08):
  *      brain-tab 3 role="region" + 3 aria-label + KHÔNG còn máy bottom-sheet
  *      (consoleSheetOpen/useIsDesktopViewport/bottom-4 right-4/
- *      DESKTOP_BREAKPOINT) + 4 giá trị tab 'train'|'tuning'|'log'|'ref' +
+ *      DESKTOP_BREAKPOINT) + 5 giá trị tab 'train'|'tuning'|'log'|'ref'|
+ *      'observation' (Task 25 tích hợp OBS-P3) +
  *      BrainReference import/render + 2 chuỗi chốt r92-E ('&head=
  *      ${activityHead}' + tall) · brain-studio segmented (aria-pressed +
  *      sm:grid-cols-3) + α/β editor (DRAFT_LIMITS + nhánh leakyRelu/swish +
@@ -362,9 +363,10 @@ describe('r93 · C source-scan wiring 3 SECTION — pin chống hồi quy cấu 
     expect(tabCode).not.toContain('DESKTOP_BREAKPOINT')
   })
 
-  test("brain-tab: 4 tab console ('train' | 'tuning' | 'log' | 'ref') + tab 'ref' render BrainReference (import tồn tại) + 2 chuỗi chốt r92-E còn nguyên", () => {
-    // 4 giá trị tab — type state (pin theo code thật)
-    expect(tabCode).toContain("'train' | 'tuning' | 'log' | 'ref'")
+  test("brain-tab: 5 tab console ('train' | 'tuning' | 'log' | 'ref' | 'observation') + tab 'ref' render BrainReference (import tồn tại) + 2 chuỗi chốt r92-E còn nguyên", () => {
+    // 5 giá trị tab — type state (Task 25 thêm 'observation' — OBS-P3 tích hợp
+    // vào SECTION 3 theo chỉ thị user 2026-10-13; 18-c gốc chỉ 4 giá trị)
+    expect(tabCode).toContain("'train' | 'tuning' | 'log' | 'ref' | 'observation'")
     // Entry tab 'ref' + nhãn hiển thị + nhánh render
     expect(tabCode).toContain("['ref', 'Hàm & công thức']")
     expect(tabCode).toContain("consoleTab === 'ref'")

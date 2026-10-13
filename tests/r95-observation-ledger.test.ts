@@ -308,6 +308,7 @@ describe('r95 · G — hook agent-run-tracker (kim tuyến runId)', () => {
 
 describe('r95 · H — source-scan wiring đợt 1+2 (OBS-P1/P2 hooks)', () => {
   const smolab = readSrc('src/components/smolab/smolab-module.tsx')
+  const brainTab = readSrc('src/components/smolab/brain-tab.tsx')
 
   test('H1 reward.ts — hook reward.log cạnh console.log (GAP-4, vẫn LOG-ONLY)', () => {
     const src = readSrc('src/lib/brain/reward.ts')
@@ -368,11 +369,17 @@ describe('r95 · H — source-scan wiring đợt 1+2 (OBS-P1/P2 hooks)', () => {
     expect(OBS_KINDS.map(k => k.kind)).toContain('brain.infer-ref')
   })
 
-  test('H7 smolab tab Quan sát đăng ký cạnh BRAIN (OBS-P3 — Q4 §7 chốt)', () => {
-    expect(smolab).toContain("{ id: 'observation', label: 'Quan sát', icon: Eye, color: 'cyan' }")
-    expect(smolab).toContain("activeSmolabTab === 'observation'")
-    expect(smolab).toContain('ObservationTabContent')
-    expect(smolab).toContain("onOpenBrainTab={() => setActiveSmolabTab('brain')}")
+  test('H7 tab Quan sát đăng ký TRONG brain-tab SECTION 3 (OBS-P3 — Task 25 tích hợp theo chỉ thị user 2026-10-13)', () => {
+    // Task 25: KHÔNG còn tab riêng cấp module Smolab — component render như 1
+    // tab console SECTION 3 của tab BRAIN (consoleTab union + entry tablist).
+    expect(brainTab).toContain("'train' | 'tuning' | 'log' | 'ref' | 'observation'")
+    expect(brainTab).toContain("['observation', 'Quan sát']")
+    expect(brainTab).toContain("consoleTab === 'observation'")
+    expect(brainTab).toContain('ObservationTabContent')
+    // smolab-module: KHÔNG còn đăng ký tab riêng + localStorage cũ chuyển hướng 'brain'
+    expect(smolab).not.toContain("{ id: 'observation'")
+    expect(smolab).not.toContain("activeSmolabTab === 'observation'")
+    expect(smolab).toContain("if (saved === 'observation')")
   })
 })
 

@@ -19,10 +19,11 @@
 //   2 · ĐÀI QUAN SÁT NÃO — thanh Live (poll 2.5s) + BrainStage tall
 //       (full-width fit-height — geometry v3 của 18-a tự lo) + chú thích
 //       bất biến A1.
-//   3 · BẢNG THÔNG SỐ — 4 tab: Training Console · Tham số runtime · Nhật
+//   3 · BẢNG THÔNG SỐ — 5 tab: Training Console · Tham số runtime · Nhật
 //       ký tinh chỉnh · Hàm & công thức (BrainReference — 18-c, bảng tham
 //       chiếu activation/loss/reward/lan truyền, trả lời câu hỏi user
-//       "đã có thông tin đầy đủ chưa"). ConsolePanel render INLINE ở
+//       "đã có thông tin đầy đủ chưa") · Quan sát (OBS-P3 tích hợp vào
+//       SECTION 3 theo chỉ thị user 2026-10-13). ConsolePanel render INLINE ở
 //       MỌI viewport — BỎ hẳn hộp console trượt dưới đáy mobile + nút nổi
 //       ⚙ Console + state sheet + effect Esc + toàn bộ máy breakpoint
 //       desktop (media query hook + biến nhánh viewport — không còn
@@ -60,6 +61,10 @@ import { TuningParamDialog, SOURCE_BADGE } from '@/components/smolab/tuning-para
 // BRAIN-TAB-3PHAN (18-c): tab "Hàm & công thức" — bảng tham chiếu trình
 // bày thuần (client-safe: ACTIVATION_MENU spec-schema + hằng optimizers).
 import { BrainReference } from '@/components/smolab/brain-reference'
+// OBS-P3 (chỉ thị user 2026-10-13: tích hợp tab Quan sát VÀO tab BRAIN):
+// timeline sự kiện + kim tuyến runId + panel nhãn&não — render như 1 tab
+// console SECTION 3 (không còn tab riêng cấp module Smolab).
+import { ObservationTabContent } from '@/components/smolab/observation-tab'
 // BRAIN-P1 registry single-source (thuần hằng số — client-safe).
 import {
   BRAIN_REGISTRY,
@@ -173,9 +178,10 @@ export function BrainTabContent() {
   // (blueprint §9.5 + chỉ thị user 2026-10-12 "chia 3 phần"): SECTION 1 =
   // Brain Studio chọn não + ngưỡng thức tỉnh + badge + editor kiến trúc;
   // SECTION 2 = đài quan sát Brain Stage (UX-3 / v2 BRAIN-LIVE, tall
-  // full-width) + live + chú thích bất biến A1; SECTION 3 = 4 tab console
-  // (UX-2 Training Console / Tham số runtime / Nhật ký / Hàm & công thức)
-  // — inline MỌI viewport (không còn hộp console mobile riêng).
+  // full-width) + live + chú thích bất biến A1; SECTION 3 = 5 tab console
+  // (UX-2 Training Console / Tham số runtime / Nhật ký / Hàm & công thức /
+  // Quan sát — OBS-P3 tích hợp Task 25) — inline MỌI viewport (không còn hộp
+  // console mobile riêng).
 
   /// Não đang chọn — mặc định 'calibration_v3'; restore từ localStorage
   /// (queueMicrotask + try/catch — fail-open giữ mặc định khi private mode).
@@ -207,8 +213,9 @@ export function BrainTabContent() {
   const [trainOutcome, setTrainOutcome] = useState<TrainOutcomeUi | null>(null)
   /// Brain Stage (UX-3) bấm cột lớp ẩn → Brain Studio nháy tới hàng editor
   const [focusLayerSignal, setFocusLayerSignal] = useState<{ brain: BrainKey; layer: number; nonce: number } | null>(null)
-  /// Tab đang mở của SECTION 3 (18-c mở rộng 'ref' — Hàm & công thức)
-  const [consoleTab, setConsoleTab] = useState<'train' | 'tuning' | 'log' | 'ref'>('train')
+  /// Tab đang mở của SECTION 3 (18-c mở rộng 'ref' — Hàm & công thức;
+  /// Task 25 mở rộng 'observation' — Quan sát tích hợp vào tab BRAIN)
+  const [consoleTab, setConsoleTab] = useState<'train' | 'tuning' | 'log' | 'ref' | 'observation'>('train')
 
   // ── LIVE POLL activity (BRAIN-LIVE 15-d) ──
   // activity = dữ liệu thật từ GET /api/brain/activity (contract 15-a) —
@@ -543,14 +550,16 @@ export function BrainTabContent() {
   // nhất nên state tab không bao giờ bị remount mất). ──
   const consolePanel = (
     <div className="space-y-2.5" role="tabpanel" aria-label="Console não vận hành">
-      {/* Thanh tab 4 nút (style giống tab head brain-stage UX-3; 18-c thêm
-          tab "Hàm & công thức" — bảng tham chiếu trình bày) */}
+      {/* Thanh tab 5 nút (style giống tab head brain-stage UX-3; 18-c thêm
+          tab "Hàm & công thức" — bảng tham chiếu trình bày; Task 25 thêm tab
+          "Quan sát" — OBS-P3 tích hợp vào SECTION 3 theo chỉ thị user) */}
       <div className="flex overflow-hidden rounded-md border border-stone-700/70" role="tablist" aria-label="Bảng điều khiển não">
         {([
           ['train', 'Training Console'],
           ['tuning', 'Tham số runtime'],
           ['log', 'Nhật ký tinh chỉnh'],
           ['ref', 'Hàm & công thức'],
+          ['observation', 'Quan sát'],
         ] as const).map(([id, label]) => (
           <button
             key={id}
@@ -710,6 +719,14 @@ export function BrainTabContent() {
         // reward / lan truyền tiến-ngược + đạo hàm — trả lời câu hỏi user
         // "liệu đã có thông tin để lựa chọn… có đầy đủ chưa" (audit 18-KEHOACH).
         <BrainReference />
+      )}
+
+      {consoleTab === 'observation' && (
+        // Task 25 (chỉ thị user 2026-10-13): tab Quan sát OBS-P3 tích hợp
+        // VÀO SECTION 3 tab BRAIN — timeline + kim tuyến runId + panel nhãn&não
+        // (read-only). Component render không kèm prop điều hướng — đã ĐANG
+        // ở trong tab BRAIN (prop cũ đã gỡ khỏi observation-tab.tsx).
+        <ObservationTabContent />
       )}
     </div>
   )

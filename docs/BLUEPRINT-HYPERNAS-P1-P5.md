@@ -1,6 +1,8 @@
 # BLUEPRINT TRIỂN KHAI HYBRID HYPERNAS P1 → P5 — "PHÒNG THÍ NGHIỆM TÌM KIẾN TRÚC NÃO" CHO TMO
 
-> **Phiên bản:** 0.2.1 — **§8 ĐÃ CHỐT 2026-10-13 (user: "theo đề xuất") —
+> **Phiên bản:** 0.2.2 — **hiệu đính vị trí tab (Task 25): "Tìm kiếm" = tab
+> thứ 6 SECTION 3 (slot 5 = "Quan sát" OBS-P3 tích hợp theo chỉ thị user
+> 2026-10-13).** Kế thừa 0.2.1 — **§8 ĐÃ CHỐT 2026-10-13 (user: "theo đề xuất") —
 > triển khai theo thứ tự Observation trước (chỉ thị user cùng ngày), HN-P1
 > xếp hàng kế tiếp theo Q1.** *(Hiệu đính 0.2→0.2.1, Task 24 2026-10-13 —
 > đợt FB-OBS R1-05: §9 "proposal.applied" → "proposal.apply" cho khớp 3 nguồn
@@ -43,6 +45,11 @@
 > - **0.2.1 (2026-10-13, Task 23):** §8 Q1–Q7 **CHỐT THEO KHUYẾN NGHỊ** (user:
 >   "7 câu hỏi mở hãy theo đề xuất của bạn đi") — xem cột Trạng thái §8. Thứ tự
 >   triển khai user chỉ định: BLUEPRINT-OBSERVATION trước, HN-P1 kế tiếp.
+> - **0.2.2 (2026-10-13, Task 25):** hiệu đính theo chỉ thị user — tab
+>   "Quan sát" (OBS-P3) tích hợp VÀO tab BRAIN › SECTION 3 thành tab console
+>   thứ 5 → tab "Tìm kiếm" của HN-P2 chuyển thành tab **thứ 6** (cập nhật §4
+>   HN-P2 · §8 Q7 · §10.1-4 "tab bar 6 nút" · 375px: 6 nút × ~62px). Không
+>   đổi thiết kế search/encoding/API — chỉ vị trí tab.
 
 ---
 
@@ -284,8 +291,9 @@ client bundle lẫn bun:test, doctrine #9 single-source: import `DRAFT_LIMITS`,
 **Files:** `src/lib/brain/search.ts` (mới) · `src/app/api/brain/search/route.ts`
 (mới: POST khởi động / GET trạng thái + kết quả) · `src/app/api/brain/search/cancel/route.ts`
 (mới — v0.2: v0.1 có status "cancelled" trong enum nhưng KHÔNG có đường gọi) ·
-UI: tab console "Tìm kiếm" thứ 5 trong SECTION 3 tab BRAIN (`brain-tab.tsx`,
-cạnh train/tuning/log/ref) — **thiết kế UI/UX đầy đủ §10** (state machine 4
+UI: tab console "Tìm kiếm" thứ 6 trong SECTION 3 tab BRAIN (`brain-tab.tsx`,
+cạnh train/tuning/log/ref/observation — hiệu đính 0.2.2: slot 5 đã có tab
+"Quan sát" OBS-P3 theo chỉ thị user) — **thiết kế UI/UX đầy đủ §10** (state machine 4
 trạng thái, bảng xếp hạng + 2 cấp nút áp dụng, copy, a11y, responsive).
 
 **Luồng:**
@@ -449,7 +457,7 @@ Không thiết kế chi tiết ở v0.1.
 | Q4 | Khi mẫu ≥ 100: chuyển nested hold-out (chính xác hơn, chậm hơn) — chốt trước hay để mặc định k-fold? | Để mặc định k-fold + CI; nested khi dữ liệu thật sự lớn | ☑ CHỐT k-fold + CI mặc định |
 | Q5 | HN-P4 (SMASH sinh weights thật) có đáng làm không? | **Chờ** HN-P3 chạy ≥ 4 session + Spearman > 0.5 ổn định | ☑ CHỐT chờ — điều kiện mở ≥ 4 session + ρ > 0,5 ổn định |
 | Q6 | Predictor HN-P3 riêng từng brain (khuyến nghị) hay multi-task chung (MET_NAS_013)? | Riêng từng brain — data còn nhỏ | ☑ CHỐT riêng từng brain |
-| Q7 *(v0.2)* | Vị trí giao diện: tab "Tìm kiếm" thứ 5 ngay trong SECTION 3 tab BRAIN (khuyến nghị — đúng nguyên tắc "mọi giao diện mới nằm trong tab console", không thêm module mới) hay dialog riêng? | Tab thứ 5 trong SECTION 3 — cùng không gian làm việc với nháp + train, luồng duyệt liền tay (đã thiết kế sẵn §10 — chỉ cần user xác nhận) | ☑ CHỐT tab thứ 5 SECTION 3 (thiết kế §10) |
+| Q7 *(v0.2)* | Vị trí giao diện: tab "Tìm kiếm" ngay trong SECTION 3 tab BRAIN (khuyến nghị — đúng nguyên tắc "mọi giao diện mới nằm trong tab console", không thêm module mới) hay dialog riêng? | Tab trong SECTION 3 — cùng không gian làm việc với nháp + train, luồng duyệt liền tay (đã thiết kế sẵn §10 — chỉ cần user xác nhận) | ☑ CHỐT tab trong SECTION 3 — hiệu đính 0.2.2 (Task 25): slot 5 đã có tab "Quan sát" OBS-P3 → "Tìm kiếm" là tab **thứ 6** |
 
 ---
 
@@ -487,9 +495,10 @@ này để không phải đổi tên sau. Sự kiện `proposal.apply` (user b�
 3. **Hiện/ẩn theo cờ, không theo vòng đời:** tab ẩn hoàn toàn khi `brain_search`
    off (R7). Cờ on + brain ngủ → tab HIỆN nhưng thân là trạng thái S1 — không
    có đường "cờ on mà không thấy gì" để user tưởng lỗi.
-4. **Mobile-first:** tab bar 5 nút giữ pattern `min-h-[44px] md:min-h-[32px]` +
-   `text-[10px]` (label "Tìm kiếm" ≤ 10 ký tự — 375px: 5 nút × ~75px vẫn
-   thoải mái); bảng xếp hạng bọc `overflow-x-auto max-h-96 overflow-y-auto`
+4. **Mobile-first:** tab bar 6 nút giữ pattern `min-h-[44px] md:min-h-[32px]` +
+   `text-[10px]` (label "Tìm kiếm" ≤ 10 ký tự — 375px: 6 nút × ~62px vẫn
+   thoải mái; hiệu đính 0.2.2: 5 nút cũ + "Tìm kiếm"); bảng xếp hạng bọc
+   `overflow-x-auto max-h-96 overflow-y-auto`
    (đúng pattern tab "Tham số runtime" hiện có).
 5. **A11y:** `role=tab/tabpanel` + `aria-selected` theo tablist sẵn có ·
    progress `aria-live="polite"` (screen reader nghe được tiến độ) · nút chỉ-icon

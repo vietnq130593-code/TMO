@@ -1,6 +1,11 @@
 # BLUEPRINT GIAO THỨC QUAN SÁT V2 P1 → P4 — "TOÀN CẢNH VẬN HÀNH DATABASE · NÃO · TỰ HỌC"
 
-> **Phiên bản:** 0.3 — **☑ TRIỂN KHAI HOÀN TẤT OBS-P1→P4 2026-10-13 (Task 23)
+> **Phiên bản:** 0.3.1 — **Task 25 (2026-10-13, chỉ thị user): tab "Quan sát"
+> TÍCH HỢP VÀO tab BRAIN › SECTION 3** (tab console thứ 5 "Quan sát" — không
+> còn tab riêng cấp module Smolab; prop điều hướng chéo đã gỡ; localStorage cũ
+> 'observation' chuyển hướng sang 'brain'; HyperNAS "Tìm kiếm" chuyển thành tab
+> thứ 6 — xem hiệu đính 0.2.2 BLUEPRINT-HYPERNAS). Không đổi dữ liệu/API/cờ.
+> **0.3 — ☑ TRIỂN KHAI HOÀN TẤT OBS-P1→P4 2026-10-13 (Task 23)
 > — §7 chốt theo khuyến nghị, gate 4 tầng PASS, live verify agent-browser.**
 > *(0.2 — §7 chốt cùng ngày, user chỉ thị: "7 câu hỏi mở hãy theo đề xuất của
 > bạn đi. Sau đó tiến hành triển khai Blueprint Observation".)*
@@ -28,7 +33,7 @@
 |---|---|---|---|---|---|
 | **OBS-P1** | Observation Ledger core | Bảng `ObservationEvent` append-only (model 103) + helper `observeEvent()` + hooks đợt 1 (điểm nóng: brain train/infer, tuning change, agent run start/end) | `src/lib/observation/ledger.ts` · prisma model 103 | `obs_ledger` (off) | r95 |
 | **OBS-P2** | Brain Inference Trace + Timeline API | Bảng `BrainInferenceTrace` (model 104) lưu MỖI lần não suy diễn + `GET /api/observation/timeline` lọc/runId/kind/actor | `src/lib/observation/trace.ts` · route timeline | `obs_brain_trace` (off) | r96 |
-| **OBS-P3** | UI Panorama + Kim tuyến | Tab "Quan sát" mới (module Smolab): timeline dọc live-poll + filter + drill-down payload + chế độ "kim tuyến" nhập runId → chuỗi sự kiện trọn vẹn của run | `src/components/smolab/observation-tab.tsx` | `ui_observation` (off) | r97 |
+| **OBS-P3** | UI Panorama + Kim tuyến | Tab "Quan sát" (Task 25: trong tab BRAIN › SECTION 3 — tab console thứ 5; bản gốc: tab riêng module Smolab): timeline dọc live-poll + filter + drill-down payload + chế độ "kim tuyến" nhập runId → chuỗi sự kiện trọn vẹn của run | `src/components/smolab/observation-tab.tsx` (render bởi brain-tab) | `ui_observation` (off) | r97 |
 | **OBS-P4** | Impact Tracker + Meta-health | Job nền so sánh KPI window trước/sau mỗi TuningChangeLog (correlation, KHÔNG claim nhân quả) + sự kiện search.* HyperNAS + sức khỏe của chính ledger (độ trễ ghi, queue drop) | `src/lib/observation/impact.ts` | `obs_impact` (off) | r98 |
 
 **Tiến độ:** ☑ OBS-P1 ☑ OBS-P2 ☑ OBS-P3 ☑ OBS-P4 — **HOÀN TẤT 2026-10-13
@@ -216,7 +221,7 @@ theo runId, **cả 2 nguồn trong 1 response** (kind `brain.infer`). Read-only,
 không ghi gì. Rate-guard nhẹ (poll thích ứng 2,5s chạy / 15s idle precedent —
 tái dùng pattern tab BRAIN).
 
-### C.5 UI Tab "Quan sát" (OBS-P3 — module Smolab, tab mới cạnh BRAIN)
+### C.5 UI Tab "Quan sát" (OBS-P3 — tích hợp vào tab BRAIN › SECTION 3, Task 25; bản gốc 0.1: tab riêng cạnh BRAIN)
 
 1. **Timeline dọc** live-poll thích ứng (2,5s khi có activity mới / 15s idle —
    precedent tab BRAIN): mỗi sự kiện 1 dòng (ts · actor badge · kind chip
@@ -226,8 +231,9 @@ tái dùng pattern tab BRAIN).
 3. **Kim tuyến (golden thread):** nhập/chọn runId → timeline lọc chỉ run đó + tự
    vẽ giai đoạn (run.start → các db.write/brain.infer xếp giữa → run.end) — đây là
    câu trả lời trực tiếp "toàn cảnh mỗi khi agent vận hành".
-4. **Panel nhãn & não:** breakdown nhãn theo nguồn (GAP-8) + lifecycle 3 brain +
-   link sang tab BRAIN (không nhân bản dashboard — single-source API cũ).
+4. **Panel nhãn & não:** breakdown nhãn theo nguồn (GAP-8) + lifecycle 3 brain
+   (single-source API cũ — không nhân bản dashboard; Task 25 gỡ nút điều hướng
+   chéo vì đã nằm trong tab BRAIN, SECTION 1 ngay phía trên).
 
 ### C.6 Impact Tracker (OBS-P4)
 
@@ -291,7 +297,7 @@ UI panorama (P3) cần API (P2) đủ ổn.
 | Q1 | Triển khai OBS V2 ngay hay chờ? | **OBS-P1 có thể triển khai ngay** (ledger rỗng chạy vô hại, cờ off overhead 0) — dữ liệu bắt đầu được bảo toàn từ sớm | ☑ CHỐT triển khai ngay — user chỉ thị triển khai toàn bộ P1→P4 |
 | Q2 | Mặc định payload inference chỉ hash (tiết kiệm) hay full vector (chi tiết)? | Hash mặc định (`obs_brain_trace` bật full khi cần điều tra) | ☑ CHỐT hash mặc định |
 | Q3 | Prune 50K/30 ngày đủ chưa? | Đủ cho sandbox; chỉnh bằng cờ nếu cần | ☑ CHỐT 50K/30 ngày (event) + 20K/14 ngày (trace) — hardcode kèm nguồn |
-| Q4 | Tab "Quan sát" để module Smolab (khuyến nghị) hay module riêng? | Smolab — đúng trung tâm thí nghiệm | ☑ CHỐT Smolab, tab cạnh BRAIN (id 'observation') |
+| Q4 | Tab "Quan sát" để module Smolab (khuyến nghị) hay module riêng? | Smolab — đúng trung tâm thí nghiệm | ☑ CHỐT Smolab, tab cạnh BRAIN (id 'observation') · **Hiệu đính Task 25: tích hợp VÀO tab BRAIN › SECTION 3 (tab console thứ 5) theo chỉ thị user 2026-10-13** |
 | Q5 | Impact tracker 24h window có hợp lý (agents vận hành không đều)? | Cửa sổ trượt theo "N sự kiện vận hành" thay vì giờ cố định — chốt khi triển khai OBS-P4 | ☑ CHỐT TẠI TRIỂN KHAI: KpiSnapshot có hạt độ THEO NGÀY (1 dòng/ngày/KPI) nên cửa sổ "N sự kiện" không chiếu được vào nguồn dữ liệu này — cửa sổ chốt = **snapshot ngày liền trước đổi vs snapshot ngày liền sau đổi** (tra tối đa ±3 ngày mỗi bên, cần đủ cả 2 bên mới tính, đợi tối thiểu 24h sau change), payload ghi rõ granularity + framing "correlation — KHÔNG claim nhân quả" (RO-6). Trung thực với nguồn dữ liệu hơn là vẽ cửa sổ giả chính xác |
 
 ---

@@ -1,6 +1,7 @@
 /**
- * ROUND-97 TESTS — OBS-P3 · UI TAB "QUAN SÁT" (module Smolab)
- * (BLUEPRINT-OBSERVATION-P1-P4 §C.5 — chốt §7 Task 23 2026-10-13)
+ * ROUND-97 TESTS — OBS-P3 · UI TAB "QUAN SÁT" (tab BRAIN › SECTION 3)
+ * (BLUEPRINT-OBSERVATION-P1-P4 §C.5 — chốt §7 Task 23 2026-10-13; Task 25
+ * tích hợp vào tab BRAIN theo chỉ thị user cùng ngày)
  *
  * Pattern: SOURCE-SCAN (r92-E precedent — pin chống hồi quy cấu trúc wiring
  * UI, không render thật) + PURE helper kinds.ts (import trực tiếp).
@@ -18,9 +19,11 @@
  *      max-h-96 overflow-y-auto (long-list rule) · min-h-[44px] (touch) ·
  *      aria-live + aria-label · off-state cờ ui_observation + nút bật nhanh
  *      POST /api/neural-architecture (precedent hitech-toggle) · chip 4 cờ.
- *   C. smolab-module.tsx: tab 'observation' đăng ký cạnh BRAIN + render
- *      ObservationTabContent + onOpenBrainTab → setActiveSmolabTab('brain')
- *      (đã pin r95-H7 — đây pin sâu hơn icon/label).
+ *   C. brain-tab.tsx (Task 25): tab 'observation' đăng ký trong SECTION 3
+ *      (consoleTab union 5 giá trị + entry tablist + render
+ *      ObservationTabContent KHÔNG kèm onOpenBrainTab — đã ở trong tab BRAIN)
+ *      + smolab-module KHÔNG còn tab riêng (chống hồi quy) + localStorage cũ
+ *      'observation' chuyển hướng sang 'brain'.
  *   D. timeline route: contract source — validate limit/before/since + KHÔNG
  *      có lệnh ghi (create/update/deleteMany) trong route (READ-ONLY §C.4 —
  *      đối chứng behavioral r96-E).
@@ -36,6 +39,7 @@ import {
 
 const readSrc = (rel: string): string => readFileSync(join(process.cwd(), rel), 'utf-8')
 const tab = readSrc('src/components/smolab/observation-tab.tsx')
+const brainTab = readSrc('src/components/smolab/brain-tab.tsx')
 const smolab = readSrc('src/components/smolab/smolab-module.tsx')
 const route = readSrc('src/app/api/observation/timeline/route.ts')
 
@@ -149,23 +153,33 @@ describe('r97 · B — observation-tab.tsx wiring (§C.5)', () => {
   })
 })
 
-// ==================== C. smolab-module đăng ký tab ====================
+// ==================== C. brain-tab SECTION 3 đăng ký tab Quan sát (Task 25) ====================
 
-describe('r97 · C — smolab-module tab Quan sát (Q4 §7 chốt: cạnh BRAIN)', () => {
-  test('C1 entry SMOLAB_TABS sau brain + icon Eye màu cyan', () => {
-    const brainIdx = smolab.indexOf("{ id: 'brain', label: 'BRAIN', icon: BrainCircuit, color: 'amber' }")
-    const obsIdx = smolab.indexOf("{ id: 'observation', label: 'Quan sát', icon: Eye, color: 'cyan' }")
-    expect(brainIdx).toBeGreaterThan(0)
-    expect(obsIdx).toBeGreaterThan(brainIdx) // ĐÚNG SAU brain — cạnh BRAIN
+describe('r97 · C — tab Quan sát tích hợp VÀO tab BRAIN › SECTION 3 (chỉ thị user 2026-10-13 Task 25)', () => {
+  test('C1 consoleTab union 5 giá trị + entry tablist sau "Hàm & công thức"', () => {
+    expect(brainTab).toContain("'train' | 'tuning' | 'log' | 'ref' | 'observation'")
+    const refIdx = brainTab.indexOf("['ref', 'Hàm & công thức']")
+    const obsIdx = brainTab.indexOf("['observation', 'Quan sát']")
+    expect(refIdx).toBeGreaterThan(0)
+    expect(obsIdx).toBeGreaterThan(refIdx) // tab Quan sát ở CUỐI tablist
+    expect(brainTab).toContain("consoleTab === 'observation'")
   })
 
-  test('C2 render switch + onOpenBrainTab nhảy tab BRAIN', () => {
-    expect(smolab).toContain("activeSmolabTab === 'observation'")
-    expect(smolab).toContain("<ObservationTabContent onOpenBrainTab={() => setActiveSmolabTab('brain')} />")
+  test('C2 render ObservationTabContent — KHÔNG truyền onOpenBrainTab (đã ở trong tab BRAIN, prop đã gỡ)', () => {
+    expect(brainTab).toContain("import { ObservationTabContent } from '@/components/smolab/observation-tab'")
+    expect(brainTab).toContain('<ObservationTabContent />')
+    // prop + nút "Mở tab BRAIN" gỡ sạch ở CẢ 2 file (không đường navigate chéo)
+    expect(brainTab).not.toContain('onOpenBrainTab')
+    expect(tab).not.toContain('onOpenBrainTab')
+    expect(tab).not.toContain('Mở tab BRAIN')
   })
 
-  test('C3 import ObservationTabContent tồn tại', () => {
-    expect(smolab).toContain("import { ObservationTabContent } from '@/components/smolab/observation-tab'")
+  test('C3 smolab-module KHÔNG còn tab riêng cấp module (chống hồi quy — chỉ đăng ký qua SECTION 3)', () => {
+    expect(smolab).not.toContain("{ id: 'observation'")
+    expect(smolab).not.toContain("activeSmolabTab === 'observation'")
+    // localStorage cũ 'observation' chuyển hướng sang 'brain' (không rơi về knowledge)
+    expect(smolab).toContain("if (saved === 'observation')")
+    expect(smolab).toContain("saved = 'brain'")
   })
 })
 

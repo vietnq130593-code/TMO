@@ -4,7 +4,9 @@
  * OBS-P3 (BLUEPRINT-OBSERVATION §C.5 — chốt §7 Task 23 2026-10-13)
  * ============================================================================
  *
- * TAB "QUAN SÁT" (module Smolab, cạnh BRAIN) — "bảng bệnh án toàn thân":
+ * TAB "QUAN SÁT" (BRAIN › SECTION 3 — tab console thứ 5, tích hợp vào tab
+ * BRAIN theo chỉ thị user 2026-10-13 Task 25; trước đây là tab riêng cấp
+ * module Smolab cạnh BRAIN) — "bảng bệnh án toàn thân":
  *
  *   1. Timeline dọc live-poll THÍCH ỨNG (2,5s khi có sự kiện mới / 15s idle —
  *      precedent tab BRAIN): ts · actor badge · kind chip màu theo nhóm ·
@@ -16,8 +18,8 @@
  *      tắt run (start → end, thời lượng, đếm theo nhóm) — câu trả lời trực
  *      tiếp "toàn cảnh mỗi khi agent vận hành".
  *   4. Panel nhãn & não: lifecycle 3 brain + tín hiệu nhãn current/threshold
- *      theo nguồn (GAP-8) + nút sang tab BRAIN (single-source /api/brain —
- *      không nhân bản dashboard).
+ *      theo nguồn (GAP-8) — single-source /api/brain (không nhân bản
+ *      dashboard; SECTION 1 ngay phía trên đã có chi tiết đầy đủ).
  *
  * Cờ ui_observation (off mặc định) — off hiển thị trạng thái tắt + nút bật
  * nhanh (POST /api/neural-architecture precedent hitech-toggle). Cờ
@@ -128,7 +130,7 @@ const LIFECYCLE_BADGE: Record<BrainFeedEntry['lifecycle'], { label: string; cls:
 
 // ==================== COMPONENT ====================
 
-export function ObservationTabContent({ onOpenBrainTab }: { onOpenBrainTab?: () => void }) {
+export function ObservationTabContent() {
   // ── State dữ liệu ──
   const [data, setData] = useState<TimelineResponse | null>(null)
   const [brains, setBrains] = useState<BrainFeedEntry[] | null>(null)
@@ -551,17 +553,9 @@ export function ObservationTabContent({ onOpenBrainTab }: { onOpenBrainTab?: () 
                     tổng nhãn {labelTotal.toLocaleString('vi-VN')}
                   </span>
                 )}
-                {onOpenBrainTab && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    className="ml-auto h-7 gap-1 text-[10px] text-stone-400"
-                    onClick={onOpenBrainTab}
-                    aria-label="Mở tab BRAIN"
-                  >
-                    Mở tab BRAIN →
-                  </Button>
-                )}
+                {/* Task 25: nút điều hướng sang tab não đã gỡ — component giờ
+                    nằm NGAY TRONG tab BRAIN (SECTION 3); SECTION 1 (chọn não +
+                    ngưỡng thức tỉnh) ngay phía trên cùng trang. */}
               </div>
               <div className="grid gap-2 sm:grid-cols-3">
                 {(brains ?? []).map(b => {
