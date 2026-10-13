@@ -47,6 +47,16 @@ import { EventEmitter } from 'events'
 import { getTuningEnum, getTuningNumber } from '@/lib/learning/tuning-store'
 // Type-only import (erased lúc runtime — không tạo thêm module instance)
 import type { DocumentPayload } from '@/lib/qdrant'
+// 2026-10-14 — OpenCode account OAuth session (device flow): opencode-oauth.ts
+// KHÔNG import lại llm.ts (1 chiều — không cycle). Session token tài khoản
+// OpenCode dùng làm Bearer dự phòng cho model free bị chặn FreeTierError với
+// oc_sk key ("free tier can only be used from within OpenCode" — Task 28).
+import {
+  getValidZenSessionToken,
+  isSessionRecentlyRejected,
+  noteSessionRejected,
+  OPENCODE_SESSION_HEADERS,
+} from '@/lib/opencode-oauth'
 // ROUND-50 (P3-ζ r49 — bằng chứng user 2026-10-06 dán thought content nguyên văn
 // `]<]minimax[>[` từ UI): space-bunny-free (model nền MiniMax) leak chat-template
 // marker vào content. Strip TẠI NGUỒN mọi response zen để MỌI consumer (thought
@@ -339,27 +349,39 @@ const NVIDIA_EXTRACTION_MODELS = [
   'nvidia/nemotron-3-ultra-550b-a55b',
 ]
 
-/** NVIDIA NIM AGENT/CHAT models (user directive 2026-11-30):
- *  CHỈ CÒN kimi-k3 — giữ lại như 1 LỰA CHỌN model agent TẠM THỜI ("nếu kimi
- *  k3 sống được thì giữ lại như 1 lựa chọn"). Chọn kimi-k3 trong UI → agent
- *  route THẬT qua NIM kimi-k3; NIM 429 kéo dài/hang → callLLMForAgent tự
- *  fallback chuỗi Zen space-bunny-free (agent không chết).
+/** NVIDIA NIM AGENT/CHAT models (user directive 2026-11-30 + user request
+ *  2026-10-14):
+ *  - kimi-k3 — giữ lại như 1 LỰA CHỌN model agent TẠM THỜI ("nếu kimi k3
+ *    sống được thì giữ lại như 1 lựa chọn"). Chọn kimi-k3 → agent route THẬT
+ *    qua NIM kimi-k3; NIM 429 kéo dài/hang → fallback chuỗi Zen SBF.
+ *  - deepseek-ai/deepseek-v4.1-flash — THÊM 2026-10-14 theo user request
+ *    "thêm deepseek-v4.1-flash vào danh sách lựa chọn". Lõi NIM sống nhanh
+ *    (~2s/call — live-probe Task 28), từ trước là tier NIM RESCUE cuối chuỗi,
+ *    giờ là lựa chọn dropdown chính thức (route NIM thật, fail → fallback Zen).
  *
  *  Live-probe 2026-11-30: kimi-k3 ALIVE nhưng CHẬM (~120s cho prompt tối giản
- *  — verified curl 200 sau 2p0s). Toàn bộ lõi khác ĐÃ LOẠI BỎ theo user
- *  directive ("toàn bộ loại bỏ luôn" — xác nhận 410 EOL live-probe 2026-11-30):
+ *  — verified curl 200 sau 2p0s); deepseek-v4.1-flash ALIVE nhanh ~2s. Toàn
+ *  bộ lõi khác ĐÃ LOẠI BỎ theo user directive ("toàn bộ loại bỏ luôn" — xác
+ *  nhận 410 EOL live-probe 2026-11-30):
  *    minimaxai/minimax-m3 (EOL 2026-09-09) · deepseek-ai/deepseek-v4-pro-0813
  *    (EOL 2026-09-14) · deepseek-ai/deepseek-v4-flash-0731 (EOL 2026-09-21).
  *  (Lịch sử: minimax-m3 từng là lõi chính tạm thời 2026-10-16 — đã EOL.)
  */
 const NVIDIA_AGENT_MODELS = [
   'moonshotai/kimi-k3',
+  'deepseek-ai/deepseek-v4.1-flash',
 ]
 
 /** Kimi K3 NIM id — lựa chọn model agent NIM tạm thời (user directive
  *  2026-11-30). Dùng bởi callLLMForAgent (route NIM thật) + UI/agents
  *  (validation + boot migration phải TÔN TRỌNG giá trị này, không normalize). */
 export const KIMI_K3_NIM_ID = 'moonshotai/kimi-k3'
+
+/** DeepSeek v4.1 Flash NIM id — lựa chọn dropdown chính thức (user request
+ *  2026-10-14). Cùng pattern KIMI_K3_NIM_ID: chọn → callLLMForAgent route NIM
+ *  thật; NIM chết → fallback chuỗi Zen. Đồng thời là NIM RESCUE MODEL mặc định
+ *  (tier cuối callLLMForAgent — env NIM_RESCUE_MODEL override). */
+export const DEEPSEEK_V41_FLASH_NIM_ID = 'deepseek-ai/deepseek-v4.1-flash'
 
 /**
  * KIMI-K3 TIMEOUT RIÊNG (user directive 2026-12-01: "kimi-k3 là siêu model
@@ -384,11 +406,12 @@ const KIMI_K3_TIMEOUT_MS = Math.max(
 )
 
 /**
- * NVIDIA_MODELS (updated 2026-11-30): = NVIDIA_AGENT_MODELS (1 lõi chat —
- * kimi-k3, lựa chọn NIM tạm thời). nemotron-3-ultra-550b KHÔNG thuộc danh
- * sách này — lõi extraction duy nhất (NVIDIA_EXTRACTION_MODELS).
+ * NVIDIA_MODELS (updated 2026-11-30 + 2026-10-14): = NVIDIA_AGENT_MODELS (2
+ * lõi chat — kimi-k3 tạm thời + deepseek-v4.1-flash). nemotron-3-ultra-550b
+ * KHÔNG thuộc danh sách này — lõi extraction duy nhất
+ * (NVIDIA_EXTRACTION_MODELS).
  * Deprecated (404/410): kimi-k2.6, glm-5.1, minimax-m2.7, qwen3.5-397b,
- * minimax-m3 + cả dòng deepseek (đã loại bỏ toàn bộ 2026-11-30).
+ * minimax-m3 + dòng deepseek v4.0 (đã loại bỏ toàn bộ 2026-11-30).
  */
 // Alias of NVIDIA_AGENT_MODELS — same chat core(s), same failover order.
 // (Kept as a separate export because getNvidiaModels() + the pool log line
@@ -4323,6 +4346,42 @@ export function markZenFreeTierBlocked(transport: 'http' | 'cli', model: string,
 }
 
 /**
+ * 2026-10-14 (OpenCode account login): XOÁ các entry chặn free-tier khi
+ * session tài khoản OpenCode đã xác thực MỞ ĐƯỢC model (probe/call thật OK
+ * qua session token). Block cache phản ánh trạng thái oc_sk key — khi có
+ * đường session hoạt động, badge ⚠ dropdown (zenModelBlockSummary) phải
+ * sạch lại để UI "nói thật" theo trạng thái MỚI NHẤT (đúng tinh thần r74).
+ * Xoá cả memory process này LẪN file dùng chung (r74b cross-process).
+ */
+export function clearZenFreeTierBlocks(transport: 'http' | 'cli', models: string[]): void {
+  const keys = models.map(m => `${transport}:${m}`)
+  let changedMem = false
+  for (const key of keys) {
+    if (zenFreeTierBlockedUntil.delete(key)) changedMem = true
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('fs') as typeof import('fs')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('path') as typeof import('path')
+    const now = Date.now()
+    const merged: Record<string, ZenBlockEntry> = {}
+    // Gộp file + memory (trừ các key vừa xoá), prune hết hạn — mirror writeZenBlockStateFile
+    for (const [k, v] of Object.entries(readZenBlockStateFile())) {
+      if (v && typeof v.until === 'number' && v.until > now && !keys.includes(k)) merged[k] = v
+    }
+    for (const [k, v] of zenFreeTierBlockedUntil) {
+      if (v.until > now && !keys.includes(k)) merged[k] = v
+    }
+    const file = zenBlockStateFile()
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, JSON.stringify(merged, null, 2) + '\n')
+    zenBlockFileCache = null // invalidate — lần đọc sau lấy file mới
+    console.log(`[ZEN] ✅ Xoá block-cache ${transport} cho ${models.length} model (session OpenCode account đã mở free-tier)${changedMem ? '' : ' (chỉ file)'}`)
+  } catch { /* best-effort — memory process này đã xoá là chính */ }
+}
+
+/**
  * r74 (BUG2-033 — dropdown model "nói thật"): snapshot trạng thái chặn
  * free-tier ĐANG SỐNG của các model zen (mục đích: /api/agents/models gắn
  * blockedTransports cho từng model → UI hiển thị badge ⚠ + fallback rõ ràng).
@@ -4556,6 +4615,97 @@ function isZenModelId(model: string): boolean {
  * Used when agent's configured provider === 'zen'.
  * Returns LLMResult with empty content + error on failure (caller falls back to NIM).
  */
+/**
+ * 2026-10-14 — ZEN SESSION TOKEN TRANSPORT (OpenCode account login).
+ * USER REQUEST: "opencode auth login bằng account OpenCode để dùng các lõi
+ * free" — khi model bị Zen chặn FreeTierError với oc_sk key ("free tier can
+ * only be used from within OpenCode" — Task 28), thử lại CÙNG request nhưng
+ * Bearer = session token tài khoản OpenCode (device flow — src/lib/opencode-
+ * oauth.ts) + bộ header nhận diện app opencode (UA opencode/<ver> +
+ * x-opencode-client — trích từ binary CLI v1.19.0, chính là header desktop
+ * app gửi cho provider opencode).
+ *
+ * Trả null khi: chưa đăng nhập / session bị từ chối <60s qua (cooldown chống
+ * đốt timeout mỗi call) / request fail → caller tiếp tục đúng chuỗi cũ
+ * (CLI → ZEN FAILOVER → LAST RESORT → NIM RESCUE) — KHÔNG thay đổi hành vi
+ * khi không có session. Thành công → xoá block-cache model này (dropdown bỏ
+ * badge ⚠ — UI nói thật trạng thái mới).
+ */
+async function tryZenHttpWithSession(
+  body: Record<string, unknown>,
+  model: string,
+  options: LLMCallOptions | undefined,
+  taskLabel: string,
+  timeoutMs: number,
+  zenInputChars: number,
+): Promise<LLMResult | null> {
+  if (isSessionRecentlyRejected()) return null // 401/403 với session <60s qua — bỏ qua
+  const token = await getValidZenSessionToken()
+  if (!token) return null // chưa đăng nhập tài khoản OpenCode
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const res = await fetch(`${ZEN_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        ...OPENCODE_SESSION_HEADERS,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
+    if (res.ok) {
+      const data = await res.json() as {
+        choices?: Array<{ message?: { content?: string; tool_calls?: LLMToolCall[] }; finish_reason?: string | null }>
+        model?: string
+        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; completion_tokens_details?: { reasoning_tokens?: number } }
+      }
+      const choice = data.choices?.[0]
+      const content = stripProviderGarbleMarkers(choice?.message?.content ?? '')
+      const nativeToolCalls = choice?.message?.tool_calls
+      const actualModel = data.model || model
+      const totalTokens = data.usage?.total_tokens ?? ((data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0))
+      if (!content && !(nativeToolCalls && nativeToolCalls.length > 0)) {
+        console.warn(`[ZEN-SESSION] ${taskLabel} 200 nhưng EMPTY RESPONSE (session token) — rơi về chuỗi thường`)
+        return null
+      }
+      // Session MỞ ĐƯỢC model này → xoá block-cache (badge ⚠ dropdown sạch lại)
+      clearZenFreeTierBlocks('http', [model])
+      recordZenCharsPerToken(zenInputChars, data.usage?.prompt_tokens)
+      if (totalTokens > 0) addTokensUsed(totalTokens, 'zen', undefined, actualModel)
+      if (totalTokens > 0 && options?.agentId && options?.agentName) {
+        addTokensUsedByAgent(totalTokens, data.usage?.prompt_tokens ?? 0, data.usage?.completion_tokens ?? 0, 'zen', actualModel, options.agentId, options.agentName)
+      }
+      console.log(`[ZEN-SESSION] ${taskLabel} OK (session OpenCode account) — ${content.length} chars, model ${actualModel}${totalTokens ? `, ${totalTokens} tokens` : ''}`)
+      return {
+        content,
+        provider: 'zen',
+        model: actualModel,
+        tokensUsed: totalTokens || undefined,
+        reasoningTokens: data.usage?.completion_tokens_details?.reasoning_tokens ?? undefined,
+        tool_calls: nativeToolCalls && nativeToolCalls.length > 0 ? nativeToolCalls : undefined,
+        finish_reason: choice?.finish_reason ?? null,
+      }
+    }
+    const errBody = await res.text().catch(() => '')
+    if (res.status === 403 && (/FreeTierError/i.test(errBody) || /free tier/i.test(errBody))) {
+      noteSessionRejected(`403 FreeTierError với session token: ${errBody.slice(0, 120)}`)
+    } else if (res.status === 401) {
+      noteSessionRejected(`401 — session OpenCode account hết hạn hoặc không hợp lệ: ${errBody.slice(0, 120)}`)
+    } else {
+      // 429/5xx/… — lỗi tạm thời không đổ cho session; không poison cooldown
+      console.warn(`[ZEN-SESSION] ${taskLabel} HTTP ${res.status} (session token): ${errBody.slice(0, 140)}`)
+    }
+    return null
+  } catch (err) {
+    console.warn(`[ZEN-SESSION] ${taskLabel} lỗi mạng (session token):`, err instanceof Error ? err.message : String(err))
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function callZenProvider(
   prompt: string,
   systemPrompt: string | undefined,
@@ -4579,10 +4729,12 @@ async function callZenProvider(
   }
 
   // TASK 34 — free-tier block cache: model đã bị chặn ở HTTP (gặp FreeTierError
-  // trong 15 phút) → skip fetch thẳng để caller sang CLI/failover NGAY
-  if (isZenFreeTierBlocked('http', model)) {
-    return { content: '', provider: 'zen', model, error: 'Zen HTTP free-tier blocked (cached — model bị Zen chặn với API key, policy ~2026-09-25)' }
-  }
+  // trong 15 phút) → skip fetch thẳng để caller sang CLI/failover NGAY.
+  // 2026-10-14 (OpenCode account login): KHÔNG return sớm như trước — nếu đã
+  // đăng nhập tài khoản OpenCode (session token) thì thử session TRƯỚC (thân
+  // hàm, sau khi build body): session mở được model → block oc_sk hết nghĩa;
+  // session fail → trả đúng lỗi cached-block như cũ (chuỗi CLI/failover giữ nguyên).
+  const httpBlockedByCache = isZenFreeTierBlocked('http', model)
 
   // ROUND-3 FIX (2026-09-29 — quan sát vận hành vòng 3): timeout co giãn theo
   // kích thước INPUT. Bằng chứng dev.log ~07:2x: evaluator chu kỳ 17 MEGATRON
@@ -4671,6 +4823,16 @@ async function callZenProvider(
   const timer = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
+    // ━━ 2026-10-14 — SESSION TOKEN OpenCode account (model bị chặn oc_sk) ━━
+    // Block-cache nói oc_sk key đã bị Zen chặn với model này (FreeTierError /
+    // 402 hết credit) → thử session token tài khoản TRƯỚC khi bỏ cuộc. Chưa
+    // đăng nhập / session bị từ chối → tryZenHttpWithSession trả null ngay
+    // (fast-path, không tốn mạng) → trả lỗi cached-block như hành vi cũ.
+    if (httpBlockedByCache) {
+      const sessionResult = await tryZenHttpWithSession(body, model, options, `${taskLabel} [session]`, timeoutMs, zenInputChars)
+      if (sessionResult) return sessionResult
+      return { content: '', provider: 'zen', model, error: 'Zen HTTP free-tier blocked (cached — model bị Zen chặn với API key oc_sk; session OpenCode account chưa mở được model này — policy Zen, xem /api/opencode/auth/status)' }
+    }
     // ━━ r71 (BUG2-020a) — VÒNG XOAY KEY KHI 429 (trong CÙNG call) ━━
     // Bằng chứng r70: key #1 429 FreeUsageLimitError → return error ngay →
     // CLI thiếu binary → failover model trùng model chính bị skip → chuỗi
@@ -4722,10 +4884,20 @@ async function callZenProvider(
       // RegionError (geo-block), 402 (hết credit cho model trả phí)
       if (response.status === 403 && (errBody.includes('FreeTierError') || errBody.toLowerCase().includes('free tier'))) {
         markZenFreeTierBlocked('http', model, 'HTTP 403 FreeTierError — model free bị Zen chặn với API key ở transport HTTP (chỉ space-bunny-free còn mở API HTTP) — model này sẽ chuyển tiếp về ZEN FAILOVER (r74: native CLI cũng đã bị chặn lại — xem BUG2-033)', 60_000)
+        // 2026-10-14 — oc_sk bị chặn free-tier → thử NGAY session OpenCode
+        // account trong CÙNG call (không đợi call sau): đăng nhập rồi thì call
+        // này vẫn thành công, không rơi xuống CLI/failover.
+        const sessionResult = await tryZenHttpWithSession(body, model, options, `${taskLabel} [session]`, timeoutMs, zenInputChars)
+        if (sessionResult) return sessionResult
       } else if (response.status === 403 && (errBody.includes('RegionError') || /not available in your region/i.test(errBody))) {
         markZenFreeTierBlocked('http', model, 'HTTP 403 RegionError — model geo-block tại vùng máy chủ này')
+        // RegionError = geo-block theo IP máy chủ — session không đổi IP, bỏ qua
       } else if (response.status === 402) {
         markZenFreeTierBlocked('http', model, 'HTTP 402 — tài khoản không đủ credit cho model trả phí này (nạp credit để dùng)')
+        // 2026-10-14 — 402 = oc_sk hết credit, nhưng session tài khoản OpenCode
+        // CÓ THỂ còn credit riêng → thử session trước khi bỏ cuộc.
+        const sessionResult = await tryZenHttpWithSession(body, model, options, `${taskLabel} [session]`, timeoutMs, zenInputChars)
+        if (sessionResult) return sessionResult
       }
       console.warn(`[ZEN] ${taskLabel} HTTP ${response.status}: ${errBody.slice(0, 200)}`)
       return { content: '', provider: 'zen', model, error: `Zen HTTP ${response.status}: ${errBody.slice(0, 150)}` }
@@ -5545,16 +5717,38 @@ export async function callLLMForAgent(
     console.warn(`[LLM] Agent NIM ${KIMI_K3_NIM_ID} thất bại toàn chuỗi xoay key (429 kéo dài/EOL — user directive 2026-11-30: kimi-k3 tạm thời) → fallback chuỗi Zen space-bunny-free${options?.agentName ? ` — agent: ${options.agentName}` : ''}: ${String(nimResult?.error || 'null result').slice(0, 120)}`)
   }
 
+  // ===== USER REQUEST 2026-10-14 — DEEPSEEK-V4.1-FLASH (NIM) LỰA CHỌN CHÍNH THỨC =====
+  // Cùng pattern kimi-k3 phía trên: chọn deepseek-v4.1-flash trong dropdown →
+  // route THẬT qua NIM (xoay 4 key — model này ~2s/call nên timeout base
+  // LLM_TIMEOUT_MS là đủ, không cần timeout riêng như kimi-k3). NIM 429 kéo
+  // dài/EOL → fallback chuỗi Zen space-bunny-free phía dưới (agent không chết).
+  if (model === DEEPSEEK_V41_FLASH_NIM_ID) {
+    const nimResult = await callModelWithKeyRotation(
+      DEEPSEEK_V41_FLASH_NIM_ID,
+      prompt,
+      systemPrompt,
+      options,
+      { taskLabel: `agent-nim:${DEEPSEEK_V41_FLASH_NIM_ID}` },
+    )
+    if (nimResult && (nimResult.content || (nimResult.tool_calls && nimResult.tool_calls.length > 0))) {
+      const tcCount = nimResult.tool_calls?.length ?? 0
+      console.log(`[LLM] Agent dùng NIM ${DEEPSEEK_V41_FLASH_NIM_ID} ✓ (${tcCount} tool_calls, ${nimResult.tokensUsed ?? 0} tokens)${options?.agentName ? ` — agent: ${options.agentName}` : ''}`)
+      return nimResult
+    }
+    console.warn(`[LLM] Agent NIM ${DEEPSEEK_V41_FLASH_NIM_ID} thất bại toàn chuỗi xoay key → fallback chuỗi Zen space-bunny-free${options?.agentName ? ` — agent: ${options.agentName}` : ''}: ${String(nimResult?.error || 'null result').slice(0, 120)}`)
+  }
+
   let zenModel = model
-  if (provider !== 'zen' && model !== KIMI_K3_NIM_ID) {
+  if (provider !== 'zen' && model !== KIMI_K3_NIM_ID && model !== DEEPSEEK_V41_FLASH_NIM_ID) {
     // Model NIM cũ (chứa '/') hoặc id lạ → map về model zen PHIÊN 7: space-bunny-free
     // cho TẤT CẢ agent (Task 37 — model free duy nhất mở cho oc_sk API key).
-    // (kimi-k3 đã xử lý ở nhánh riêng phía trên — không rơi vào normalize này.)
+    // (kimi-k3 + deepseek-v4.1-flash đã xử lý ở nhánh riêng phía trên — không
+    // rơi vào normalize này.)
     zenModel = isZenModelId(model) ? model : 'space-bunny-free'
-    console.warn(`[LLM] Agent cấu hình provider "${provider}/${model}" không còn dùng cho agents (NIM matrix 2026-11-30 — chỉ kimi-k3 còn mở) → route Zen ${zenModel}${options?.agentName ? ` (agent: ${options.agentName})` : ''}`)
+    console.warn(`[LLM] Agent cấu hình provider "${provider}/${model}" không còn dùng cho agents (NIM matrix 2026-11-30 — chỉ kimi-k3 + deepseek-v4.1-flash còn mở) → route Zen ${zenModel}${options?.agentName ? ` (agent: ${options.agentName})` : ''}`)
   }
-  if (model === KIMI_K3_NIM_ID) {
-    // kimi-k3 fail NIM → chạy chuỗi Zen với model chính space-bunny-free
+  if (model === KIMI_K3_NIM_ID || model === DEEPSEEK_V41_FLASH_NIM_ID) {
+    // NIM model fail NIM → chạy chuỗi Zen với model chính space-bunny-free
     zenModel = isZenModelId(zenModel) ? zenModel : 'space-bunny-free'
   }
 

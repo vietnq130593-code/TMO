@@ -11,6 +11,10 @@
  */
 process.env.LLM_QUIET_INIT = '1'
 
+// FIX 2026-10-14 (TS2393 — Duplicate function implementation `main`): script
+// global-scope va chạm với r47-cleanup-test-data.ts. `export {}` → module scope.
+export {}
+
 async function main(): Promise<void> {
   const { callLLMForAgent } = await import('../src/lib/llm')
   const t0 = Date.now()

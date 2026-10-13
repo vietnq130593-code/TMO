@@ -6,7 +6,7 @@
 // ========================================================================
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
-import { Network, CheckCircle2, XCircle, Loader2, Brain, Zap, Check, ChevronDown, Activity, AlertTriangle, Play, ShieldOff, MessageSquare, Send, Trash2, Search, Sparkles, X, AlertCircle, ThumbsUp, ThumbsDown, Wrench, Radio, BookMarked, Plus, Download, Pencil, Users, User, Code2, Square, Thermometer, ClipboardList, Mic, AudioLines, Volume2, OctagonX, Scale, Cog, ArrowUpCircle, BrainCircuit } from 'lucide-react'
+import { Network, CheckCircle2, XCircle, Loader2, Brain, Zap, Check, ChevronDown, Activity, AlertTriangle, Play, ShieldOff, MessageSquare, Send, Trash2, Search, Sparkles, X, AlertCircle, ThumbsUp, ThumbsDown, Wrench, Radio, BookMarked, Plus, Download, Pencil, Users, User, Code2, Square, Thermometer, ClipboardList, Mic, AudioLines, Volume2, OctagonX, Scale, Cog, ArrowUpCircle, BrainCircuit, Copy, LogIn, LogOut } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -17,6 +17,7 @@ import OpusReviewCard, { opusDecisionBadgeClass, type OpusReviewSerialized } fro
 import { toast as sonnerToast } from 'sonner'
 import { AGENT_COLORS, POSITION_COLORS } from '@/lib/agent-constants'
 import { fetchWithTransientRetry } from '@/lib/fetch-retry'
+import { authedFetch } from '@/lib/api-auth'
 import { CodeTabContent } from '@/components/smolab/code-tab'
 import { AI_TOOL_EVENT_NAME, extractJsonStringField, extractJsonNumberField, pathFileName } from '@/components/smolab/smolab-shared'
 import { KnowledgeTabContent } from '@/components/smolab/knowledge-tab'
@@ -1732,6 +1733,9 @@ export const SMOLAB_MODEL_GROUPS = [
       // USER DIRECTIVE 2026-11-30 — kimi-k3 giữ lại như 1 LỰA CHỌN model agent
       // tạm thời (chọn → route NIM thật; NIM chết → tự fallback space-bunny-free).
       { id: 'moonshotai/kimi-k3', label: 'Kimi K3 (NVIDIA NIM — tạm thời, chậm ~2 phút/call)' },
+      // USER REQUEST 2026-10-14 — deepseek-v4.1-flash vào danh sách lựa chọn
+      // (lõi NIM nhanh ~2s/call — live-probe Task 28; chọn → route NIM thật).
+      { id: 'deepseek-ai/deepseek-v4.1-flash', label: 'DeepSeek v4.1 Flash (NVIDIA NIM — ⚡ nhanh ~2s/call)' },
       // Lõi extraction (triết tách) — nemotron-550b (kimi-k3 bị cấm cho extraction)
       { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (extraction chính)' },
       // ĐÃ LOẠI BỎ (410 EOL 2026-11-30): gpt-oss-120b, minimax-m3,
@@ -2066,6 +2070,177 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   useEffect(() => {
     fetchZenModelOptions()
   }, [fetchZenModelOptions])
+
+  // ===== OPENCODE ACCOUNT OAUTH — device flow (user request 2026-10-14) =====
+  // "thêm opencode auth login bằng account OpenCode để có thể dùng các lõi
+  // free" — chọn lõi free đang bị Zen chặn FreeTierError ("free tier can
+  // only be used from within OpenCode" — Task 28) → hiện yêu cầu đăng nhập
+  // → user mở link, đăng nhập tài khoản OpenCode, phê duyệt → server nhận
+  // session token (device flow RFC 8628 — src/lib/opencode-oauth.ts) →
+  // callZenProvider tự dùng session cho call lõi free (server-side, không
+  // cần gì thêm phía UI). Route /api/opencode/auth/* nằm sau proxy token →
+  // phải dùng authedFetch (tự inject x-tmo-api-token).
+  const [ocAuth, setOcAuth] = useState<{
+    loggedIn: boolean
+    email?: string
+    needsRefresh?: boolean
+    freeTier?: { probedAt: number; unlocked: boolean; detail: string }
+    sessionRejectedRecently?: boolean
+  } | null>(null)
+  const [ocLogin, setOcLogin] = useState<{
+    phase: 'idle' | 'starting' | 'pending' | 'success' | 'failed'
+    userCode?: string
+    verificationUrl?: string
+    deviceCode?: string
+    message?: string
+    freeTierUnlocked?: boolean
+  }>({ phase: 'idle' })
+  const ocPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const ocLoginDeadlineRef = useRef<number>(0)
+  const ocLoginActiveRef = useRef(false)
+
+  const stopOcPolling = useCallback(() => {
+    if (ocPollRef.current) {
+      clearInterval(ocPollRef.current)
+      ocPollRef.current = null
+    }
+  }, [])
+
+  const fetchOcAuthStatus = useCallback(() => {
+    authedFetch('/api/opencode/auth/status')
+      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((d: {
+        loggedIn?: boolean
+        email?: string
+        needsRefresh?: boolean
+        freeTier?: { probedAt: number; unlocked: boolean; detail: string }
+        sessionRejectedRecently?: boolean
+      }) => {
+        setOcAuth({
+          loggedIn: !!d.loggedIn,
+          email: d.email,
+          needsRefresh: d.needsRefresh,
+          freeTier: d.freeTier,
+          sessionRejectedRecently: d.sessionRejectedRecently,
+        })
+      })
+      .catch(() => { /* im lặng — giữ state cũ */ })
+  }, [])
+
+  useEffect(() => {
+    fetchOcAuthStatus()
+  }, [fetchOcAuthStatus])
+
+  // Cleanup poll khi rời module (đăng nhập có thể đang chờ phê duyệt)
+  useEffect(() => () => {
+    if (ocPollRef.current) clearInterval(ocPollRef.current)
+  }, [])
+
+  const copyOcText = useCallback(async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text)
+      toast({ title: 'Đã copy' })
+    } catch { /* clipboard bị chặn — bỏ qua */ }
+  }, [])
+
+  /** Bắt đầu device login: xin mã → hiện link + user_code → poll mỗi ~5s
+   *  tới khi user phê duyệt (hoặc mã hết hạn 10 phút). */
+  const startOcLogin = useCallback(async () => {
+    if (ocLoginActiveRef.current) return // đang starting/pending — không xin mã mới
+    ocLoginActiveRef.current = true
+    setOcLogin({ phase: 'starting' })
+    try {
+      const res = await authedFetch('/api/opencode/auth/login', { method: 'POST' })
+      const data = await res.json() as {
+        userCode?: string
+        deviceCode?: string
+        verificationUrl?: string
+        expiresInSeconds?: number
+        intervalSeconds?: number
+        error?: string
+      }
+      if (!res.ok || !data.deviceCode) throw new Error(data.error || `HTTP ${res.status}`)
+      setOcLogin({
+        phase: 'pending',
+        userCode: data.userCode,
+        verificationUrl: data.verificationUrl,
+        deviceCode: data.deviceCode,
+      })
+      const deviceCode = data.deviceCode
+      const intervalMs = Math.max(3, data.intervalSeconds ?? 5) * 1000
+      ocLoginDeadlineRef.current = Date.now() + (data.expiresInSeconds ?? 600) * 1000
+      stopOcPolling()
+      ocPollRef.current = setInterval(async () => {
+        if (Date.now() > ocLoginDeadlineRef.current) {
+          stopOcPolling()
+          ocLoginActiveRef.current = false
+          setOcLogin({ phase: 'failed', message: 'Mã đăng nhập đã hết hạn (10 phút) — bấm "Thử lại" để lấy mã mới.' })
+          return
+        }
+        try {
+          const pres = await authedFetch('/api/opencode/auth/poll', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ deviceCode }),
+          })
+          const pdata = await pres.json() as {
+            status?: string
+            message?: string
+            freeTier?: { unlocked: boolean; detail: string }
+          }
+          if (pdata.status === 'pending') return // tiếp tục chờ
+          stopOcPolling()
+          ocLoginActiveRef.current = false
+          if (pdata.status === 'success') {
+            setOcLogin({
+              phase: 'success',
+              freeTierUnlocked: !!pdata.freeTier?.unlocked,
+              message: pdata.freeTier?.detail,
+            })
+            fetchOcAuthStatus()
+            fetchZenModelOptions() // server đã xoá badge ⚠ nếu unlock
+            toast({
+              title: pdata.freeTier?.unlocked ? '🔓 Đã mở khóa lõi free' : '✓ Đã đăng nhập OpenCode account',
+              description: pdata.freeTier?.detail,
+            })
+          } else {
+            setOcLogin({ phase: 'failed', message: pdata.message || `Trạng thái: ${pdata.status}` })
+          }
+        } catch { /* lỗi mạng chớp nhoáng — poll tiếp */ }
+      }, intervalMs)
+    } catch (err) {
+      ocLoginActiveRef.current = false
+      setOcLogin({ phase: 'failed', message: err instanceof Error ? err.message : String(err) })
+    }
+  }, [stopOcPolling, fetchOcAuthStatus, fetchZenModelOptions])
+
+  const logoutOc = useCallback(async () => {
+    try {
+      const res = await authedFetch('/api/opencode/auth/logout', { method: 'POST' })
+      if (res.ok) {
+        setOcAuth({ loggedIn: false })
+        setOcLogin({ phase: 'idle' })
+        fetchZenModelOptions()
+        toast({ title: 'Đã đăng xuất OpenCode account' })
+      }
+    } catch { /* bỏ qua */ }
+  }, [fetchZenModelOptions])
+
+  /** Đăng nhập rồi nhưng probe trước đó fail (policy Zen đổi) → thử lại. */
+  const reprobeOc = useCallback(async () => {
+    try {
+      const res = await authedFetch('/api/opencode/auth/probe', { method: 'POST' })
+      const data = await res.json() as { freeTier?: { unlocked: boolean; detail: string }; error?: string }
+      fetchOcAuthStatus()
+      fetchZenModelOptions()
+      toast({
+        title: data.freeTier?.unlocked ? '🔓 Lõi free đã mở khóa!' : 'Vẫn bị chặn',
+        description: data.freeTier?.detail || data.error,
+      })
+    } catch {
+      toast({ title: 'Probe thất bại — thử lại sau' })
+    }
+  }, [fetchOcAuthStatus, fetchZenModelOptions])
 
   // Smolab task tracking — background task polling (Phase 6)
   const [activeTaskIds, setActiveTaskIds] = useState<Map<string, string>>(new Map()) // sessionId → taskId
@@ -6193,6 +6368,9 @@ ${manifest}` : rawText
                         // r74 (BUG2-033): mở dropdown → refetch trạng thái chặn
                         // tươi (block-cache TTL http 60s / cli 300s)
                         fetchZenModelOptions()
+                        // 2026-10-14 — refetch trạng thái đăng nhập OpenCode
+                        // account (dropdown hiển thị mục đăng nhập/xuất nhập khẩu đúng trạng thái)
+                        fetchOcAuthStatus()
                         setShowModelSelect(v => !v)
                         setShowAgentSelect(false)
                         setShowTeamSelect(false)
@@ -6231,7 +6409,57 @@ ${manifest}` : rawText
                         style={{ scrollbarWidth: 'thin' }}
                       >
                         <div className="px-3 py-1 text-[9px] font-semibold uppercase tracking-wide text-cyan-500/70 border-b border-cyan-400/20 sticky top-0 bg-slate-950/95">
-                          Model agent (Zen + Kimi K3 NVIDIA tạm thời) · ⚡ coding · 🧠 reasoning · 🤖 agentic · ⚠ bị chặn
+                          Model agent (Zen + NVIDIA: kimi-k3 · deepseek-v4.1-flash) · ⚡ coding · 🧠 reasoning · 🤖 agentic · ⚠ bị chặn
+                        </div>
+                        {/* ===== OPENCODE ACCOUNT LOGIN (user request 2026-10-14) —
+                            lõi free bị Zen chặn FreeTierError với oc_sk key →
+                            đăng nhập tài khoản OpenCode (device flow) để mở
+                            khóa. Section này luôn hiện trạng thái hiện tại. ===== */}
+                        <div className="px-3 py-2 border-b border-stone-700/30 space-y-1.5">
+                          {!ocAuth?.loggedIn ? (
+                            <>
+                              <div className="text-[10px] text-stone-400 leading-relaxed">
+                                🔐 <span className="text-stone-300">Lõi free bị Zen chặn với API key</span> (FreeTierError "free tier can only be used from within OpenCode") — đăng nhập tài khoản OpenCode để mở khóa.
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void startOcLogin()
+                                  setShowModelSelect(false) // banner đăng nhập hiện dưới model button
+                                }}
+                                className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-[11px] border border-cyan-400/40 bg-cyan-500/10 text-cyan-200 hover:bg-cyan-500/20 hover:border-cyan-400/60 transition-colors"
+                                aria-label="Đăng nhập bằng tài khoản OpenCode"
+                              >
+                                <LogIn className="h-3 w-3" /> Đăng nhập bằng tài khoản OpenCode
+                              </button>
+                            </>
+                          ) : (
+                            <div className="text-[10px] leading-relaxed flex items-center justify-between gap-2">
+                              <span className={ocAuth.freeTier?.unlocked ? 'text-emerald-300' : 'text-amber-300'}>
+                                {ocAuth.freeTier?.unlocked
+                                  ? `🔓 Đã đăng nhập OpenCode${ocAuth.email ? ` (${ocAuth.email})` : ''} — lõi free đã mở khóa`
+                                  : `⚠ Đã đăng nhập OpenCode${ocAuth.email ? ` (${ocAuth.email})` : ''} — nhưng free-tier vẫn bị chặn`}
+                              </span>
+                              <span className="flex items-center gap-1 shrink-0">
+                                {!ocAuth.freeTier?.unlocked && (
+                                  <button
+                                    type="button"
+                                    onClick={() => void reprobeOc()}
+                                    className="text-[10px] px-1.5 py-px border border-cyan-400/40 text-cyan-300 hover:bg-cyan-500/10 transition-colors"
+                                    aria-label="Thử lại probe free-tier"
+                                  >Thử lại</button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => void logoutOc()}
+                                  className="text-[10px] px-1.5 py-px border border-stone-600/60 text-stone-400 hover:bg-stone-800/40 hover:text-stone-200 transition-colors flex items-center gap-1"
+                                  aria-label="Đăng xuất OpenCode account"
+                                >
+                                  <LogOut className="h-2.5 w-2.5" /> Đăng xuất
+                                </button>
+                              </span>
+                            </div>
+                          )}
                         </div>
                         {zenModels.map((m) => {
                           // r74 (BUG2-033): model bị Zen chặn free-tier trên CẢ
@@ -6243,7 +6471,31 @@ ${manifest}` : rawText
                           return (
                           <button
                             key={m.id}
-                            onClick={() => { setSelectedModel(m.id); setShowModelSelect(false) }}
+                            onClick={() => {
+                              setSelectedModel(m.id)
+                              setShowModelSelect(false)
+                              // 2026-10-14 (user request: "mỗi lần dùng lõi free sẽ
+                              // hiện ra thông tin yêu cầu tôi đăng nhập tài khoản")
+                              // — chọn lõi FREE mà chưa đăng nhập OpenCode account
+                              // (hoặc đã đăng nhập nhưng free-tier chưa mở) → tự
+                              // kích hoạt yêu cầu đăng nhập ngay (device flow hiện
+                              // link + mã bên dưới model button).
+                              const isFreeCore = /free|bunny/i.test(m.id)
+                              if (isFreeCore && !(ocAuth?.loggedIn && ocAuth.freeTier?.unlocked)) {
+                                if (!ocAuth?.loggedIn) {
+                                  toast({
+                                    title: '🔐 Lõi free cần đăng nhập OpenCode account',
+                                    description: 'Đang tạo mã đăng nhập — mở link hiện bên dưới trên máy bạn, đăng nhập rồi phê duyệt.',
+                                  })
+                                  void startOcLogin()
+                                } else {
+                                  toast({
+                                    title: 'Lõi free vẫn bị chặn sau đăng nhập',
+                                    description: ocAuth?.freeTier?.detail || 'Bấm "Thử lại" trong danh sách model để probe lại (policy Zen hay đổi).',
+                                  })
+                                }
+                              }
+                            }}
                             className={`w-full text-left px-3 py-1.5 text-xs hover:bg-cyan-500/10 transition-colors flex items-center gap-2 ${
                               selectedModel === m.id ? 'text-cyan-400' : allBlocked ? 'text-stone-500' : 'text-stone-300'
                             }`}
@@ -6287,6 +6539,125 @@ ${manifest}` : rawText
                         })}
                         {zenModels.length === 0 && (
                           <div className="px-3 py-2 text-xs text-stone-500">Chưa tải được danh sách model — thử lại sau.</div>
+                        )}
+                      </div>
+                    )}
+                    {/* ===== BANNER ĐĂNG NHẬP OPENCODE ACCOUNT (2026-10-14) =====
+                        Sống NGOÀI dropdown — flow phê duyệt có thể kéo dài (tối
+                        đa 10 phút), dropdown đóng/mở không làm mất trạng thái
+                        poll. Link + mã hiển thị để user mở TRÊN MÁY MÌNH. */}
+                    {ocLogin.phase !== 'idle' && (
+                      <div
+                        className={`mt-1.5 border p-2.5 text-[11px] leading-relaxed ${
+                          ocLogin.phase === 'success'
+                            ? ocLogin.freeTierUnlocked
+                              ? 'border-emerald-400/40 bg-emerald-950/20 text-emerald-200'
+                              : 'border-amber-400/40 bg-amber-950/20 text-amber-200'
+                            : ocLogin.phase === 'failed'
+                              ? 'border-amber-400/40 bg-amber-950/20 text-amber-200'
+                              : 'border-cyan-400/40 bg-slate-950/70 text-stone-300'
+                        }`}
+                        role="status"
+                        aria-live="polite"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="font-semibold">
+                            {ocLogin.phase === 'starting' && '🔐 Đang tạo mã đăng nhập OpenCode…'}
+                            {ocLogin.phase === 'pending' && '🔐 Đăng nhập tài khoản OpenCode'}
+                            {ocLogin.phase === 'success' && (ocLogin.freeTierUnlocked ? '🔓 Đã mở khóa lõi free!' : '⚠ Đã đăng nhập — nhưng lõi free vẫn bị chặn')}
+                            {ocLogin.phase === 'failed' && '⚠ Đăng nhập không thành công'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              stopOcPolling()
+                              ocLoginActiveRef.current = false
+                              setOcLogin({ phase: 'idle' })
+                            }}
+                            className="text-stone-400 hover:text-stone-200 shrink-0"
+                            aria-label="Đóng panel đăng nhập"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                        {ocLogin.phase === 'starting' && (
+                          <div className="mt-1 flex items-center gap-1.5 text-stone-400">
+                            <Loader2 className="h-3 w-3 animate-spin" /> Đang kết nối OpenCode Console…
+                          </div>
+                        )}
+                        {ocLogin.phase === 'pending' && ocLogin.verificationUrl && (
+                          <div className="mt-1.5 space-y-1.5">
+                            <div className="text-stone-400">
+                              Bấm mở link (hoặc copy) → đăng nhập tài khoản OpenCode → bấm <span className="text-stone-200">Approve / Phê duyệt</span>:
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <a
+                                href={ocLogin.verificationUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="flex-1 truncate underline decoration-cyan-400/50 text-cyan-300 hover:text-cyan-200"
+                                title={ocLogin.verificationUrl}
+                              >
+                                {ocLogin.verificationUrl}
+                              </a>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-6 px-2 text-[10px] shrink-0"
+                                onClick={() => void copyOcText(ocLogin.verificationUrl || '')}
+                                aria-label="Copy link đăng nhập"
+                              >
+                                <Copy className="h-3 w-3" /> Copy
+                              </Button>
+                            </div>
+                            <div className="flex items-center gap-1.5 text-stone-400">
+                              Mã: <span className="font-mono text-[13px] tracking-widest text-cyan-300">{ocLogin.userCode}</span>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-6 px-2 text-[10px]"
+                                onClick={() => void copyOcText(ocLogin.userCode || '')}
+                                aria-label="Copy mã đăng nhập"
+                              >
+                                <Copy className="h-3 w-3" />
+                              </Button>
+                            </div>
+                            <div className="flex items-center gap-1.5 text-stone-500">
+                              <Loader2 className="h-3 w-3 animate-spin" /> Đang chờ bạn phê duyệt… (mã hết hạn sau 10 phút)
+                            </div>
+                          </div>
+                        )}
+                        {ocLogin.phase === 'failed' && (
+                          <div className="mt-1.5 space-y-1.5">
+                            <div className="text-amber-300/90">{ocLogin.message}</div>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-6 px-2 text-[10px]"
+                              onClick={() => {
+                                ocLoginActiveRef.current = false
+                                void startOcLogin()
+                              }}
+                            >
+                              Thử lại
+                            </Button>
+                          </div>
+                        )}
+                        {ocLogin.phase === 'success' && (
+                          <div className="mt-1.5 space-y-1.5">
+                            <div className={ocLogin.freeTierUnlocked ? 'text-emerald-300/90' : 'text-amber-300/90'}>
+                              {ocLogin.message}
+                              {ocLogin.freeTierUnlocked && ' — các lõi free đã chọn được ngay trong danh sách model.'}
+                            </div>
+                            {!ocLogin.freeTierUnlocked && (
+                              <div className="flex items-center gap-1.5">
+                                <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => void reprobeOc()}>
+                                  Thử lại probe
+                                </Button>
+                                <span className="text-stone-500 text-[10px]">(policy Zen hay thay đổi — probe lại sau ít phút)</span>
+                              </div>
+                            )}
+                          </div>
                         )}
                       </div>
                     )}

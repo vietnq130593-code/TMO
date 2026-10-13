@@ -59,6 +59,11 @@
  *        bun scratch/r47-cleanup-test-data.ts            # DRY-RUN (mặc định)
  *        EXECUTE=1 bun scratch/r47-cleanup-test-data.ts  # XÓA THẬT
  */
+// FIX 2026-10-14 (TS2393 — Duplicate function implementation `main`): file
+// này từng là global-scope script (import ở dòng 62 nằm SAU docblock + code
+// khác nên vẫn hợp lệ) nhưng `main` toàn cục va chạm với r28-nim-rescue-
+// verify.ts khi tsconfig include scratch/**. `export {}` → module scope.
+export {}
 import { PrismaClient } from '@prisma/client'
 
 const db = new PrismaClient()

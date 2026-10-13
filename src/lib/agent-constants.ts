@@ -135,6 +135,18 @@ export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string; 
       label: 'Kimi K3 (NVIDIA NIM — tạm thời; chậm ~2 phút/call; NIM chết → tự fallback space-bunny-free)',
       caps: { coding: true, reasoning: true, agentic: true },
     },
+    // 2026-10-14 (user request "thêm deepseek-v4.1-flash vào danh sách lựa
+    // chọn") — lõi NIM ĐÃ VERIFY sống (live-probe Task 28: trả lời ~2s/call,
+    // nhanh nhất trong các lõi NIM còn mở; KHÔNG thuộc EOL list 2026-11-30 —
+    // dòng EOL là deepseek-v4-pro-0813 / v4-flash-0731 của v4.0, v4.1-flash là
+    // model khác). Trước đây chỉ là tier NIM RESCUE cuối chuỗi callLLMForAgent;
+    // giờ nâng lên thành LỰA CHỌN chính thức trong dropdown: chọn → route NIM
+    // thật (xoay 4 key); NIM chết → tự fallback chuỗi Zen space-bunny-free.
+    {
+      id: 'deepseek-ai/deepseek-v4.1-flash',
+      label: 'DeepSeek v4.1 Flash (NVIDIA NIM — ⚡ nhanh ~2s/call; rescue tier của toàn chuỗi)',
+      caps: { coding: true, reasoning: true, agentic: true },
+    },
     // Lõi embed KHÔNG phải LLM agent — giữ để hiển thị/đối chiếu (UI chat
     // dropdown lọc mục này ra).
     { id: 'nvidia/nemotron-3-embed-1b', label: 'nemotron-3-embed-1b (CHỈ lõi embed — không phải LLM agent)' },
@@ -150,7 +162,7 @@ export const PROVIDER_DATA = [
   },
   {
     key: 'nvidia',
-    label: 'NVIDIA NIM (kimi-k3 tạm thời + embed + extraction)',
+    label: 'NVIDIA NIM (kimi-k3 + deepseek-v4.1-flash + embed + extraction)',
     icon: '🎮',
     models: PROVIDER_MODELS.nvidia,
   },
