@@ -30,6 +30,7 @@
   },
   "dependencies": {
     "3d-force-graph": "^1.80.0",
+    "@ai-sdk/openai-compatible": "^3.0.68",
     "@aws-sdk/client-s3": "^3.1115.0",
     "@aws-sdk/s3-request-presigner": "^3.1115.0",
     "@grpc/grpc-js": "^1.14.5",

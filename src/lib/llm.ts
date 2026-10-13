@@ -5687,17 +5687,46 @@ export async function callLLMForAgent(
       return lrCli
     }
   }
-  // TASK 33: hết chuỗi Zen (HTTP → CLI → failover → last-resort) → trả lỗi rõ
-  // ràng cho caller nhìn thấy nguyên nhân thật. KHÔNG còn fallback NIM kimi-k3
-  // chain — NIM chỉ còn vai trò lõi embed (embeddings.ts).
+  // ===== NIM RESCUE (2026-10-13 — live-probe phiên Task 28) =====
+  // Zen chặn free-tier TOÀN CỘC cho oc_sk key (403 FreeTierError cả 3 đường:
+  // HTTP + CLI custom provider opencode-k* + CLI native — bằng chứng live-probe
+  // 2026-10-13; matrix 2026-10-09 CLI native còn trả lời → policy Zen đổi giữa
+  // 2 ngày, KHÔNG phải lỗi cấu hình phía máy). kimi-k3 NIM cùng ngày 429 kéo
+  // dài/hang toàn chuỗi key. Toàn bộ chuỗi Zen chết → agent KHÔNG chết (nguyên
+  // tắc thiết kế xuyên suốt của file này): thử lõi NIM deepseek-v4.1-flash
+  // (ALIVE — live-probe 2026-10-13 trả lời ~2s; KHÔNG thuộc danh sách EOL user
+  // directive 2026-11-30 — danh sách đó là deepseek-v4-pro-0813/v4-flash-0731
+  // dòng v4.0, v4.1-flash là model khác vẫn mở trên NIM). Tier CUỐI — chỉ chạy
+  // khi MỌI rung phía trên thất bại; Zen sống lại (vd user nạp credit hoặc
+  // OAuth login mở free tier) thì chuỗi trên return trước, không bao giờ chạm
+  // tới đây. Override bằng env NIM_RESCUE_MODEL; đặt rỗng = tắt hẳn tier này.
   const lastResortList = parseZenLastResortModels(process.env.ZEN_LAST_RESORT_MODELS, zenModel, zenFailoverModel).join('/')
+  const nimRescueModel = (process.env.NIM_RESCUE_MODEL ?? 'deepseek-ai/deepseek-v4.1-flash').trim()
+  if (nimRescueModel) {
+    console.warn(`[LLM] NIM RESCUE (2026-10-13): toàn chuỗi Zen chết (free-tier 403 toàn cục cho oc_sk + failover ${zenFailoverModel} + last-resort ${lastResortList}) — thử NIM ${nimRescueModel} giữ agent sống${options?.agentName ? ` — agent: ${options.agentName}` : ''}...`)
+    const rescue = await callModelWithKeyRotation(
+      nimRescueModel,
+      prompt,
+      systemPrompt,
+      options,
+      { taskLabel: `agent-nim-rescue:${nimRescueModel}` },
+    )
+    if (rescue && (rescue.content || (rescue.tool_calls && rescue.tool_calls.length > 0))) {
+      const tcCount = rescue.tool_calls?.length ?? 0
+      console.warn(`[LLM] Agent dùng NIM RESCUE ${nimRescueModel} ✓ (${tcCount} tool_calls, ${rescue.tokensUsed ?? 0} tokens — model chính ${zenModel} + toàn chuỗi Zen chết 2026-10-13)`)
+      return rescue
+    }
+    console.warn(`[LLM] NIM RESCUE ${nimRescueModel} cũng thất bại: ${String(rescue?.error || 'null result').slice(0, 120)}`)
+  }
+  // TASK 33: hết chuỗi Zen (HTTP → CLI → failover → last-resort → NIM rescue)
+  // → trả lỗi rõ ràng cho caller nhìn thấy nguyên nhân thật.
   const lastError = zen?.error || cliResult?.error || 'unknown'
-  console.warn(`[LLM] Agent Zen ${zenModel} thất bại toàn chuỗi (HTTP + CLI${zenModel !== zenFailoverModel ? ` + failover ${zenFailoverModel}` : ''} + last-resort ${lastResortList}) — trả lỗi (NIM removed): ${String(lastError).slice(0, 200)}`)
+  console.warn(`[LLM] Agent Zen ${zenModel} thất bại toàn chuỗi (HTTP + CLI${zenModel !== zenFailoverModel ? ` + failover ${zenFailoverModel}` : ''} + last-resort ${lastResortList}${nimRescueModel ? ` + NIM rescue ${nimRescueModel}` : ''}) — trả lỗi: ${String(lastError).slice(0, 200)}`)
   return {
     content: '',
     provider: 'zen',
     model: zenModel,
-    error: `Zen model "${zenModel}" thất bại toàn chuỗi (HTTP + CLI${zenModel !== zenFailoverModel ? ` + failover ${zenFailoverModel}` : ''} + last-resort): ${String(lastError).slice(0, 300)} — NIM đã ngừng dùng cho agents (Task 33)`,
+    error: `Zen model "${zenModel}" thất bại toàn chuỗi (HTTP + CLI${zenModel !== zenFailoverModel ? ` + failover ${zenFailoverModel}` : ''} + last-resort${nimRescueModel ? ` + NIM rescue ${nimRescueModel}` : ''}): ${String(lastError).slice(0, 300)}`,
   }
 }
 
