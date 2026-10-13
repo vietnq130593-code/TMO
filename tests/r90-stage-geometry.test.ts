@@ -1,16 +1,22 @@
 /**
  * ROUND-90 TESTS — BRAIN-UX §9.4 (UX-3) · HÌNH HỌC SÂN KHẤU NÃO (THUẦN)
  * (blueprint v0.10 §9.4 — stage-geometry.ts, mọi công thức trình bày của
- * BrainStage: bezier cạnh · LOD · hit-target · lệch pha · độ dày |gradient| ·
- * mũi tên bản tĩnh)
+ * BrainStage: cạnh THẲNG (PIN UPDATE Task 26 — chỉ thị user 2026-10-13
+ * "Đường kết nối dạng THẲNG (hiện hơi cong — bỏ cong)" — thay bezier cong
+ * của UX-3) · LOD · hit-target point-to-segment CHÍNH XÁC · lệch pha
+ * animation · độ dày |gradient| · mũi tên bản tĩnh)
  *
  * Đo lường (THUẦN — không DB, không React, không env):
- *   A. bezierControls: cạnh ngang cong LÊN (cả 2 control cy < y) · đối xứng
- *      quanh trung điểm (offset vuông góc) · cạnh dọc → control lệch ngang.
- *   B. sampleBezier: t=0 = điểm đầu · t=1 = điểm cuối · t=0.5 trong bao.
- *   C. distToEdge: điểm TRÙNG đầu cạnh → 0 · điểm trên đường cong (chính
- *      sampleBezier t=0.5) → ≤ 0.5 (rời rạc hóa 24 đoạn) · điểm xa → lớn.
- *   D. hitEdge: 2 cạnh tách biệt → query trả đúng cạnh · ngoài radius → null.
+ *   A. distToEdge cạnh THẲNG (PIN UPDATE Task 26 — thay A bezierControls +
+ *      B sampleBezier của UX-3): điểm TRÊN đoạn (đầu/giữa/cuối) → 0 CHÍNH
+ *      XÁC (không còn sai số rời rạc hóa 24 đoạn) · lệch vuông góc → đúng
+ *      khoảng cách Euclid · ngoài 2 đầu → khoảng cách tới ĐẦU segment gần
+ *      nhất (không kẹp giả) · degenerate (đoạn dài 0) → Euclid an toàn.
+ *   B. (đã gộp vào A — Task 26 bỏ sampleBezier cùng bezierControls)
+ *   C. distToEdge điểm xa → khoảng cách lớn (giữ vỏ bọc chống hồi quy).
+ *   D. hitEdge: 2 cạnh thẳng tách biệt → query trả đúng cạnh · ngoài radius
+ *      → null · điểm TRÊN đoạn luôn hit kể cả radius ép hẹp (cạnh thẳng cho
+ *      hit chính xác — trước-fix (60,45) miss 5.5 do cong lệch khỏi đoạn).
  *   E. lodEdges: 300 phần tử nguyên vẹn (bản sao) · 1000 → cap 300 · id tăng
  *      nghiêm ngặt · giữ [0] gốc · 2 lần chạy RA GIỐNG HỆT.
  *   F. edgePhaseSec: mọi giá trị ∈ [-2.4, 0) · 8 id liên tiếp ≥ 6 giá trị
@@ -20,8 +26,8 @@
  *      không giả tín hiệu) · min-max map [0.7, 3.2] · đơn điệu theo giá trị
  *      · toàn 0 → 1.1 / flat non-zero → trung vị 1.95 (PIN UPDATE
  *      FB-BRAIN-UX-R1-07 — nguồn đã sửa theo doc).
- *   I. bezierTangentDeg: tiếp tuyến ngang trái→phải ≈ 0° · phải→trái ≈ 180° ·
- *      dọc xuống ≈ 90° (mũi tên bản tĩnh reduced-motion).
+ *   I. (ĐÃ BỎ Task 26 — bezierTangentDeg bỏ cùng bezier; marker SVG
+ *      orient="auto" tự lo góc mũi tên trên đoạn thẳng.)
  *   J. buildStageLayout (PIN UPDATE BRAIN-TAB-3PHAN — center-align +
  *      rowStep thích ứng + radius cột; chỉ thị user 2026-10-12 "vị trí các
  *      lớp chỉnh căn giữa thay vì căn trên như hiện tại" + "nơ ron nhiều
@@ -41,137 +47,102 @@
 
 import { describe, test, expect } from 'bun:test'
 import {
-  bezierControls,
-  sampleBezier,
   distToEdge,
   hitEdge,
   lodEdges,
   edgePhaseSec,
   isAnimated,
   strokeWidthForGrad,
-  bezierTangentDeg,
   buildStageLayout,
   STAGE_LIMITS,
   type StageColumn,
   type StageEdge,
 } from '@/lib/brain/stage-geometry'
 
-/** Cạnh ngang chuẩn (10,50)→(110,50): dy=0, dx=100 → offset vuông góc (0,-14). */
-const H_EDGE = (() => {
-  const c = bezierControls(10, 50, 110, 50)
-  return { x1: 10, y1: 50, cx1: c.cx1, cy1: c.cy1, cx2: c.cx2, cy2: c.cy2, x2: 110, y2: 50 }
-})()
-
-/** Dựng StageEdge hoàn chỉnh từ 2 điểm (id + toạ độ + control bezier). */
-function makeEdge(id: number, x1: number, y1: number, x2: number, y2: number): StageEdge {
-  const c = bezierControls(x1, y1, x2, y2)
-  return { id, fromCol: 0, toCol: 1, fromRow: 0, toRow: 0, x1, y1, cx1: c.cx1, cy1: c.cy1, cx2: c.cx2, cy2: c.cy2, x2, y2 }
+/**
+ * Cạnh ngang chuẩn (10,50)→(110,50) — Task 26 THẲNG: không còn control
+ * point. Object literal KHÔNG truyền cx1… là pin compile-time: StageEdge
+ * không còn field control (nếu nguồn thêm lại thì dư thuộc tính → TS2353).
+ */
+const H_EDGE: StageEdge = {
+  id: 1, fromCol: 0, toCol: 1, fromRow: 0, toRow: 0,
+  x1: 10, y1: 50, x2: 110, y2: 50,
 }
 
-// ==================== A. bezierControls ====================
+/** Dựng StageEdge hoàn chỉnh từ 2 điểm (id + toạ độ — THẲNG, không bezier). */
+function makeEdge(id: number, x1: number, y1: number, x2: number, y2: number): StageEdge {
+  return { id, fromCol: 0, toCol: 1, fromRow: 0, toRow: 0, x1, y1, x2, y2 }
+}
 
-describe('r90 · A bezierControls — cong "uyển chuyển" lệch vuông góc', () => {
-  test('cạnh ngang (x2>x1, y bằng) → CẢ 2 control cy < y (cong LÊN)', () => {
-    const c = bezierControls(10, 50, 110, 50)
-    // k = min(0.3×len, 14)/len = 14/100 → py = -dx·k = -14 (hướng LÊN)
-    expect(c.cy1).toBeLessThan(50)
-    expect(c.cy2).toBeLessThan(50)
-    // Pin chính xác (dẫn nguồn): t=0.32, cả 2 control y = 50 − 14 = 36
-    expect(c.cy1).toBeCloseTo(36, 10)
-    expect(c.cy2).toBeCloseTo(36, 10)
+// ==================== A. distToEdge cạnh THẲNG (PIN UPDATE Task 26) ====================
+
+describe('r90 · A distToEdge — cạnh THẲNG, khoảng cách CHÍNH XÁC (Task 26 bỏ cong)', () => {
+  test('điểm TRÊN đoạn (đầu/giữa/cuối) → 0 chính xác — không còn sai số rời rạc hóa 24 đoạn', () => {
+    expect(distToEdge(60, 50, H_EDGE)).toBe(0) // giữa đoạn — chiếu trúng
+    expect(distToEdge(10, 50, H_EDGE)).toBe(0) // đầu đoạn
+    expect(distToEdge(110, 50, H_EDGE)).toBe(0) // cuối đoạn
   })
 
-  test('2 control đối xứng quanh trung điểm cạnh (cộng offset vuông góc)', () => {
-    const c = bezierControls(10, 50, 110, 50)
-    const mx = (10 + 110) / 2 // 60
-    // Cạnh ngang: offset vuông góc thuần theo y (px=0) → trung điểm 2 control
-    // nằm ĐÚNG trung điểm x của cạnh, kéo lên 14 (py)
-    expect((c.cx1 + c.cx2) / 2).toBeCloseTo(mx, 10)
-    expect((c.cy1 + c.cy2) / 2).toBeCloseTo(50 - 14, 10)
-    // Control1 gần đầu, control2 gần cuối (không đảo chiều)
-    expect(c.cx1).toBeLessThan(c.cx2)
+  test('điểm lệch vuông góc → đúng khoảng cách Euclid (đoạn y=50: (60,62) → 12)', () => {
+    // Chiếu vuông góc của (60,62) lên đoạn y=50 là (60,50) → d = 12 chính xác
+    expect(distToEdge(60, 62, H_EDGE)).toBeCloseTo(12, 12)
+    expect(distToEdge(60, 50 - 7.5, H_EDGE)).toBeCloseTo(7.5, 12)
   })
 
-  test('cạnh dọc (x bằng, y2>y1) → control lệch NGANG (không bẹp lên)', () => {
-    const c = bezierControls(50, 10, 50, 110)
-    // dx=0, dy=100 → px = dy·k = +14, py = 0 → lệch +x
-    expect(c.cx1).toBeGreaterThan(50)
-    expect(c.cx2).toBeGreaterThan(50)
-    expect(c.cx1).toBeCloseTo(64, 10) // 50 + 14
-    expect(c.cx2).toBeCloseTo(64, 10)
-    // y vẫn tiến dần theo chiều cạnh (10 → 110)
-    expect(c.cy1).toBeGreaterThan(10)
-    expect(c.cy2).toBeLessThan(110)
+  test('điểm NGOÀI 2 đầu → khoảng cách tới ĐẦU gần nhất (chiếu bị kẹp t∈[0,1])', () => {
+    // (200, 80): chiếu t>1 → kẹp t=1 → cuối đoạn (110,50): d = √(90²+30²)
+    expect(distToEdge(200, 80, H_EDGE)).toBeCloseTo(Math.hypot(90, 30), 12)
+    // (-40, 50): chiếu t<0 → kẹp t=0 → đầu đoạn (10,50): d = 50
+    expect(distToEdge(-40, 50, H_EDGE)).toBeCloseTo(50, 12)
+  })
+
+  test('đoạn degenerate (dài 0) → khoảng cách Euclid tới chính điểm đó (lenSq=0 an toàn)', () => {
+    const dot = makeEdge(9, 30, 40, 30, 40)
+    expect(distToEdge(34, 48, dot)).toBeCloseTo(Math.hypot(4, 8), 12) // √80
+    expect(distToEdge(30, 40, dot)).toBe(0)
   })
 })
 
-// ==================== B. sampleBezier ====================
+// ==================== B. (đã gộp vào A — Task 26 bỏ sampleBezier) ====================
 
-describe('r90 · B sampleBezier — de Casteljau', () => {
-  test('t=0 = điểm đầu; t=1 = điểm cuối (chính xác)', () => {
-    const t0 = sampleBezier(H_EDGE.x1, H_EDGE.y1, H_EDGE.cx1, H_EDGE.cy1, H_EDGE.cx2, H_EDGE.cy2, H_EDGE.x2, H_EDGE.y2, 0)
-    expect(t0.x).toBeCloseTo(10, 10)
-    expect(t0.y).toBeCloseTo(50, 10)
-    const t1 = sampleBezier(H_EDGE.x1, H_EDGE.y1, H_EDGE.cx1, H_EDGE.cy1, H_EDGE.cx2, H_EDGE.cy2, H_EDGE.x2, H_EDGE.y2, 1)
-    expect(t1.x).toBeCloseTo(110, 10)
-    expect(t1.y).toBeCloseTo(50, 10)
-  })
+// ==================== C. distToEdge — điểm xa (chống kẹp giả) ====================
 
-  test('t=0.5 nằm trong bao (bounding box 4 điểm control)', () => {
-    const m = sampleBezier(H_EDGE.x1, H_EDGE.y1, H_EDGE.cx1, H_EDGE.cy1, H_EDGE.cx2, H_EDGE.cy2, H_EDGE.x2, H_EDGE.y2, 0.5)
-    const xs = [H_EDGE.x1, H_EDGE.cx1, H_EDGE.cx2, H_EDGE.x2]
-    const ys = [H_EDGE.y1, H_EDGE.cy1, H_EDGE.cy2, H_EDGE.y2]
-    expect(m.x).toBeGreaterThanOrEqual(Math.min(...xs))
-    expect(m.x).toBeLessThanOrEqual(Math.max(...xs))
-    expect(m.y).toBeGreaterThanOrEqual(Math.min(...ys))
-    expect(m.y).toBeLessThanOrEqual(Math.max(...ys))
-  })
-})
-
-// ==================== C. distToEdge ====================
-
-describe('r90 · C distToEdge — khoảng cách điểm→cạnh bezier (hit-target)', () => {
-  test('điểm TRÙNG đầu cạnh → 0; điểm trên đường cong (t=0.5) → ≤ 0.5', () => {
-    // Đầu cạnh là node chính tắc của polyline rời rạc hóa
-    expect(distToEdge(10, 50, H_EDGE)).toBe(0)
-    // Chính điểm trên bezier t=0.5 làm query — rời rạc 24 đoạn: t=0.5 trùng
-    // đúng ranh giới đoạn 12/24 → khoảng cách 0 (assert lỏng ≤ 0.5 cho chống
-    // phễ float của các t không trúng ranh giới)
-    const mid = sampleBezier(H_EDGE.x1, H_EDGE.y1, H_EDGE.cx1, H_EDGE.cy1, H_EDGE.cx2, H_EDGE.cy2, H_EDGE.x2, H_EDGE.y2, 0.5)
-    const d = distToEdge(mid.x, mid.y, H_EDGE)
-    expect(d).toBeLessThanOrEqual(0.5)
-    expect(d).toBeGreaterThanOrEqual(0)
-  })
-
-  test('điểm cách xa → khoảng cách lớn (không kẹp giả)', () => {
-    // (60, 300): đường cong nằm trong dải y≈36–50 → xa hàng trăm đơn vị
+describe('r90 · C distToEdge — điểm cách xa → khoảng cách lớn', () => {
+  test('(60,300) cách đoạn y=50 → 250; (200,50) ngoài cuối đoạn → 90', () => {
+    expect(distToEdge(60, 300, H_EDGE)).toBeCloseTo(250, 12)
+    expect(distToEdge(200, 50, H_EDGE)).toBeCloseTo(90, 12)
     expect(distToEdge(60, 300, H_EDGE)).toBeGreaterThan(200)
-    expect(distToEdge(200, 50, H_EDGE)).toBeGreaterThan(80)
   })
 })
 
 // ==================== D. hitEdge ====================
 
-describe('r90 · D hitEdge — chọn cạnh trong ngưỡng bấm', () => {
-  // 2 cạnh tách biệt: e1 quanh y≈36–50, e2 quanh y≈186–200
+describe('r90 · D hitEdge — chọn cạnh trong ngưỡng bấm (cạnh THẲNG)', () => {
+  // 2 cạnh thẳng tách biệt: e1 y=50, e2 y=200 — hit CHÍNH XÁC trên đoạn
   const e1 = makeEdge(1, 10, 50, 110, 50)
   const e2 = makeEdge(2, 10, 200, 110, 200)
 
   test('query sát cạnh 1 → trả đúng cạnh 1; sát cạnh 2 → đúng cạnh 2', () => {
     expect(hitEdge(10, 50, [e1, e2])?.id).toBe(1) // đầu cạnh 1
-    expect(hitEdge(60, 39.5, [e1, e2])?.id).toBe(1) // giữa đường cong 1 (t=0.5)
-    expect(hitEdge(60, 189.5, [e1, e2])?.id).toBe(2) // giữa đường cong 2
+    expect(hitEdge(60, 50, [e1, e2])?.id).toBe(1) // GIỮA cạnh 1 — điểm TRÊN đoạn → d=0
+    expect(hitEdge(60, 200, [e1, e2])?.id).toBe(2) // giữa cạnh 2
     expect(hitEdge(110, 200, [e1, e2])?.id).toBe(2) // cuối cạnh 2
   })
 
   test('ngoài radius (12 đơn vị viewBox — PIN UPDATE FB-BRAIN-UX-R1-06: 7 → 12 cho touch target) → null (không bấm nhầm)', () => {
-    // (60,120): cách e1 ≈ 80, cách e2 ≈ 69 — ngoài STAGE_LIMITS.edgeHitRadius
+    // (60,120): cách e1 = 70, cách e2 = 80 — ngoài STAGE_LIMITS.edgeHitRadius
     // (PIN UPDATE FB-BRAIN-UX-R1-06: nâng 7 → 12 đơn vị viewBox ≈ 12-18px CSS —
     // cạnh SVG nhỏ hơn nút 44px vì phải tách biệt giữa các cạnh kề nhau)
     expect(hitEdge(60, 120, [e1, e2])).toBeNull()
-    // Điểm trên đường cong nhưng radius bị ép hẹp → miss
-    expect(hitEdge(60, 45, [e1], 2)).toBeNull() // cách cong 1 ≈ 5.5 > 2
-    expect(hitEdge(60, 39.5, [e1], 2)?.id).toBe(1) // ngay trên cong → hit
+  })
+
+  test('PIN UPDATE Task 26: điểm TRÊN đoạn luôn hit kể cả radius ép hẹp (d=0 — cạnh thẳng chính xác)', () => {
+    // Trước-fix (60,45) cách đường CONG ≈ 5.5 → miss radius 2; cạnh thẳng
+    // thì (60,50) nằm TRÊN đoạn → d=0 → hit ngay cả radius 0.5
+    expect(hitEdge(60, 50, [e1], 0.5)?.id).toBe(1)
+    // Còn (60,45) cách đoạn THẲNG y=50 đúng 5 đơn vị → miss radius 2
+    expect(hitEdge(60, 45, [e1], 2)).toBeNull()
+    expect(hitEdge(60, 45, [e1], 5)?.id).toBe(1) // radius 5 chạm đúng ngưỡng
   })
 })
 
@@ -265,19 +236,7 @@ describe('r90 · H strokeWidthForGrad — map min-max [0.7, 3.2]', () => {
   })
 })
 
-// ==================== I. bezierTangentDeg (mũi tên bản tĩnh) ====================
-
-describe('r90 · I bezierTangentDeg — góc tiếp tuyến (đầu mũi tên chỉ chiều lan truyền)', () => {
-  // Control THẲNG HÀNG trên đường thẳng → bezier suy biến thành đoạn thẳng:
-  // chấm góc thuần không lẫn độ cong
-  test('ngang trái→phải ≈ 0°; phải→trái ≈ 180°; dọc xuống ≈ 90°', () => {
-    expect(bezierTangentDeg(0, 0, 33, 0, 66, 0, 100, 0, 0.5)).toBeCloseTo(0, 10)
-    expect(bezierTangentDeg(100, 0, 66, 0, 33, 0, 0, 0, 0.5)).toBeCloseTo(180, 10)
-    expect(bezierTangentDeg(0, 0, 0, 33, 0, 66, 0, 100, 0.5)).toBeCloseTo(90, 10)
-    // atan2 đối xứng: dọc lên = -90°
-    expect(bezierTangentDeg(0, 100, 0, 66, 0, 33, 0, 0, 0.5)).toBeCloseTo(-90, 10)
-  })
-})
+// ==================== I. (ĐÃ BỎ Task 26 — bezierTangentDeg bỏ cùng bezier) ====================
 
 // ==================== J. buildStageLayout (geometry v3) ====================
 

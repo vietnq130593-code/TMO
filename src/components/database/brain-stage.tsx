@@ -1,63 +1,69 @@
 'use client'
 
 /**
- * BRAIN-LIVE v2 (chỉ thị user 2026-10-12) — SÂN KHẤU NÃO "ĐÀI QUAN SÁT THẬT"
+ * ĐÀI QUAN SÁT NÃO v3 (Task 26 — chỉ thị user 2026-10-13) — SÂN KHẤU NÃO
  * ============================================================================
  *
- * Nâng cấp từ BRAIN-UX §9.4 (UX-3). Chỉ thị user (trích ngắn): "mỗi lớp có
- * bao nhiêu nơ-ron thì phải hiển thị đúng số điểm nơ-ron đấy, cơ chế lan
- * truyền tiến bằng các đường màu xanh, lan truyền ngược là các đường màu
- * vàng và các đường này có hiệu ứng chuyển động theo hướng, khi agent vận
- * hành, tư duy thì có các điểm sáng tương ứng với các nơ-ron hoạt động...
- * không gian thể hiện... có thu to phóng nhỏ".
+ * Task 26 (chỉ thị user, nguyên văn những điểm chốt): "Nơ-ron: QUẢ CẦU MÀU
+ * TÍM TỎA SÁNG. Đường lan truyền TIẾN màu xanh — GIỮ NGUYÊN như hiện tại
+ * (emerald). THÊM đường lan truyền NGƯỢC màu VÀNG. Khi agent hoạt động thật
+ * + não hoạt động thật: tín hiệu đi từ nơ-ron này tới nơ-ron kia phải HIỂN
+ * THỊ THẬT — hạt XANH đi trái→phải (tiến), hạt VÀNG đi phải→trái (ngược);
+ * tín hiệu đi từ nơ-ron nào tới nơ-ron nào thì hiển thị đúng nơ-ron đó,
+ * chạy trên đường đó — TUYỆT ĐỐI KHÔNG tượng trưng" + "Đường kết nối dạng
+ * THẲNG (hiện hơi cong — bỏ cong)" + "Hiệu năng realtime toàn diện: kể cả
+ * tốc độ thu phóng nhỏ, bấm giữ di chuyển (drag), tốc độ load dữ liệu chung".
  *
- *  - HIỂN THỰC TỪNG NƠ-RON: display = min(units, STAGE_LIMITS
- *    .maxDisplayNeurons = 256) — spec 10→16→1 vẽ đủ 27 nơ-ron thật; nhãn ×N
- *    + note "nơ-ron đại diện" CHỈ khi units > 256 (nén đại diện). Cột input
- *    planned-fallback có activity.inputVector → dùng đúng length đó làm số
- *    nơ-ron input THẬT (thay '?'/'1-hot cfg' mù).
- *  - TIẾN = XANH (emerald, gradient bs-fwd 0.10→0.85), NGƯỢC = VÀNG
- *    (yellow, gradient bs-bwd 0.10→0.80) — nét đứt chạy theo hướng (class
- *    bs-flow / bs-flow-bwd trong globals.css — GIỮ NGUYÊN, debt chấp nhận).
- *  - ĐIỂM SÁNG ACTIVATION THẬT (prop activity — contract GET
- *    /api/brain/activity của 15-a): nơ-ron fill emerald theo |a|/max từng
- *    lớp; cạnh strokeOpacity theo |a_from × W(col+1)[to][from]| chuẩn hóa
- *    per cặp cột (0.22–0.90); dormant chỉ sáng cột input (one-hot thật) +
- *    chú thích nguồn; chip Agent đang chạy (emerald pulse) / Agent nghỉ.
- *  - ZOOM/PAN: state view {x,y,w,h} (null = fit về base layout.width×height+pad) —
- *    nút overlay −/%/+ /⤢ Vừa (bước 1.25×, zoom ∈ [0.5×, 12×]) · wheel zoom
- *    1.1×/event về TÂM CON TRỎ (passive:false — vùng quan sát chuyên dụng) ·
- *    kéo chuột pan khi zoomed (nuốt click sau kéo >3px — pattern P3-B1) ·
- *    đúp chuột = vừa khung. Hit-test getScreenCTM phản ánh viewBox hiện tại.
+ *  - CẠNH THẲNG (B1): bỏ bezierControls — cạnh = đoạn thẳng giữa 2 nơ-ron
+ *    (lùi đầu/cuối theo bán kính R1/R2 như trước). Hit-test point-to-segment
+ *    CHÍNH XÁC (stage-geometry.ts Task 26).
+ *  - NƠ-RON TÍM TỎA SÁNG (B2): HALO radial-gradient #c084fc (r ≈ rC×2.2,
+ *    opacity 0.10 + 0.45×inten) + CORE fill rgba(168,85,247, 0.18 + 0.75×inten),
+ *    stroke violet nhạt (selected giữ amber phóng to). inten = |a|/max từng
+ *    cột — GIỮ NGUYÊN phép tính (BRAIN-LIVE). Không dữ liệu (não dormant) →
+ *    tím NHẠT cố định (core 0.14 + halo 0.05) — tím là phong cách quả cầu,
+ *    độ sáng mới là tín hiệu thật (coordinator 26: không phát sáng giả).
+ *  - ĐƯỜNG TIẾN (B2): GIỮ NGUYÊN gradient emerald bs-fwd + strokeOpacity theo
+ *    edgeSignal |a×w| chuẩn hóa per cặp cột (0.22–0.90) như BRAIN-LIVE.
+ *  - ĐƯỜNG NGƯỢC VÀNG PER-EDGE THẬT (B3): khi có backprop.deltas (gradient
+ *    THẬT 1 mẫu thật qua bản active — hợp đồng 26-BE) mỗi cạnh vẽ THÊM 1 đường
+ *    thẳng song song lệch vuông góc 3 đơn vị (tiến −3, ngược +3 — 2 đường
+ *    phân biệt rõ), stroke gradient bs-bwd VÀNG, độ dày + opacity theo
+ *    |δ_j × a_i| per-edge chuẩn hóa per cặp lớp. KHÔNG có gradient thật →
+ *    KHÔNG có đường vàng (nguyên tắc THẬT — không trang trí suông). Bỏ toggle
+ *    backMode theo lớp cũ — hiển thị tự động theo dữ liệu thật.
+ *  - HẠT TÍN HIỆU THẬT — CANVAS 60FPS (B4): <canvas> overlay absolute inset-0
+ *    (pointer-events-none, DPR-scaled) nằm TRÊN SVG; vòng rAF đọc REF (không
+ *    setState trong loop). Hạt XANH (tiến, trái→phải) spawn trên cạnh có tín
+ *    hiệu thật s = |a_i × w_ji| ≥ 0.5% max cặp lớp VÀ |a_i| > 1e-9; hạt VÀNG
+ *    (ngược, phải→trái) theo |δ_j × a_i| — CHỈ khi backprop ≠ null; xác suất
+ *    spawn mỗi frame ∝ s/max (chuẩn hóa từng cặp lớp); speed ~300px/s ±20%;
+ *    bán kính 1.6–2.6px ∝ s; sprite radial pre-render + globalCompositeOperation
+ *    'lighter' (KHÔNG shadowBlur mỗi hạt). CAP toàn cục 500 hạt. Tắt khi
+ *    !inView || document.hidden || prefers-reduced-motion (SVG tĩnh vẫn đẹp).
+ *    Khi training?.status === 'running' (đúng não đang xem): mật độ ×2.
+ *  - REALTIME (B5): wheel gom deltaY → áp 1 lần/frame qua rAF (zoomAt + anchor
+ *    con trỏ giữ nguyên); pointermove pan gom → 1 lần/frame (justPannedRef giữ);
+ *    layer cạnh/nơ-ron/nhãn useMemo theo layout — pan/zoom chỉ đổi viewBox, KHÔNG
+ *    tính lại chuỗi toạ độ; weights fetch cache theo brain+head trong ref +
+ *    AbortController khi unmount/đổi não.
+
+ * BRAIN-LIVE v2 (2026-10-12) giữ: HIỂN THỰC TỪNG NƠ-RON (display = min(units,
+ * 256), cột input planned-fallback dùng đúng length inputVector); zoom/pan
+ * state view {x,y,w,h} (null = fit) + nút overlay −/%/+ /⤢ + wheel về TÂM CON
+ * TRỎ + kéo pan clamp quanh vùng base (FB-BRAIN-LIVE-R1-02) + đúp chuột vừa
+ * khung; hit-test getScreenCTM; chip Agent đang chạy/nghỉ.
  *
- * BRAIN-TAB-3PHAN v3 (chỉ thị user 2026-10-12, trích ngắn: "sau đó là đến
- * giao diện lớp có thể chỉnh to nhỏ để xem từ tổng quan đến chi tiết được.
- * Nếu số nơ rọn nhiều thì các điểm nơ ron chỉnh kích thước nhỏ lại, vị trí
- * các lớp chỉnh căn giữa thay vì căn trên như hiện tại"):
- *  - GEOMETRY v3 (stage-geometry.ts): cột CENTER-ALIGN dọc (cột ngắn lơ
- *    lửng giữa cột cao nhất — không kéo về top); rowStep thích ứng từng
- *    cột (cột dày đặc co còn sàn 2 — 256 nơ-ron span 510 thay 4404);
- *    radius nơ-ron theo cột (clamp rowStep×0.36 vào [0.7, 6.5] — cột 256
- *    chấm 0.72); width ĐỘNG clamp(n×130, 340, 900) thay hằng 340.
- *  - Render theo geometry v3: circle r = layout.radius[col] (selected phóng
- *    nhẹ min(neuronRMax, r×1.6+1.2)); cạnh né lõi bằng R1/R2 theo 2 cột;
- *    hit-test nơ-ron ngưỡng max(4, r_c+3) thích ứng cột dày đặc.
- *  - Container full-width fit-height (tab BRAIN layout 3 phần — đài quan
- *    sát là section GIỮA): tall → stageBox cao xác định h-[440px] md:520
- *    xl:600 + flex center; ResizeObserver đo box → setSize SVG THỦ CÔNG
- *    giữ aspect (scale = min(boxW/viewW, boxH/viewH)) — element rect ≡
- *    viewBox rect cho MỌI phép ratio zoom/pan/hit-test (code zoom tính theo
- *    getBoundingClientRect của element — KHÔNG dùng preserveAspectRatio
- *    meet để letterbox). !tall giữ h-auto w-full cũ (không đo).
+ * BRAIN-TAB-3PHAN v3 giữ: geometry v3 (center-align + rowStep/radius thích ứng
+ * từng cột + width động); container tall full-width fit-height (ResizeObserver
+ * đo stageBox → setSize SVG thủ công giữ aspect — element rect ≡ viewBox rect).
  *
  * Giữ nguyên từ UX-3/§9.4: bấm nhãn cột → editor (UX-1); nơ-ron → inspector
- * bias/|w| vào-ra · cạnh → |w| đúng cặp (từ trọng số THẬT /api/brain/weights
- * — refreshNonce đổi giá trị → refetch, vd sau train); nút Tiến/Ngược bật
- * ngược CHỈ khi có |gradient| thật; LOD ≤ 300 cạnh + IntersectionObserver
- * dừng animation ngoài viewport; prefers-reduced-motion → bản tĩnh; touch
- * target ≥ 44px; surrogate head tabs; accent nơ-ron lifecycle amber.
- * Toán hình học thuần ở stage-geometry.ts (test r90). Thu thập dữ liệu
- * READ-ONLY — KHÔNG đụng pipeline/runtime.
+ * bias/|w| vào-ra · cạnh → |w| đúng cặp (từ trọng số THẬT /api/brain/weights —
+ * refreshNonce đổi → refetch); LOD ≤ 300 cạnh + IntersectionObserver dừng
+ * animation ngoài viewport; prefers-reduced-motion → bản tĩnh; touch target
+ * ≥ 44px; surrogate head tabs. Toán hình học thuần ở stage-geometry.ts (test
+ * r90). Thu thập dữ liệu READ-ONLY — KHÔNG đụng pipeline/runtime.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -65,12 +71,10 @@ import type { BrainActivity, BrainStatusEntry } from '@/lib/brain/registry'
 import type { BrainDraftSpec } from '@/lib/brain/spec-schema'
 import {
   buildStageLayout,
-  bezierControls,
   edgePhaseSec,
   hitEdge,
   isAnimated,
   lodEdges,
-  strokeWidthForGrad,
   STAGE_LIMITS,
   type StageColumn,
   type StageEdge,
@@ -111,6 +115,35 @@ interface WeightsResponse {
 }
 
 export type SurrogateHead = 'success' | 'tokens' | 'durationMs'
+
+/**
+ * Task 26 (hợp đồng API 26-BE — GET /api/brain/activity += backprop): gradient
+ * THẬT của 1 mẫu thật qua bản active. deltas[k][j] = δ nơ-ron j lớp
+ * activations[k+1] (k = 0..L−2) → per-edge gradient thật = |deltas[c][j] ×
+ * activations[c][i]|. null = chưa có (não dormant / thiếu nhãn). Field chưa có
+ * trong response → coi như null (code phòng thủ — 26-BE triển khai song song).
+ */
+export interface StageBackprop {
+  deltas: number[][] | null
+  yTrue: number[] | null
+  loss: number | null
+  label: string | null
+}
+
+/**
+ * Task 26 (hợp đồng API 26-BE — GET /api/brain/activity += training): lần
+ * train gần nhất / đang chạy (mọi nguồn kể cả auto-retrain). null = chưa có.
+ */
+export interface StageTraining {
+  brain: string
+  head: string | null
+  status: 'running' | 'done' | 'failed'
+  startedAt: string
+  endedAt: string | null
+  epochsRun: number | null
+  finalLoss: number | null
+  gradAbsMean: number[] | null
+}
 
 interface InspectorState {
   kind: 'neuron' | 'edge'
@@ -155,6 +188,18 @@ function zoomAt(cur: StageView, factor: number, base: StageView, rX: number, rY:
   return { x: wx - rX * w, y: wy - rY * h, w, h }
 }
 
+/** Pan clamp quanh vùng base (FB-BRAIN-LIVE-R1-02 giữ nguyên công thức): cửa
+ *  sổ nhìn phải giao vùng base ≥ 10% kích thước cửa sổ theo MỖI chiều. */
+function panClamped(v: StageView, dx: number, dy: number, scale: number, base: StageView): StageView {
+  const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x))
+  return {
+    x: clamp(v.x - dx * scale, base.x - 0.9 * v.w, base.x + base.w - 0.1 * v.w),
+    y: clamp(v.y - dy * scale, base.y - 0.9 * v.h, base.y + base.h - 0.1 * v.h),
+    w: v.w,
+    h: v.h,
+  }
+}
+
 /**
  * Nhãn số nơ-ron một lớp (BRAIN-LIVE): vẽ ĐÚNG từng unit khi units ≤ 256 →
  * hiển thị số thẳng (`16`); CHỈ khi bị nén đại diện (units > 256) mới dùng ký
@@ -162,6 +207,67 @@ function zoomAt(cur: StageView, factor: number, base: StageView, rX: number, rY:
  */
 function unitCountLabel(units: number): string {
   return units > STAGE_LIMITS.maxDisplayNeurons ? `×${units}` : `${units}`
+}
+
+// ==================== HẠT TÍN HIỆU THẬT (Task 26 B4 — canvas 60fps) ====================
+
+/** Hạt chạy trên 1 đoạn thẳng (đÃ lệch ±EDGE_PARALLEL_OFFSET khi có 2 đường):
+ *  dir 1 = tiến (trái→phải, x1→x2); dir −1 = ngược (phải→trải, x2→x1). */
+interface Particle {
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+  dir: 1 | -1
+  /** Tiến trình 0..1 dọc đoạn (điểm bắt đầu theo dir). */
+  t: number
+  /** Tốc độ px màn hình/giây (spawn: 300 × (0.8..1.2) jitter). */
+  speedPx: number
+  /** Bán kính nhân sáng px (1.6–2.6 ∝ s). */
+  radius: number
+  sprite: 'fwd' | 'bwd'
+}
+
+/** CAP toàn cục — đầy thì bỏ spawn (không tích tụ). */
+const MAX_PARTICLES = 500
+/** Tốc độ hạt trên màn hình (px/giây) — spec Task 26 "tốc độ stage ~300px/s ±20%". */
+const PARTICLE_SPEED_PX = 300
+/** Xác suất spawn mỗi giây trên 1 cạnh = norm × hằng này (×2 khi đang train). */
+const PARTICLE_SPAWN_PER_SEC = 3.5
+/** Lệch vuông góc 2 đường tiến/ngược song song (đơn vị viewBox — B3). */
+const EDGE_PARALLEL_OFFSET = 3
+/** Ngưỡng 0.5% max cặp lớp — tín hiệu dưới này KHÔNG hạt (nguyên tắc THẬT). */
+const SIGNAL_GATE_RATIO = 0.005
+/** Nơ-ron nguồn phải thật sự phát: |a| hoặc |δ| ≤ ngưỡng này = không tín hiệu. */
+const SOURCE_EPS = 1e-9
+
+/**
+ * Sprite radial pre-render (64×64 offscreen): 1 lần tạo, vẽ hàng nghìn lần
+ * drawImage — KHÔNG shadowBlur mỗi hạt (hiệu năng B4). lõi sáng → màu → trong
+ * suốt rìa; composite 'lighter' khi vẽ cho hiệu ứng phát sáng cộng gộp.
+ */
+function makeGlowSprite(stops: [number, string][]): HTMLCanvasElement | null {
+  if (typeof document === 'undefined') return null
+  const size = 64
+  const c = document.createElement('canvas')
+  c.width = size
+  c.height = size
+  const ctx = c.getContext('2d')
+  if (!ctx) return null
+  const g = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2)
+  for (const [offset, color] of stops) g.addColorStop(offset, color)
+  ctx.fillStyle = g
+  ctx.fillRect(0, 0, size, size)
+  return c
+}
+
+/** entry tín hiệu per-edge cho render + hạt: norm ∈ [0,1] per cặp lớp. */
+interface EdgeSignalEntry {
+  /** strokeOpacity tiến (0.22 + 0.68×norm — GIỮ NGUYÊN thang BRAIN-LIVE). */
+  opacity: number
+  norm: number
+  /** Đủ điều kiện spawn hạt (≥0.5% max cặp lớp VÀ nơ-ron nguồn thật sự phát). */
+  gate: boolean
 }
 
 export function BrainStage({
@@ -175,13 +281,15 @@ export function BrainStage({
   refreshNonce,
   initialHead,
   onHeadChange,
+  backprop,
+  training,
 }: {
   brain: BrainStatusEntry
   /** Bản nháp hiện tại (preview kiến trúc khi editor bật) */
   draft: BrainDraftSpec | null
   /** Cờ ui_brain_edit — on: sân khấu preview DRAFT; off: hiển thị active/planned */
   editorOn: boolean
-  /** Cờ ui_synapse_fx — on: bezier + animation + inspector + điểm sáng activity; off: đường thẳng tĩnh trung tính */
+  /** Cờ ui_synapse_fx — on: hiệu ứng + inspector + điểm sáng activity; off: đường thẳng tĩnh trung tính */
   fxOn: boolean
   /** Bấm nhãn cột lớp ẩn → editor UX-1 nhảy tới lớp đó */
   onEditLayer?: (layerIdx: number) => void
@@ -199,14 +307,17 @@ export function BrainStage({
    *  fetchWeights) cùng một head ngay từ đầu. */
   initialHead?: SurrogateHead
   /** FB-BRAIN-LIVE-R1-01 — user bấm tab head → caller (brain-tab) đổi head
-   *  poll /api/brain/activity theo head đang chọn (trước-fix poll luôn
-   *  'success' → trộn 2 head trong 1 khung: nơ-ron sáng theo head poll,
-   *  cạnh |a×w|/inspector theo head chọn). Chỉ gọi trong event handler. */
+   *  poll /api/brain/activity theo head đang chọn. Chỉ gọi trong event handler. */
   onHeadChange?: (head: SurrogateHead) => void
+  /** Task 26 (hợp đồng 26-BE) — gradient THẬT 1 mẫu thật: null/undefined = chưa
+   *  có → KHÔNG vẽ đường vàng, KHÔNG hạt vàng (nguyên tắc THẬT của user). */
+  backprop?: StageBackprop | null
+  /** Task 26 (hợp đồng 26-BE) — train gần nhất/đang chạy: status 'running' &&
+   *  trùng não đang xem → chip ĐANG TRAIN + mật độ hạt ×2. */
+  training?: StageTraining | null
 }) {
   const reducedMotion = usePrefersReducedMotion()
   const animated = isAnimated(fxOn, reducedMotion)
-  const [backMode, setBackMode] = useState(false)
   // FB-BRAIN-LIVE-R1-01: khởi tạo từ prop initialHead (default 'success' như cũ)
   const [head, setHead] = useState<SurrogateHead>(initialHead ?? 'success')
   const [inspector, setInspector] = useState<InspectorState | null>(null)
@@ -216,32 +327,72 @@ export function BrainStage({
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const stageBoxRef = useRef<HTMLDivElement | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
+  // Task 26 B4 — canvas hạt tín hiệu thật (nằm TRÊN SVG, pointer-events-none)
+  const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  const particlesRef = useRef<Particle[]>([])
+  /// Hạt tín hiệu bật/tắt tại chỗ (NÚT BẬT TẮT HIỆU ỨNG hạt — B3/B4: ĐƯỜNG
+  /// VÀNG tự theo dữ liệu thật, nút này chỉ điều khiển lớp hạt chuyển động).
+  const [particlesOn, setParticlesOn] = useState(true)
   // ── Zoom/pan state (BRAIN-LIVE) ──
   const [view, setView] = useState<StageView | null>(null)
   const [panning, setPanning] = useState(false)
   const justPannedRef = useRef(false)
   const panTeardownRef = useRef<(() => void) | null>(null)
+  // ── Task 26 B5: wheel/pan gom sự kiện → áp DUY NHẤT 1 lần mỗi frame rAF ──
+  const pendingWheelRef = useRef(0)
+  const wheelRafRef = useRef<number | null>(null)
+  const panPendingRef = useRef({ dx: 0, dy: 0 })
+  const panRafRef = useRef<number | null>(null)
   // ── BRAIN-TAB-3PHAN: client size của stageBox (ResizeObserver) — null
   //    trước khi đo / !tall / trình duyệt không có ResizeObserver → SVG giữ
   //    className cũ h-auto w-full (degrade đúng diện mạo BRAIN-LIVE). ──
   const [boxSize, setBoxSize] = useState<{ w: number; h: number } | null>(null)
 
-  // ── Kéo trọng số bản active (READ-ONLY, fail-open planned/draft);
-  //    refreshNonce đổi → refetch (sau train, version mới) ──
+  // ── Kéo trọng số bản active (READ-ONLY, fail-open planned/draft) ──
+  // Task 26 B5: cache theo brain+head trong ref — đổi tab/não quay lại không
+  // refetch khi refreshNonce chưa đổi (sau train nonce đổi → refetch thật);
+  // AbortController khi unmount/đổi não — không setState sau unmount.
+  const weightsCacheRef = useRef(new Map<string, { nonce: number; data: WeightsResponse }>())
+  const mountedRef = useRef(true)
+  const weightsAbortRef = useRef<AbortController | null>(null)
+  useEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+      weightsAbortRef.current?.abort()
+    }
+  }, [])
   const fetchWeights = useCallback(async () => {
+    weightsAbortRef.current?.abort()
+    const ac = new AbortController()
+    weightsAbortRef.current = ac
+    const key = `${brain.key}:${head}`
+    const nonce = refreshNonce ?? 0
+    const cached = weightsCacheRef.current.get(key)
+    if (cached && cached.nonce === nonce) {
+      setWeights(cached.data)
+      setWeightsError(null)
+      return
+    }
     try {
       const q = brain.key === 'surrogate' ? `?brain=${brain.key}&head=${head}` : `?brain=${brain.key}`
-      const res = await fetch(`/api/brain/weights${q}`)
+      const res = await fetch(`/api/brain/weights${q}`, { signal: ac.signal })
+      if (!mountedRef.current || ac.signal.aborted) return
       if (!res.ok) {
         setWeights(null)
         setWeightsError(res.status === 404 ? 'chưa có bản active' : `HTTP ${res.status}`)
         return
       }
-      setWeights((await res.json()) as WeightsResponse)
+      const json = (await res.json()) as WeightsResponse
+      if (!mountedRef.current || ac.signal.aborted) return
+      setWeights(json)
       setWeightsError(null)
-    } catch {
+      weightsCacheRef.current.set(key, { nonce, data: json })
+    } catch (err) {
+      if (ac.signal.aborted || !mountedRef.current) return
       setWeights(null)
       setWeightsError('lỗi mạng — hiển thị spec kế hoạch')
+      void err
     }
   }, [brain.key, head, refreshNonce])
   // (queueMicrotask defer: không gọi setState đồng bộ trong body effect —
@@ -322,6 +473,8 @@ export function BrainStage({
     display: Math.min(c.units, STAGE_LIMITS.maxDisplayNeurons),
   }))), [columns])
 
+  // Task 26 B1 — cạnh THẲNG: (x1,y1)→(x2,y2) giữa tâm 2 nơ-ron, lùi đầu/cuối
+  // theo bán kính R1/R2 của 2 cột (giữ logic né lõi BRAIN-TAB-3PHAN).
   const edgesAll = useMemo(() => {
     const byColRow = new Map<string, { x: number; y: number; realIndex: number | null }>()
     for (const n of layout.neurons) byColRow.set(`${n.col}:${n.row}`, { x: n.x, y: n.y, realIndex: n.realIndex })
@@ -337,29 +490,17 @@ export function BrainStage({
           // chấm nhỏ → cạnh loe gần lõi hơn — R1/R2 thay hằng 6.5 cứng)
           const R1 = layout.radius[c] ?? STAGE_LIMITS.neuronRMax
           const R2 = layout.radius[c + 1] ?? STAGE_LIMITS.neuronRMax
-          const { cx1, cy1, cx2, cy2 } = bezierControls(a.x + R1, a.y, b.x - R2, b.y)
           list.push({
             id: id++, fromCol: c, toCol: c + 1, fromRow: r1, toRow: r2,
-            x1: a.x + R1, y1: a.y, x2: b.x - R2, y2: b.y, cx1, cy1, cx2, cy2,
+            x1: a.x + R1, y1: a.y, x2: b.x - R2, y2: b.y,
           })
         }
       }
     }
     return list
-  }, [columns, layout.neurons, layout.radius])
+  }, [columns, layout])
 
   const edges = useMemo(() => lodEdges(edgesAll), [edgesAll])
-
-  // ── |gradient| từng lớp (chế độ ngược — dữ liệu thật, có mới bật được) ──
-  const gradByCol = useMemo(() => {
-    if (!weights?.gradAbsMean || !Array.isArray(weights.gradAbsMean)) return null
-    // gradAbsMean[i] (0-based) = |gradient| TB của LỚP TRỌNG SỐ nối cột i → cột i+1
-    // (tensor W(i+1)); cạnh từ cột fromCol đọc g[fromCol] — mapping ĐÚNG theo
-    // cột TRÁI của cạnh (FB-BRAIN-UX-R1-09a: trước đây comment ghi sai i+1→i+2)
-    const g = weights.gradAbsMean
-    return (col: number): number | null => (col < g.length ? g[col] : null)
-  }, [weights])
-  const hasBackData = gradByCol !== null && weights?.gradAbsMean?.some(v => v > 0) === true
 
   // ── realIndex theo vị trí vẽ (dùng cho intensity cạnh — O(1) lookup) ──
   const realByPos = useMemo(() => {
@@ -370,7 +511,7 @@ export function BrainStage({
     return m
   }, [layout.neurons])
 
-  // ── INTENSITY NƠ-RON theo activation THẬT (BRAIN-LIVE) ──
+  // ── INTENSITY NƠ-RON theo activation THẬT (BRAIN-LIVE — GIỮ NGUYÊN) ──
   // layer 0 = activity.inputVector (kể cả dormant — one-hot thật); layer ≥1 =
   // activity.activations[layer] CHỈ khi status='active'. Chuẩn hóa per lớp:
   // intensity = |a_i| / max|a| (max=0 → 0). Key `${col}:${row}` theo nơ-ron VẼ
@@ -402,14 +543,15 @@ export function BrainStage({
     return m.size > 0 ? m : null
   }, [activity, columns, layout.neurons])
 
-  // ── INTENSITY CẠNH theo tín hiệu THẬT (BRAIN-LIVE) ──
+  // ── TÍN HIỆU TIẾN per-edge THẬT (BRAIN-LIVE — GIỮ NGUYÊN thang chuẩn hóa) ──
   // Cạnh (col→col+1): raw = |a_from × W(col+1)[to][from]| — a_from lấy từ
   // layer 0 = inputVector, layer ≥1 = activations; chuẩn hóa per CẶP CỘT
   // (max trong cặp, tính trên tập cạnh ĐANG VẼ sau LOD) → strokeOpacity =
   // 0.22 + 0.68×norm (min 0.22 giữ cấu trúc nhìn thấy). Đọc tensor PHẲNG
   // tìm MỘT lần per cặp cột — không build lại matrix; O(edges ≤ 300).
-  // Chỉ áp cho lan truyền TIẾN; backMode giữ độ dày |gradient| như UX-3.
-  const edgeSignal = useMemo(() => {
+  // Task 26 B4: memo ĐỒNG THỜI trả norm + gate (spawn hạt: s ≥ 0.5% max cặp
+  // lớp VÀ |a_from| > 1e-9 — nơ-ron nguồn phải thật sự phát).
+  const fwdSignal = useMemo(() => {
     if (!activity || activity.status !== 'active' || !activity.activations) return null
     const tensors = weights?.mlp?.tensors
     if (!tensors || edges.length === 0) return null
@@ -423,6 +565,7 @@ export function BrainStage({
         : null)
     }
     const raw = new Array<number>(edges.length).fill(0)
+    const srcA = new Array<number>(edges.length).fill(0)
     const maxByPair = new Map<number, number>()
     let anySignal = false
     for (let i = 0; i < edges.length; i++) {
@@ -433,22 +576,82 @@ export function BrainStage({
       const toReal = realByPos.get(`${e.toCol}:${e.toRow}`)
       if (!fromActs || !w || fromReal === undefined || toReal === undefined) continue
       if (fromReal >= fromActs.length || fromReal >= w.cols || toReal >= w.rows) continue
-      const v = Math.abs(fromActs[fromReal] * (w.data[toReal * w.cols + fromReal] ?? 0))
+      const a = fromActs[fromReal]
+      const v = Math.abs(a * (w.data[toReal * w.cols + fromReal] ?? 0))
       raw[i] = v
+      srcA[i] = Math.abs(a)
       if (v > 0) anySignal = true
       const mx = maxByPair.get(e.fromCol) ?? 0
       if (v > mx) maxByPair.set(e.fromCol, v)
     }
     if (!anySignal) return null // toàn 0 → không giả tín hiệu, giữ opacity mặc định
-    const m = new Map<number, number>()
+    const m = new Map<number, EdgeSignalEntry>()
     for (let i = 0; i < edges.length; i++) {
       const e = edges[i]
       const mx = maxByPair.get(e.fromCol) ?? 0
       const norm = mx > 0 ? Math.min(1, raw[i] / mx) : 0
-      m.set(e.id, 0.22 + 0.68 * norm)
+      m.set(e.id, {
+        opacity: 0.22 + 0.68 * norm,
+        norm,
+        gate: mx > 0 && raw[i] >= SIGNAL_GATE_RATIO * mx && srcA[i] > SOURCE_EPS,
+      })
     }
     return m
   }, [activity, weights, edges, columns, realByPos])
+
+  // ── TÍN HIỆU NGƯỢC per-edge THẬT (Task 26 B3 — hợp đồng 26-BE) ──
+  // backprop.deltas[k][j] = δ nơ-ron j lớp activations[k+1] → cạnh từ cột c
+  // tới cột c+1 đọc deltas[c][toReal]; a_i = activation nơ-ron TRÁI (layer 0 =
+  // inputVector). raw = |δ_j × a_i|, chuẩn hóa per CẶP CỘT như tín hiệu tiến
+  // (cùng thang style edgeSignal). KHÔNG deltas → null → KHÔNG đường vàng.
+  const bwdSignal = useMemo(() => {
+    const deltas = backprop?.deltas
+    if (!deltas || !Array.isArray(deltas) || deltas.length === 0) return null
+    if (!activity || !activity.activations || edges.length === 0) return null
+    const actOf = (col: number): readonly number[] | null =>
+      col === 0 ? (activity.inputVector ?? null) : activity.activations?.[col] ?? null
+    const raw = new Array<number>(edges.length).fill(0)
+    const srcD = new Array<number>(edges.length).fill(0)
+    const maxByPair = new Map<number, number>()
+    let anySignal = false
+    for (let i = 0; i < edges.length; i++) {
+      const e = edges[i]
+      const acts = actOf(e.fromCol)
+      const dl = deltas[e.fromCol]
+      const fromReal = realByPos.get(`${e.fromCol}:${e.fromRow}`)
+      const toReal = realByPos.get(`${e.toCol}:${e.toRow}`)
+      if (!acts || !dl || !Array.isArray(dl) || fromReal === undefined || toReal === undefined) continue
+      if (fromReal >= acts.length || toReal >= dl.length) continue
+      const a = acts[fromReal]
+      const d = dl[toReal]
+      const v = Math.abs(d * a)
+      raw[i] = v
+      srcD[i] = Math.abs(d)
+      if (v > 0) anySignal = true
+      const mx = maxByPair.get(e.fromCol) ?? 0
+      if (v > mx) maxByPair.set(e.fromCol, v)
+    }
+    if (!anySignal) return null // gradient toàn 0 → không vẽ đường vàng giả
+    const m = new Map<number, EdgeSignalEntry>()
+    for (let i = 0; i < edges.length; i++) {
+      const e = edges[i]
+      const mx = maxByPair.get(e.fromCol) ?? 0
+      const norm = mx > 0 ? Math.min(1, raw[i] / mx) : 0
+      m.set(e.id, {
+        opacity: 0.22 + 0.68 * norm,
+        norm,
+        gate: mx > 0 && raw[i] >= SIGNAL_GATE_RATIO * mx && srcD[i] > SOURCE_EPS,
+      })
+    }
+    return m
+  }, [backprop, activity, edges, realByPos])
+
+  /// Gradient mẫu thật có sẵn (chip trạng thái trung thực — B3): theo hợp đồng
+  /// backprop ≠ null nghĩa là BE đã tính gradient thật 1 mẫu; đường vàng còn
+  /// cần activations (bwdSignal) — không có thì không vẽ (không trang trí suông).
+  const backReady = backprop != null && backprop.deltas != null
+  /// Task 26: train đang chạy đúng não đang xem → chip ĐANG TRAIN + hạt ×2.
+  const trainingRunning = training?.status === 'running' && training.brain === brain.key
 
   // ── Inspector: tra bias/|w| từ tensor thật ──
   const inspect = useMemo(() => {
@@ -548,26 +751,43 @@ export function BrainStage({
   }
   const fit = useCallback(() => { setView(null) }, [])
 
-  // ── Wheel zoom về TÂM CON TRỎ (BRAIN-LIVE): vùng quan sát chuyên dụng —
-  // wheel thường lẫn ctrl+wheel ĐỀU zoom (preventDefault, passive:false).
-  // Toạ độ world tại điểm chuột: world = view.xy + ratio × view.wh — giữ
-  // điểm đó cố định khi đổi w/h (công thức chuẩn, ratio theo rect SVG). ──
+  // ── Wheel zoom về TÂM CON TRỎ (BRAIN-LIVE) — Task 26 B5: gom deltaY vào
+  //    ref, áp DUY NHẤT 1 lần/mỗi frame qua rAF (toán zoomAt + anchor con trỏ
+  //    giữ nguyên; trước-fix mỗi wheel event 1 setState → pan/zoom nhanh làm
+  //    React re-render dồn dập). Vùng quan sát chuyên dụng — wheel thường lẫn
+  //    ctrl+wheel ĐỀU zoom (preventDefault, passive:false). ──
   useEffect(() => {
     const el = stageBoxRef.current
     if (!el) return
+    let anchor = { rX: 0.5, rY: 0.5 }
+    const applyWheel = () => {
+      wheelRafRef.current = null
+      const delta = pendingWheelRef.current
+      pendingWheelRef.current = 0
+      if (delta === 0) return
+      const factor = delta < 0 ? WHEEL_STEP : 1 / WHEEL_STEP
+      setView(v => zoomAt(v ?? baseView, factor, baseView, anchor.rX, anchor.rY))
+    }
     const onWheel = (ev: WheelEvent) => {
       ev.preventDefault()
       const svg = svgRef.current
       if (!svg) return
       const rect = svg.getBoundingClientRect()
       if (rect.width <= 0 || rect.height <= 0) return
-      const rX = Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width))
-      const rY = Math.min(1, Math.max(0, (ev.clientY - rect.top) / rect.height))
-      const factor = ev.deltaY < 0 ? WHEEL_STEP : 1 / WHEEL_STEP
-      setView(v => zoomAt(v ?? baseView, factor, baseView, rX, rY))
+      anchor = {
+        rX: Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width)),
+        rY: Math.min(1, Math.max(0, (ev.clientY - rect.top) / rect.height)),
+      }
+      pendingWheelRef.current += ev.deltaY
+      if (wheelRafRef.current === null) wheelRafRef.current = requestAnimationFrame(applyWheel)
     }
     el.addEventListener('wheel', onWheel, { passive: false })
-    return () => el.removeEventListener('wheel', onWheel)
+    return () => {
+      el.removeEventListener('wheel', onWheel)
+      if (wheelRafRef.current !== null) cancelAnimationFrame(wheelRafRef.current)
+      wheelRafRef.current = null
+      pendingWheelRef.current = 0
+    }
   }, [baseView])
 
   // ── ResizeObserver đo stageBox (BRAIN-TAB-3PHAN): chỉ chạy khi tall —
@@ -587,11 +807,12 @@ export function BrainStage({
     return () => ro.disconnect()
   }, [tall])
 
-  // ── Drag pan (BRAIN-LIVE): chuột chính (button 0), CHỈ khi đang zoom;
-  // delta tỉ lệ view.w/clientWidth (dọc theo view.h/svgHeight). Kéo >3px =
-  // "đã pan" → nuốt click ngay sau (setTimeout 0 dọn cờ — pattern P3-B1
-  // neural-architecture-section). Touch giữ cuộn native — mobile zoom qua
-  // nút overlay + đúp chạm; unmount giữa lúc kéo → dọn listener sống. ──
+  // ── Drag pan (BRAIN-LIVE) — Task 26 B5: gom pointermove vào ref, áp 1 lần
+  //    mỗi frame qua rAF (trước-fix mỗi pointermove 1 setState). Chuột chính
+  //    (button 0), CHỈ khi đang zoom; delta tỉ lệ view.w/clientWidth; kéo
+  //    >3px = "đã pan" → nuốt click ngay sau (setTimeout 0 dọn cờ — pattern
+  //    P3-B1). Touch giữ cuộn native — mobile zoom qua nút overlay + đúp chạm;
+  //    unmount giữa lúc kéo → dọn listener sống. ──
   const onStagePointerDown = (ev: React.PointerEvent<HTMLDivElement>) => {
     if (ev.pointerType === 'touch' || ev.button !== 0) return
     if (view === null) return // đang fit — không pan (cursor pointer cho hit-test)
@@ -600,54 +821,50 @@ export function BrainStage({
     const rect = svg.getBoundingClientRect()
     if (rect.width <= 0 || rect.height <= 0) return
     const startView = view
+    const base = baseView
     const startX = ev.clientX
     const startY = ev.clientY
-    // FB-BRAIN-LIVE-R1-05: MỘT hệ số tỉ lệ cho cả 2 trục — svg `h-auto w-full`
-    // giữ đúng aspect viewBox (rect.height/rect.width ≡ view.h/view.w) nên
-    // scale dọc ≡ scale ngang; trước-fix có biến scaleV tính rồi không dùng.
+    // FB-BRAIN-LIVE-R1-05: MỘT hệ số tỉ lệ cho cả 2 trục — svg giữ đúng
+    // aspect viewBox (rect.height/rect.width ≡ view.h/view.w) nên scale
+    // dọc ≡ scale ngang.
     const scale = startView.w / rect.width
     let moved = false
+    const step = () => {
+      panRafRef.current = null
+      const p = panPendingRef.current
+      panPendingRef.current = { dx: 0, dy: 0 }
+      if (!moved || (p.dx === 0 && p.dy === 0)) return
+      setView(v => (v === null ? v : panClamped(v, p.dx, p.dy, scale, base)))
+    }
     const onMove = (mv: PointerEvent) => {
       if (mv.buttons === 0) { onUp(); return }
-      const dx = mv.clientX - startX
-      const dy = mv.clientY - startY
-      if (!moved && Math.hypot(dx, dy) > 3) { moved = true; setPanning(true) }
+      if (!moved && Math.hypot(mv.clientX - startX, mv.clientY - startY) > 3) {
+        moved = true
+        setPanning(true)
+      }
       if (!moved) return
-      // FB-BRAIN-LIVE-R1-02 — clamp pan quanh vùng base: cửa sổ nhìn
-      // [x, x+w]×[y, y+h] phải giao vùng base [bx, bx+bw]×[by, by+bh]
-      // CHIỀU DÀI ≥ 10% kích thước cửa sổ — kéo quá xa dừng ở clamp, đồ
-      // thị không bao giờ mất hẳn khỏi màn (trước-fix kéo thoải mái mất
-      // trắng, chỉ ⤢ Vừa/đúp chấm hồi phục). Công thức đối xứng 2 biên:
-      //   x ∈ [bx − 0.9·w, bx + bw − 0.1·w]   (y tương tự với by/bh)
-      //   · biên TRÁI  x = bx − 0.9·w    → mép phải cửa sổ = bx + 0.1·w
-      //     (10% CUỐI cửa sổ nằm trong base)
-      //   · biên PHẢI x = bx + bw − 0.1·w → mép trái cửa sổ = bx + bw − 0.1·w
-      //     (10% ĐẦU cửa sổ nằm trong base)
-      // → mọi vị trí giữa 2 biên đều giao base ≥ 0.1·w (liên tục, đảo dấu
-      // tại tâm base). w/h cố định trong 1 lần kéo (startView) nên chỉ cần
-      // kẹp x/y sau khi trừ delta.
-      const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v))
-      setView({
-        x: clamp(
-          startView.x - dx * scale,
-          baseView.x - 0.9 * startView.w,
-          baseView.x + baseView.w - 0.1 * startView.w,
-        ),
-        y: clamp(
-          startView.y - dy * scale,
-          baseView.y - 0.9 * startView.h,
-          baseView.y + baseView.h - 0.1 * startView.h,
-        ),
-        w: startView.w,
-        h: startView.h,
-      })
+      // gom delta từ vị trí ĐÃ ÁP gần nhất — mỗi frame chỉ 1 setState
+      panPendingRef.current.dx += mv.clientX - lastPos.x
+      panPendingRef.current.dy += mv.clientY - lastPos.y
+      lastPos = { x: mv.clientX, y: mv.clientY }
+      if (panRafRef.current === null) panRafRef.current = requestAnimationFrame(step)
     }
+    let lastPos = { x: startX, y: startY }
     const onUp = () => {
       window.removeEventListener('pointermove', onMove)
       window.removeEventListener('pointerup', onUp)
       window.removeEventListener('pointercancel', onUp)
       window.removeEventListener('blur', onUp)
       panTeardownRef.current = null
+      if (panRafRef.current !== null) {
+        cancelAnimationFrame(panRafRef.current)
+        panRafRef.current = null
+      }
+      const p = panPendingRef.current
+      panPendingRef.current = { dx: 0, dy: 0 }
+      if (moved && (p.dx !== 0 || p.dy !== 0)) {
+        setView(v => (v === null ? v : panClamped(v, p.dx, p.dy, scale, base)))
+      }
       setPanning(false)
       if (moved) {
         justPannedRef.current = true
@@ -691,11 +908,314 @@ export function BrainStage({
     setInspector(null)
   }, [edges, layout.neurons, layout.radius])
 
+  // ── Task 26 B4: dữ liệu mới nhất cho vòng rAF hạt — REF cập nhật mỗi
+  //    render (loop KHÔNG setState, KHÔNG re-render React vì hạt). ──
+  const loopDataRef = useRef<{
+    edges: StageEdge[]
+    fwd: Map<number, EdgeSignalEntry> | null
+    bwd: Map<number, EdgeSignalEntry> | null
+    effView: StageView
+    trainingRunning: boolean
+  }>({ edges, fwd: fwdSignal, bwd: bwdSignal, effView, trainingRunning })
+  useEffect(() => {
+    loopDataRef.current = { edges, fwd: fwdSignal, bwd: bwdSignal, effView, trainingRunning }
+  })
+
+  // ── Task 26 B4: vòng rAF hạt tín hiệu thật — canvas 60fps. Tắt khi
+  //    !inView || document.hidden || prefers-reduced-motion || !animated ||
+  //    hạt bị tắt → hủy rAF + clear canvas (SVG tĩnh vẫn đẹp). Toạ độ: DÙNG
+  //    CHUNG phép biến đổi stage→screen-px với SVG (svg.getBoundingClientRect
+  //    mỗi frame — rẻ; mapping = offset svg-trong-canvas + scale rect/view). ──
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    const spriteFwd = makeGlowSprite([
+      [0, 'rgba(209,250,229,0.95)'],
+      [0.25, 'rgba(52,211,153,0.9)'],
+      [1, 'rgba(16,185,129,0)'],
+    ])
+    const spriteBwd = makeGlowSprite([
+      [0, 'rgba(254,249,195,0.95)'],
+      [0.25, 'rgba(250,204,21,0.9)'],
+      [1, 'rgba(250,204,21,0)'],
+    ])
+    if (!spriteFwd || !spriteBwd) return
+    const shouldRun = fxOn && animated && inView && particlesOn && !reducedMotion
+    let raf = 0
+    let running = false
+    let last = 0
+
+    const stop = () => {
+      running = false
+      if (raf) cancelAnimationFrame(raf)
+      raf = 0
+      particlesRef.current = []
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+    }
+    const tick = (now: number) => {
+      if (!running) return
+      const dt = Math.min(0.1, Math.max(0, (now - last) / 1000))
+      last = now
+      if (document.hidden) { stop(); return }
+      const rect = canvas.getBoundingClientRect()
+      const svg = svgRef.current
+      if (rect.width <= 0 || rect.height <= 0 || !svg) {
+        raf = requestAnimationFrame(tick)
+        return
+      }
+      // DPR-scale theo kích thước thật (resize lười mỗi frame — không listener)
+      const dpr = Math.min(2, window.devicePixelRatio || 1)
+      const wantW = Math.round(rect.width * dpr)
+      const wantH = Math.round(rect.height * dpr)
+      if (canvas.width !== wantW || canvas.height !== wantH) {
+        canvas.width = wantW
+        canvas.height = wantH
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      ctx.clearRect(0, 0, rect.width, rect.height)
+
+      const data = loopDataRef.current
+      const sr = svg.getBoundingClientRect()
+      const view0 = data.effView
+      const sx = sr.width / view0.w
+      const sy = sr.height / view0.h
+      const ox = sr.left - rect.left
+      const oy = sr.top - rect.top
+      const toScreenX = (x: number) => ox + (x - view0.x) * sx
+      const toScreenY = (y: number) => oy + (y - view0.y) * sy
+
+      // ── SPAWN (xác suất ∝ norm, chuẩn hóa từng cặp lớp; ×2 khi train) ──
+      // NGUYÊN TẮC VÀNG: chỉ cạnh có tín hiệu THẬT (gate = ≥0.5% max cặp lớp
+      // VÀ nơ-ron nguồn phát |a|/|δ| > 1e-9) mới được sinh hạt — cạnh im
+      // lặng KHÔNG BAO GIỜ có hạt chạy (chỉ thị user TUYỆT ĐỐI KHÔNG tượng trưng).
+      const mult = data.trainingRunning ? 2 : 1
+      if (particlesRef.current.length < MAX_PARTICLES && dt > 0) {
+        for (const e of data.edges) {
+          const f = data.fwd?.get(e.id)
+          if (f && f.gate && f.norm > 0) {
+            if (Math.random() < f.norm * PARTICLE_SPAWN_PER_SEC * mult * dt && particlesRef.current.length < MAX_PARTICLES) {
+              spawn(e, 1, 'fwd', f.norm)
+            }
+          }
+          const b = data.bwd?.get(e.id)
+          if (b && b.gate && b.norm > 0) {
+            if (Math.random() < b.norm * PARTICLE_SPAWN_PER_SEC * mult * dt && particlesRef.current.length < MAX_PARTICLES) {
+              spawn(e, -1, 'bwd', b.norm)
+            }
+          }
+        }
+      }
+
+      // hạt chạy trên ĐÚNG đường được vẽ: khi có 2 đường song song, tiến lệch
+      // −3 / ngược +3 (cùng EDGE_PARALLEL_OFFSET với render SVG — B3)
+      function spawn(e: StageEdge, dir: 1 | -1, sprite: 'fwd' | 'bwd', norm: number) {
+        const dx = e.x2 - e.x1
+        const dy = e.y2 - e.y1
+        const len = Math.hypot(dx, dy)
+        if (len <= 0) return
+        const px = -dy / len
+        const py = dx / len
+        const off = data.bwd !== null
+          ? (dir === 1 ? -EDGE_PARALLEL_OFFSET : EDGE_PARALLEL_OFFSET)
+          : 0
+        particlesRef.current.push({
+          x1: e.x1 + px * off, y1: e.y1 + py * off,
+          x2: e.x2 + px * off, y2: e.y2 + py * off,
+          dir,
+          t: 0,
+          speedPx: PARTICLE_SPEED_PX * (0.8 + 0.4 * Math.random()), // ±20% jitter
+          radius: 1.6 + 1.0 * Math.min(1, norm), // 1.6–2.6px ∝ s
+          sprite,
+        })
+      }
+
+      // ── UPDATE + DRAW (sprite pre-render + 'lighter' — không shadowBlur) ──
+      const alive: Particle[] = []
+      ctx.globalCompositeOperation = 'lighter'
+      for (const p of particlesRef.current) {
+        const ax = toScreenX(p.dir === 1 ? p.x1 : p.x2)
+        const ay = toScreenY(p.dir === 1 ? p.y1 : p.y2)
+        const bx = toScreenX(p.dir === 1 ? p.x2 : p.x1)
+        const by = toScreenY(p.dir === 1 ? p.y2 : p.y1)
+        const segLen = Math.hypot(bx - ax, by - ay)
+        if (segLen > 0) p.t += (p.speedPx * dt) / segLen
+        if (p.t >= 1) continue // hạt chết khi HẾT cạnh (không vòng lại giả)
+        const x = ax + (bx - ax) * p.t
+        const y = ay + (by - ay) * p.t
+        // fade mượt 2 đầu hạt (thuần thị giác — không đổi hướng/đường)
+        ctx.globalAlpha = 0.9 * Math.min(1, p.t / 0.08, (1 - p.t) / 0.08)
+        const w = p.radius * 4
+        ctx.drawImage(p.sprite === 'fwd' ? spriteFwd : spriteBwd, x - w / 2, y - w / 2, w, w)
+        alive.push(p)
+      }
+      particlesRef.current = alive
+      ctx.globalCompositeOperation = 'source-over'
+      ctx.globalAlpha = 1
+      raf = requestAnimationFrame(tick)
+    }
+    const startLoop = () => {
+      if (running || !shouldRun) return
+      running = true
+      last = performance.now()
+      raf = requestAnimationFrame(tick)
+    }
+    const onVisibility = () => {
+      if (document.hidden) stop()
+      else startLoop()
+    }
+    if (shouldRun && !document.hidden) startLoop()
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility)
+      stop()
+    }
+  }, [fxOn, animated, inView, particlesOn, reducedMotion])
+
+  // ── Task 26 B5: layer cạnh/nơ-ron/nhãn useMemo theo layout + dữ liệu —
+  //    pan/zoom chỉ đổi viewBox (<svg> attr) nên các subtree element identity
+  //    ổn định → React BỎ re-reconcile (không tính lại chuỗi toạ độ mỗi frame). ──
+  const edgeLayer = useMemo(() => {
+    if (!fxOn) {
+      return edges.map(e => (
+        <line
+          key={e.id}
+          x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
+          stroke="rgba(168,162,158,0.22)" strokeWidth="0.8"
+          markerEnd="url(#bs-arrow)"
+        />
+      ))
+    }
+    return edges.map(e => {
+      const isSel = inspector?.kind === 'edge'
+        && inspector.col === e.fromCol && inspector.row === e.fromRow && inspector.toRow === e.toRow
+      const sig = fwdSignal?.get(e.id)
+      const bwd = bwdSignal?.get(e.id)
+      const hasBwdLine = bwd !== undefined && bwd.norm > 0
+      // vuông góc đơn vị của cạnh (đơn vị viewBox) — offset 2 đường song song
+      const dx = e.x2 - e.x1
+      const dy = e.y2 - e.y1
+      const len = Math.hypot(dx, dy)
+      const px = len > 0 ? -dy / len : 0
+      const py = len > 0 ? dx / len : 0
+      const fwdOff = bwdSignal !== null ? -EDGE_PARALLEL_OFFSET : 0
+      return (
+        <g key={e.id}>
+          {/* TIẾN (xanh emerald — GIỮ NGUYÊN theo chỉ thị user): gradient bs-fwd
+              + strokeOpacity theo |a×w| thật (0.22–0.90 per cặp cột BRAIN-LIVE) */}
+          <line
+            x1={e.x1 + px * fwdOff} y1={e.y1 + py * fwdOff}
+            x2={e.x2 + px * fwdOff} y2={e.y2 + py * fwdOff}
+            stroke="url(#bs-fwd)"
+            strokeWidth={isSel ? 2.2 : 0.9}
+            strokeDasharray={animated && inView ? '5 4.5' : undefined}
+            markerEnd={animated && inView ? undefined : 'url(#bs-arrow)'}
+            className={animated && inView ? 'bs-flow' : undefined}
+            style={animated && inView ? { animationDelay: `${edgePhaseSec(e.id)}s` } : undefined}
+            opacity={isSel ? 1 : sig === undefined ? 0.9 : 1}
+            strokeOpacity={!isSel ? sig?.opacity : undefined}
+          />
+          {/* NGƯỢC (vàng — Task 26 B3): CHỈ khi có gradient THẬT per-edge
+              |δ_j × a_i| > 0 (backprop mẫu gần nhất); lệch +3 vuông góc để
+              phân biệt rõ với đường tiến (−3). Không gradient thật → KHÔNG vẽ. */}
+          {hasBwdLine && bwd && (
+            <line
+              x1={e.x1 + px * EDGE_PARALLEL_OFFSET} y1={e.y1 + py * EDGE_PARALLEL_OFFSET}
+              x2={e.x2 + px * EDGE_PARALLEL_OFFSET} y2={e.y2 + py * EDGE_PARALLEL_OFFSET}
+              stroke="url(#bs-bwd)"
+              strokeWidth={isSel ? Math.max((0.7 + 2.0 * bwd.norm) * 1.9, 2.2) : 0.7 + 2.0 * bwd.norm}
+              strokeDasharray={animated && inView ? '5 4.5' : undefined}
+              markerStart={animated && inView ? undefined : 'url(#bs-bwd-arrow)'}
+              className={animated && inView ? 'bs-flow bs-flow-bwd' : undefined}
+              style={animated && inView ? { animationDelay: `${edgePhaseSec(e.id + 0.5)}s` } : undefined}
+              strokeOpacity={isSel ? 1 : bwd.opacity}
+            />
+          )}
+        </g>
+      )
+    })
+  }, [edges, fwdSignal, bwdSignal, inspector, animated, inView, fxOn])
+
+  // ── Nơ-ron TÍM TỎA SÁNG (Task 26 B2): HALO radial #c084fc đặc giữa (r ≈
+  //    rC×2.2, opacity 0.05 dormant / 0.10+0.45×inten khi có dữ liệu) + CORE
+  //    rgba(168,85,247, 0.14 dormant / 0.18+0.75×inten khi có dữ liệu),
+  //    stroke violet nhạt; selected amber phóng to như cũ. TÍM là PHONG
+  //    CÁCH nơ-ron (user: "quả cầu màu tím tỏa sáng" — dormant vẫn tím nhạt);
+  //    ĐỘ SÁNG/HALO mới là tín hiệu thật (não dormant → tím mờ, không phát
+  //    sáng giả). transition-[fill] duration-500. ──
+  const neuronLayer = useMemo(() => layout.neurons.map(n => {
+    const isSel = inspector?.kind === 'neuron' && inspector.col === n.col && inspector.row === n.row
+    const inten = fxOn ? neuronIntensity?.get(`${n.col}:${n.row}`) : undefined
+    // BRAIN-TAB-3PHAN: r theo TỪNG CỘT (layout.radius — cột dày đặc
+    // chấm nhỏ lại); selected phóng nhẹ nhưng không vượt neuronRMax
+    const rC = layout.radius[n.col] ?? STAGE_LIMITS.neuronRMax
+    return (
+      <g key={`n-${n.col}-${n.row}`}>
+        {/* Halo tím LUÔN có (phong cách quả cầu tím) — độ sáng theo inten
+            thật; dormant chỉ còn quầng mờ 0.05 (không phát sáng giả) */}
+        <circle
+          cx={n.x} cy={n.y} r={rC * 2.2}
+          fill="url(#bs-neuron)"
+          opacity={(inten !== undefined ? 0.10 + 0.45 * inten : 0.05).toFixed(3)}
+          className="transition-opacity duration-500"
+        />
+        <circle
+          cx={n.x} cy={n.y} r={isSel ? Math.min(STAGE_LIMITS.neuronRMax, rC * 1.6 + 1.2) : rC}
+          fill={inten !== undefined
+            ? `rgba(168,85,247,${(0.18 + 0.75 * inten).toFixed(3)})`
+            : 'rgba(168,85,247,0.14)'}
+          stroke={isSel ? 'rgba(251,191,36,0.95)' : 'rgba(167,139,250,0.5)'}
+          strokeWidth={isSel ? 1.8 : 1.1}
+          className="transition-[fill] duration-500"
+        />
+      </g>
+    )
+  }), [layout.neurons, layout.radius, inspector, neuronIntensity, fxOn])
+
+  // ── Nhãn cột: bấm được khi editor bật (cột ẩn) ──
+  const labelLayer = useMemo(() => columns.map((c, ci) => {
+    const x = layout.colX[ci] ?? 0
+    const yBase = Math.max(layout.height - 18, 72)
+    const isHiddenEditable = editorOn && !c.locked
+    return (
+      <g key={`l-${ci}`}>
+        {isHiddenEditable ? (
+          <text
+            x={x} y={yBase - 10} textAnchor="middle"
+            fontSize={8} className="cursor-pointer fill-amber-400 underline decoration-dotted"
+            style={{ fontFamily: 'inherit' }}
+            role="button"
+            onClick={ev => { ev.stopPropagation(); onEditLayer?.(ci - 1) }}
+          >
+            {c.label} ✎
+          </text>
+        ) : (
+          <text x={x} y={yBase - 10} textAnchor="middle" fontSize={8} className="fill-stone-300" style={{ fontFamily: 'inherit' }}>
+            {c.label}
+          </text>
+        )}
+        <text x={x} y={yBase} textAnchor="middle" fontSize={7} className="fill-stone-500" style={{ fontFamily: 'inherit' }}>
+          {c.activation}
+        </text>
+        {c.locked && (
+          <title>{`Lớp ${ci === 0 ? 'đầu vào' : 'đầu ra'} KHÓA theo hợp đồng pipeline (§9.1-2)`}</title>
+        )}
+      </g>
+    )
+  }), [columns, layout.colX, layout.height, editorOn, onEditLayer])
+
   const lifecycleCls = brain.lifecycle === 'active' ? 'bs-glow-active' : 'bs-glow-dormant'
-  const accent = brain.lifecycle === 'active' ? 'rgba(251,191,36,0.85)' : 'rgba(251,191,36,0.38)'
   const ariaLayers = columns.map(c => `${c.label} ${c.activation}`).join(' → ')
   const chipTitle = activity
     ? `${activity.sourceLabel ?? 'không rõ nguồn dữ liệu'} · cập nhật ${new Date(activity.fetchedAt).toLocaleTimeString('vi-VN')}`
+    : ''
+  const backTitle = backReady
+    ? `Gradient mẫu thật sẵn sàng${backprop?.label ? ` · ${backprop.label}` : ''}${typeof backprop?.loss === 'number' ? ` · loss ${backprop.loss.toFixed(4)}` : ''} — đường vàng + hạt vàng theo |δ×a| per-edge thật`
+    : 'Chưa có gradient thật (não dormant / thiếu nhãn) — KHÔNG vẽ đường ngược (không trang trí suông)'
+  const trainTitle = training
+    ? `Train ${training.brain}${training.head ? ` head ${training.head}` : ''} · ${training.status} · bắt đầu ${new Date(training.startedAt).toLocaleTimeString('vi-VN')}${training.epochsRun !== null ? ` · ${training.epochsRun} epoch` : ''}`
     : ''
 
   return (
@@ -730,15 +1250,35 @@ export function BrainStage({
         )}
         {fxOn && (
           <button
-            onClick={() => setBackMode(b => !b)}
-            disabled={!hasBackData}
-            title={hasBackData
-              ? backMode ? 'Đang xem lan truyền NGƯỢC (tông vàng, độ dày theo |gradient| thật từ train) — bấm về TIẾN' : 'Xem lan truyền NGƯỢC (tông vàng) — đảo chiều + độ dày theo |gradient| trung bình từng lớp (dữ liệu thật từ train)'
-              : 'Chưa có dữ liệu |gradient| (train lần đầu để bật — không trang trí suông)'}
-            className={`min-h-[44px] md:min-h-[28px] rounded-md border px-2 text-[10px] ${backMode && hasBackData ? 'border-yellow-400/60 bg-yellow-400/15 text-yellow-300' : 'border-stone-700/70 text-stone-400 hover:text-stone-200'} disabled:cursor-not-allowed disabled:opacity-40`}
+            onClick={() => setParticlesOn(v => !v)}
+            aria-pressed={particlesOn}
+            title={particlesOn
+              ? 'Hạt tín hiệu ĐANG BẬT — hạt xanh (tiến) chạy trái→phải theo tín hiệu thật |a×w|, hạt vàng (ngược) phải→trái theo gradient thật |δ×a|, CHỈ trên cạnh có tín hiệu thật. Bấm để tắt bớt chuyển động (đường vẫn theo dữ liệu thật).'
+              : 'Hạt tín hiệu đang TẮT — đường tiến/ngược vẫn hiển thị theo dữ liệu thật. Bấm để bật hạt chạy trên cạnh.'}
+            className={`min-h-[44px] md:min-h-[28px] rounded-md border px-2 text-[10px] ${particlesOn
+              ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
+              : 'border-stone-700/70 text-stone-400 hover:text-stone-200'}`}
           >
-            {backMode && hasBackData ? '↺ Ngược (|grad| thật)' : '→ Tiến'}
+            {particlesOn ? '◉ Hạt tín hiệu' : '○ Hạt tắt'}
           </button>
+        )}
+        {fxOn && (
+          <span
+            title={backTitle}
+            className={`rounded-md border px-1.5 py-0.5 text-[9.5px] ${backReady
+              ? 'border-yellow-400/45 bg-yellow-400/10 text-yellow-300'
+              : 'border-stone-700/70 text-stone-500'}`}
+          >
+            {backReady ? 'Ngược: gradient thật mẫu gần nhất' : 'Ngược: chưa có dữ liệu thật'}
+          </span>
+        )}
+        {trainingRunning && (
+          <span
+            title={trainTitle}
+            className="animate-pulse rounded-md border border-amber-500/50 bg-amber-500/15 px-1.5 py-0.5 text-[9.5px] text-amber-300"
+          >
+            ● ĐANG TRAIN
+          </span>
         )}
         {activity && (
           <span
@@ -776,7 +1316,8 @@ export function BrainStage({
         >
           <defs>
             {/* BRAIN-LIVE: TIẾN = XANH emerald, NGƯỢC = VÀNG yellow (chỉ thị
-                user 2026-10-12); fxOn=false giữ Stops xám trung tính như UX-3 */}
+                user 2026-10-12 — GIỮ NGUYÊN đường tiến theo Task 26);
+                fxOn=false giữ Stops xám trung tính như UX-3 */}
             <linearGradient id="bs-fwd" x1="0" y1="0" x2="1" y2="0">
               <stop offset="0" stopColor={fxOn ? 'rgba(16,185,129,0.10)' : 'rgba(168,162,158,0.22)'} />
               <stop offset="1" stopColor={fxOn ? 'rgba(16,185,129,0.85)' : 'rgba(168,162,158,0.34)'} />
@@ -785,111 +1326,40 @@ export function BrainStage({
               <stop offset="0" stopColor="rgba(250,204,21,0.10)" />
               <stop offset="1" stopColor="rgba(250,204,21,0.80)" />
             </linearGradient>
+            {/* Task 26 B2 — nơ-ron TÍM tỏa sáng: halo radial #c084fc đặc giữa
+                → trong suốt rìa (opacity element = 0.10 + 0.45×inten) */}
+            <radialGradient id="bs-neuron">
+              <stop offset="0" stopColor="#c084fc" stopOpacity="0.95" />
+              <stop offset="0.35" stopColor="#c084fc" stopOpacity="0.32" />
+              <stop offset="1" stopColor="#c084fc" stopOpacity="0" />
+            </radialGradient>
             <marker id="bs-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
-              <path
-                d="M0,1 L7,4 L0,7 z"
-                fill={fxOn
-                  ? backMode && hasBackData ? 'rgba(250,204,21,0.85)' : 'rgba(16,185,129,0.85)'
-                  : 'rgba(168,162,158,0.55)'}
-              />
+              <path d="M0,1 L7,4 L0,7 z" fill={fxOn ? 'rgba(16,185,129,0.85)' : 'rgba(168,162,158,0.55)'} />
+            </marker>
+            {/* Task 26 B3 — mũi tên vàng cho bản tĩnh đường ngược (markerStart +
+                auto-start-reverse → chỉ VỀ PHÍA TRÁI = chiều lan truyền ngược) */}
+            <marker id="bs-bwd-arrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+              <path d="M0,1 L7,4 L0,7 z" fill="rgba(250,204,21,0.85)" />
             </marker>
           </defs>
 
-          {/* Cạnh: bezier gradient + nét đứt chạy (động) hoặc thẳng tĩnh có mũi tên (off).
-              BRAIN-LIVE: khi có activation + weights → strokeOpacity theo
-              |a_from × W[to][from]| chuẩn hóa per cặp cột (0.22–0.90, chỉ TIẾN);
-              không có dữ liệu → opacity 0.9 như cũ. */}
-          {edges.map(e => {
-            const gradVal = backMode && hasBackData && gradByCol ? gradByCol(e.fromCol) : null
-            const strokeW = backMode && hasBackData
-              ? strokeWidthForGrad(gradVal, weights?.gradAbsMean ?? [])
-              : 0.9
-            if (!fxOn) {
-              return (
-                <line
-                  key={e.id}
-                  x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2}
-                  stroke="rgba(168,162,158,0.22)" strokeWidth="0.8"
-                  markerEnd="url(#bs-arrow)"
-                />
-              )
-            }
-            const path = `M ${e.x1} ${e.y1} C ${e.cx1} ${e.cy1}, ${e.cx2} ${e.cy2}, ${e.x2} ${e.y2}`
-            const isSel = inspector?.kind === 'edge'
-              && inspector.col === e.fromCol && inspector.row === e.fromRow && inspector.toRow === e.toRow
-            const sig = !backMode ? edgeSignal?.get(e.id) : undefined
-            return (
-              <path
-                key={e.id}
-                d={path}
-                fill="none"
-                stroke={backMode && hasBackData ? 'url(#bs-bwd)' : 'url(#bs-fwd)'}
-                strokeWidth={isSel ? Math.max(strokeW * 1.9, 2.2) : strokeW}
-                strokeDasharray={animated && inView ? '5 4.5' : undefined}
-                markerEnd={backMode && hasBackData ? 'url(#bs-arrow)' : animated && inView ? undefined : 'url(#bs-arrow)'}
-                className={animated && inView ? (backMode && hasBackData ? 'bs-flow bs-flow-bwd' : 'bs-flow') : undefined}
-                style={animated && inView ? { animationDelay: `${edgePhaseSec(e.id)}s` } : undefined}
-                opacity={isSel ? 1 : sig === undefined ? 0.9 : 1}
-                strokeOpacity={!isSel ? sig : undefined}
-              />
-            )
-          })}
+          {/* Cạnh THẲNG (Task 26 B1 — bỏ cong): đường tiến emerald GIỮ NGUYÊN
+              (độ sáng theo |a×w| thật) + đường ngược VÀNG per-edge |δ×a| thật
+              (song song lệch ±3, chỉ khi có gradient thật). Layer memo —
+              pan/zoom không tính lại toạ độ. */}
+          {edgeLayer}
 
-          {/* Nơ-ron — BRAIN-LIVE: có dữ liệu activity → fill emerald theo
-              cường độ |a|/max (transition-[fill] đổi mượt giữa các lần poll);
-              không có dữ liệu → nền tối như cũ. Stroke accent lifecycle amber giữ. */}
-          {layout.neurons.map(n => {
-            const isSel = inspector?.kind === 'neuron' && inspector.col === n.col && inspector.row === n.row
-            const inten = fxOn ? neuronIntensity?.get(`${n.col}:${n.row}`) : undefined
-            // BRAIN-TAB-3PHAN: r theo TỪNG CỘT (layout.radius — cột dày đặc
-            // chấm nhỏ lại); selected phóng nhẹ nhưng không vượt neuronRMax
-            const rC = layout.radius[n.col] ?? STAGE_LIMITS.neuronRMax
-            return (
-              <circle
-                key={`n-${n.col}-${n.row}`}
-                cx={n.x} cy={n.y} r={isSel ? Math.min(STAGE_LIMITS.neuronRMax, rC * 1.6 + 1.2) : rC}
-                fill={inten !== undefined
-                  ? `rgba(16,185,129,${(0.12 + 0.75 * inten).toFixed(3)})`
-                  : 'rgba(2,6,23,0.95)'}
-                stroke={isSel ? 'rgba(251,191,36,0.95)' : accent}
-                strokeWidth={isSel ? 1.8 : 1.1}
-                className="transition-[fill] duration-500"
-              />
-            )
-          })}
+          {/* Nơ-ron tím tỏa sáng (Task 26 B2) — HALO + CORE theo inten thật. */}
+          {neuronLayer}
 
           {/* Nhãn cột: bấm được khi editor bật (cột ẩn) */}
-          {columns.map((c, ci) => {
-            const x = layout.colX[ci] ?? 0
-            const yBase = Math.max(layout.height - 18, 72)
-            const isHiddenEditable = editorOn && !c.locked
-            return (
-              <g key={`l-${ci}`}>
-                {isHiddenEditable ? (
-                  <text
-                    x={x} y={yBase - 10} textAnchor="middle"
-                    fontSize={8} className="cursor-pointer fill-amber-400 underline decoration-dotted"
-                    style={{ fontFamily: 'inherit' }}
-                    role="button"
-                    onClick={ev => { ev.stopPropagation(); onEditLayer?.(ci - 1) }}
-                  >
-                    {c.label} ✎
-                  </text>
-                ) : (
-                  <text x={x} y={yBase - 10} textAnchor="middle" fontSize={8} className="fill-stone-300" style={{ fontFamily: 'inherit' }}>
-                    {c.label}
-                  </text>
-                )}
-                <text x={x} y={yBase} textAnchor="middle" fontSize={7} className="fill-stone-500" style={{ fontFamily: 'inherit' }}>
-                  {c.activation}
-                </text>
-                {c.locked && (
-                  <title>{`Lớp ${ci === 0 ? 'đầu vào' : 'đầu ra'} KHÓA theo hợp đồng pipeline (§9.1-2)`}</title>
-                )}
-              </g>
-            )
-          })}
+          {labelLayer}
         </svg>
+
+        {/* Task 26 B4 — canvas hạt tín hiệu thật: TRÊN SVG, pointer-events-none,
+            DPR-scaled (resize lười trong tick theo stage box). rAF tắt khi
+            ngoài viewport / tab ẩn / reduced-motion — SVG tĩnh vẫn đẹp. */}
+        <canvas ref={canvasRef} aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full" />
 
         {/* Nút zoom/pan overlay (BRAIN-LIVE) — touch target 44px mobile */}
         <div
@@ -931,6 +1401,13 @@ export function BrainStage({
         </div>
       </div>
 
+      {/* Task 26 B4 — chú thích 1 dòng dưới đài (chỉ thị user: quan sát chính xác) */}
+      {fxOn && (
+        <p className="mt-0.5 text-[10px] leading-relaxed text-stone-500">
+          <span className="text-emerald-400">●</span> tiến (xanh) — tín hiệu thật |a×w| · <span className="text-yellow-400">●</span> ngược (vàng) — gradient thật |δ×a| mẫu gần nhất · cạnh chỉ sáng khi có tín hiệu ≥0.5% max cặp lớp
+        </p>
+      )}
+
       {/* Inspector nơ-ron/cạnh */}
       {fxOn && inspector && inspect && (
         <div className="mt-1.5 rounded-lg border border-stone-700/60 bg-slate-950/80 p-2 text-[10.5px] text-stone-300" role="status">
@@ -961,6 +1438,15 @@ export function BrainStage({
               ) : (
                 <span className="italic text-stone-500">chưa train — không có trọng số</span>
               )}
+              {backReady && (
+                <span>
+                  ngược |δ×a|: <span className="font-mono">{((toRow: number) => {
+                    const e = edges.find(e2 => e2.fromCol === inspect.col && e2.fromRow === inspect.row && e2.toRow === toRow)
+                    const b = bwdSignal?.get(e?.id ?? -1)?.norm
+                    return typeof b === 'number' && b > 0 ? `${(b * 100).toFixed(1)}% max cặp lớp` : '— (cạnh này không có gradient)'
+                  })(inspect.toRow ?? 0)}</span>
+                </span>
+              )}
               {editorOn && !columns[inspect.col]?.locked && (
                 <button
                   className="min-h-[44px] md:min-h-[28px] rounded border border-stone-700 px-1.5 text-[9.5px] text-stone-300 hover:text-amber-300"
@@ -985,9 +1471,9 @@ export function BrainStage({
           Hiệu ứng synapse đang TẮT (cờ UI_SYNAPSE_FX — bảng tinh chỉnh): đường thẳng tĩnh như trước. Bật để thấy hướng lan truyền + điểm sáng activation thật + bấm sửa nơ-ron/cạnh.
         </p>
       )}
-      {fxOn && !hasBackData && (
+      {fxOn && !backReady && (
         <p className="mt-0.5 text-[9px] text-stone-600">
-          Chế độ lan truyền ngược cần |gradient| thật từ lần train đầu (không trang trí suông — §9.4).
+          Đường ngược (vàng) chỉ hiện khi có gradient thật của mẫu gần nhất — chưa có nên không vẽ (không trang trí suông).
         </p>
       )}
       {fxOn && activity?.status === 'dormant' && activity.inputVector && (

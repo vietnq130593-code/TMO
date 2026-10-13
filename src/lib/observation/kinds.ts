@@ -22,6 +22,7 @@ export type ObsKindGroup =
   | 'reward' // reward.log (log-only — GAP-4)
   | 'search' // HyperNAS HN-P2+ (tương lai — §9 HyperNAS): search.session | search.candidate | proposal.apply
   | 'impact' // OBS-P4: impact.estimate | obs.health
+  | 'alert' // Task 26-BE (GAP-2): obs.alert — cảnh báo chủ động stall/token-burn/job-stale
 
 export interface ObsKindDef {
   kind: string
@@ -49,6 +50,10 @@ export const OBS_KINDS: readonly ObsKindDef[] = [
   { kind: 'proposal.apply', group: 'search', label: 'Áp dụng đề xuất' },
   { kind: 'impact.estimate', group: 'impact', label: 'Ước lượng tác động' },
   { kind: 'obs.health', group: 'impact', label: 'Sức khỏe ledger' },
+  // Task 26-BE (GAP-2) — cảnh báo chủ động từ job nền (GIAO_THUC_GIAM_SAT
+  // D1.1/D1.4 + HyperNAS §4.2-2b) — phát bởi alerts.ts; badge đếm qua field
+  // alerts24h của /api/observation/timeline
+  { kind: 'obs.alert', group: 'alert', label: 'Cảnh báo quan sát' },
 ]
 
 const KIND_BY_NAME = new Map<string, ObsKindDef>(OBS_KINDS.map(k => [k.kind, k]))
@@ -71,6 +76,8 @@ export const OBS_GROUP_CLASSES: Record<ObsKindGroup, string> = {
   reward: 'bg-orange-500/15 text-orange-300 border-orange-500/30',
   search: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30',
   impact: 'bg-stone-500/15 text-stone-300 border-stone-500/30',
+  // Task 26-BE — cảnh báo quan sát (hợp đồng 26-RESTORE: group class amber)
+  alert: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
 }
 
 /** Actor 'agent:tên' | 'user' | 'system' | 'brain:key' | 'search' → badge màu. */

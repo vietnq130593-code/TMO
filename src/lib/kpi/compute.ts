@@ -31,7 +31,7 @@ export function todayUtcDate(): string {
   return new Date().toISOString().slice(0, 10)
 }
 
-async function computeOne(def: KpiDef): Promise<KpiComputed> {
+async function computeOne(def: KpiDef, date: string = todayUtcDate()): Promise<KpiComputed> {
   const base = {
     key: def.key,
     label: def.label,
@@ -55,11 +55,14 @@ async function computeOne(def: KpiDef): Promise<KpiComputed> {
       status: n === 0 ? 'no_data' : statusForKpi(def, value),
       meta,
     }
-    // Upsert snapshot hôm nay — idempotent theo @@unique([date, kpi])
+    // Upsert snapshot (idempotent theo @@unique([date, kpi])) — Task 26-BE
+    // (GAP-1): date tùy chọn (mặc định hôm nay như cũ) để ensureDailyKpiSnapshots
+    // chốt final hôm qua; KPI compute đọc cửa sổ tròn tính từ "bây giờ" — xem
+    // JSDoc computeAllKpis cho framing trung thực.
     await db.kpiSnapshot.upsert({
-      where: { date_kpi: { date: todayUtcDate(), kpi: def.key } },
+      where: { date_kpi: { date, kpi: def.key } },
       create: {
-        date: todayUtcDate(),
+        date,
         kpi: def.key,
         value,
         sampleSize: n,
@@ -87,13 +90,20 @@ async function computeOne(def: KpiDef): Promise<KpiComputed> {
 }
 
 /**
- * Tính toàn bộ KPI trong KPI_REGISTRY + upsert KpiSnapshot hôm nay.
+ * Tính toàn bộ KPI trong KPI_REGISTRY + upsert KpiSnapshot của NGÀY chỉ định.
  * KHÔNG bao giờ throw toàn bộ — từng KPI độc lập fail-open.
+ *
+ * Task 26-BE (GAP-1): tham số `date` tùy chọn (mặc định hôm nay — callers cũ
+ * giữ nguyên). Khi đặt ngày khác (vd hôm qua — ensureDailyKpiSnapshots chốt
+ * final sau nửa đêm): các hàm compute đọc CỬA SỔ TRÒN tính từ "bây giờ"
+ * (24h/7 ngày gần nhất) nên snapshot "hôm qua" tính lúc ~00:00 hôm nay sẽ
+ * phủ gần trọn ngày hôm qua — xấp xỉ trung thực, KHÔNG chế tạo lại công thức
+ * compute (doctrine #9 — tái sử dụng, không nhân bản logic KPI).
  */
-export async function computeAllKpis(): Promise<KpiComputed[]> {
+export async function computeAllKpis(date: string = todayUtcDate()): Promise<KpiComputed[]> {
   const results: KpiComputed[] = []
   for (const def of KPI_REGISTRY) {
-    results.push(await computeOne(def))
+    results.push(await computeOne(def, date))
   }
   return results
 }

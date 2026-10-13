@@ -1,7 +1,7 @@
 'use client'
 
 // ========================================================================
-// brain-tab — Tab "BRAIN" (module Smolab) — BRAIN-LIVE 15-d → BRAIN-TAB-3PHAN 18-c
+// brain-tab — Tab "BRAIN" (module Smolab) — BRAIN-LIVE 15-d → TASK 26 (đài quan sát v2)
 // ========================================================================
 //
 // CHỈ THỊ USER (2026-10-12, nguyên văn): "Đúng ra nên chia 3 phần, Phần
@@ -10,20 +10,32 @@
 // có thể chỉnh to nhỏ để xem từ tổng quan đến chi tiết được... Cuối cùng
 // là phần chứa các bản thông số có thể chỉnh sửa và thiết lập được."
 //
+// CHỈ THỊ USER (2026-10-13, Task 26, nguyên văn): "tab Quan sát trong Bảng
+// thông số nên tích hợp vào ô Chọn não và kiến trúc — chọn xong não nào
+// có thể xem ngay dưới đài quan sát não, và chọn quan sát cái gì ở trên
+// thì xem được ở đài bên dưới."
+// → Task 26: Quan sát chuyển từ tab console SECTION 3 (Task 25) LÊN selector
+//   "Chế độ quan sát" 4 nút ở SECTION 1 (ngay dưới Brain Studio, cùng Card,
+//   ngăn border-t) — nội dung hiển thị bằng PANEL riêng NGAY DƯỚI đài quan
+//   sát SECTION 2 (4 panel của observation-tab.tsx; mỗi panel tự mount/unmount
+//   theo obsMode → poll tự dừng khi không hiển thị).
+//
 // LAYOUT 3 SECTION DỌC (18-c — mỗi section 1 Card riêng, space-y-4 — thay
 // grid 3 CỘT cũ [280-320px | 1fr | 340-420px] bị user chê "nhét ép"):
 //   1 · CHỌN NÃO & KIẾN TRÚC — BrainStudio (18-b rewrite thanh ngang —
 //       render nguyên, props KHÔNG đổi) + khối "Thức tỉnh khi đủ mẫu" +
 //       hàng badge phase/flag/inputMode (2 khối sau DI CHUYỂN nguyên vẹn
-//       markup từ cột trái cũ) + badge tổng nhãn + ● sống.
-//   2 · ĐÀI QUAN SÁT NÃO — thanh Live (poll 2.5s) + BrainStage tall
-//       (full-width fit-height — geometry v3 của 18-a tự lo) + chú thích
+//       markup từ cột trái cũ) + badge tổng nhãn + ● sống + KHỐI "CHẾ ĐỘ
+//       QUAN SÁT" 4 nút (Task 26 — "Hoạt động nơ-ron" mặc định).
+//   2 · ĐÀI QUAN SÁT NÃO — thanh Live (poll thích ứng Task 26: 1.5s nóng /
+//       ~10s yên — B5) + BrainStage tall (Task 26: nơ-ron tím tỏa sáng +
+//       cạnh thẳng + đường ngược vàng per-edge thật + hạt tín hiệu thật
+//       canvas 60fps) + PANEL QUAN SÁT theo obsMode (Task 26) + chú thích
 //       bất biến A1.
-//   3 · BẢNG THÔNG SỐ — 5 tab: Training Console · Tham số runtime · Nhật
-//       ký tinh chỉnh · Hàm & công thức (BrainReference — 18-c, bảng tham
-//       chiếu activation/loss/reward/lan truyền, trả lời câu hỏi user
-//       "đã có thông tin đầy đủ chưa") · Quan sát (OBS-P3 tích hợp vào
-//       SECTION 3 theo chỉ thị user 2026-10-13). ConsolePanel render INLINE ở
+//   3 · BẢNG THÔNG SỐ — 4 tab (Task 26: bỏ tab Quan sát — chuyển lên
+//       SECTION 1 selector + panel dưới đài SECTION 2 theo chỉ thị user):
+//       Training Console · Tham số runtime · Nhật ký tinh chỉnh · Hàm &
+//       công thức (BrainReference — 18-c). ConsolePanel render INLINE ở
 //       MỌI viewport — BỎ hẳn hộp console trượt dưới đáy mobile + nút nổi
 //       ⚙ Console + state sheet + effect Esc + toàn bộ máy breakpoint
 //       desktop (media query hook + biến nhánh viewport — không còn
@@ -32,11 +44,14 @@
 // Giữ nguyên từ BRAIN-LIVE (15-d): state machine draft 3 brain (controlled
 // — BrainStudio + TrainingConsole + BrainStage cùng MỘT nguồn) · poll 15s
 // fail-open · train POST /api/brain/train · spec-draft GET/PUT · LIVE POLL
-// 2.5s GET /api/brain/activity READ-ONLY (visibilitychange dừng/kẹp lại;
+// /api/brain/activity READ-ONLY (visibilitychange dừng/kẹp lại;
 // response 400 bỏ qua lặng lẽ; lỗi mạng giữ activity cũ — fail-open) ·
-// TuningParamDialog chỉnh tại chỗ (15-b). Chuỗi pin r92-E GIỮ NGUYÊN NGUYÊN
-// VĂN khi tái cấu trúc: fetch template activity · POLL_ACTIVITY_MS = 2_500
-// · setInterval poll · &head= · selectedBrainKey === 'surrogate' ·
+// TuningParamDialog chỉnh tại chỗ (15-b). Chuỗi pin r92-E GIỮ NGUYÊN khi tái
+// cấu trúc: fetch template activity · POLL_ACTIVITY_MS = 2_500 (giữ làm nhịp
+// bootstrap; nhịp thật Task 26 là thích ứng 1.5s/10s — hình thức poll đời
+// 15-d là setInterval(() => { void fetchActivity() }, POLL_ACTIVITY_MS),
+// đã đổi sang chuỗi setTimeout — B5; pin r92-E hiệu chỉnh ở vòng sau) ·
+// &head= · selectedBrainKey === 'surrogate' ·
 // &head=${activityHead} · initialHead/onHeadChange · activity/refreshNonce
 // · tall · <TuningParamDialog · 'ui_synapse_fx'.
 //
@@ -47,24 +62,32 @@
 // ========================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, BrainCircuit, History, Pencil, Radio, RotateCcw, SlidersHorizontal, Tags, Zap } from 'lucide-react'
+import { Activity, BrainCircuit, Eye, History, Pencil, Radio, RotateCcw, SlidersHorizontal, Tags, Zap } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
 // BRAIN-UX §9.5 (UX-4): 3 component studio (UX-1/UX-2/UX-3) — state draft
 // nâng lên đây (controlled, single source) như panel cũ.
 import { BrainStudio } from '@/components/database/brain-studio'
-import { BrainStage, type SurrogateHead } from '@/components/database/brain-stage'
+import { BrainStage, type SurrogateHead, type StageBackprop, type StageTraining } from '@/components/database/brain-stage'
 import { TrainingConsole, type TrainOutcomeUi } from '@/components/database/training-console'
 // BRAIN-LIVE (15-b): dialog chỉnh tham số runtime tại chỗ — hết cuộn lên.
 import { TuningParamDialog, SOURCE_BADGE } from '@/components/smolab/tuning-param-dialog'
 // BRAIN-TAB-3PHAN (18-c): tab "Hàm & công thức" — bảng tham chiếu trình
 // bày thuần (client-safe: ACTIVATION_MENU spec-schema + hằng optimizers).
 import { BrainReference } from '@/components/smolab/brain-reference'
-// OBS-P3 (chỉ thị user 2026-10-13: tích hợp tab Quan sát VÀO tab BRAIN):
-// timeline sự kiện + kim tuyến runId + panel nhãn&não — render như 1 tab
-// console SECTION 3 (không còn tab riêng cấp module Smolab).
-import { ObservationTabContent } from '@/components/smolab/observation-tab'
+// OBS-P3 (Task 25) → TASK 26: tab Quan sát chuyển LÊN SECTION 1 selector
+// "Chế độ quan sát" + PANEL dưới đài SECTION 2 (chỉ thị user 2026-10-13) —
+// 4 panel của observation-tab.tsx tự mount/unmount theo obsMode (poll dừng
+// khi không hiển thị); OBS_MODES là single-source nhãn 4 nút selector.
+import {
+  OBS_MODES,
+  ObsNeuronsPanel,
+  ObsTimelinePanel,
+  ObsTracesPanel,
+  ObsGoldenPanel,
+  type ObsMode,
+} from '@/components/smolab/observation-tab'
 // BRAIN-P1 registry single-source (thuần hằng số — client-safe).
 import {
   BRAIN_REGISTRY,
@@ -93,8 +116,21 @@ interface TuningFeed {
 
 /** Nhịp poll nền (số liệu mẫu/tuning) — giữ nguyên 15s như panel cũ. */
 const POLL_NEURAL_MS = 15_000
-/** Nhịp poll live activity (BRAIN-LIVE) — đài quan sát não cần phản ánh gần tức thời. */
+/** Nhịp poll live activity (BRAIN-LIVE 15-d) — di sản đời 15-d (pin r92-E);
+ *  Task 26 B5 giữ làm NHỊP BOOTSTRAP cho tới phản hồi đầu. */
 const POLL_ACTIVITY_MS = 2_500
+/** Task 26 B5 (hiệu năng realtime): nhịp nóng 1.5s — khi agent đang chạy
+ *  hoặc train đang chạy (đài cần phản ánh gần tức thời). */
+const POLL_HOT_MS = 1_500
+/** Task 26 B5: nhịp khi yên ~10s — đủ mượt cho đài quan sát, đỡ tải DB. */
+const POLL_CALM_MS = 10_000
+
+/** Activity của đài + 2 field hợp đồng 26-BE (backprop/training — phòng thủ:
+ *  field chưa có trong response → coi như null). */
+type ActivityLive = BrainActivity & {
+  backprop: StageBackprop | null
+  training: StageTraining | null
+}
 
 const viNum = (n: number): string => n.toLocaleString('vi-VN')
 
@@ -213,14 +249,33 @@ export function BrainTabContent() {
   const [trainOutcome, setTrainOutcome] = useState<TrainOutcomeUi | null>(null)
   /// Brain Stage (UX-3) bấm cột lớp ẩn → Brain Studio nháy tới hàng editor
   const [focusLayerSignal, setFocusLayerSignal] = useState<{ brain: BrainKey; layer: number; nonce: number } | null>(null)
-  /// Tab đang mở của SECTION 3 (18-c mở rộng 'ref' — Hàm & công thức;
-  /// Task 25 mở rộng 'observation' — Quan sát tích hợp vào tab BRAIN)
-  const [consoleTab, setConsoleTab] = useState<'train' | 'tuning' | 'log' | 'ref' | 'observation'>('train')
+  /// Tab đang mở của SECTION 3 (18-c mở rộng 'ref' — Hàm & công thức; Task 26
+  /// BỎ 'observation' — Quan sát chuyển lên SECTION 1 selector + panel dưới
+  /// đài SECTION 2 theo chỉ thị user 2026-10-13)
+  const [consoleTab, setConsoleTab] = useState<'train' | 'tuning' | 'log' | 'ref'>('train')
+  /// Task 26 (chỉ thị user 2026-10-13): chế độ quan sát — chọn ở SECTION 1,
+  /// hiển thị PANEL tương ứng NGAY DƯỚI đài SECTION 2 (useState đủ — không cần
+  /// localStorage: chế độ mặc định "Hoạt động nơ-ron" hợp lý mỗi lần vào tab).
+  const [obsMode, setObsMode] = useState<ObsMode>('neurons')
 
-  // ── LIVE POLL activity (BRAIN-LIVE 15-d) ──
-  // activity = dữ liệu thật từ GET /api/brain/activity (contract 15-a) —
-  // truyền xuống BrainStage v2 (15-c) để điểm sáng nơ-ron/cạnh + chip Agent.
-  const [activity, setActivity] = useState<BrainActivity | null>(null)
+  // ── LIVE POLL activity (BRAIN-LIVE 15-d → Task 26 adaptive) ──
+  // activity = dữ liệu thật từ GET /api/brain/activity (contract 15-a +
+  // hợp đồng 26-BE: += backprop/training) — truyền xuống BrainStage
+  // (điểm sáng nơ-ron/cạnh + chip Agent) VÀ ObsNeuronsPanel (CÙNG một fetch —
+  // MỘT poller duy nhất chia sẻ stage + panel neurons, B5).
+  const [activity, setActivity] = useState<ActivityLive | null>(null)
+  /// Bản mới nhất cho scheduler adaptive (đọc ref — không re-create effect)
+  const activityRef = useRef<ActivityLive | null>(null)
+  useEffect(() => { activityRef.current = activity }, [activity])
+  /// Guard unmount + request-id chống response cũ ghi đè khi đổi não/head
+  /// giữa chừng (fetch KHÔNG abort — giữ nguyên chuỗi pin r92-E; response trễ
+  /// của request cũ bị loại theo id).
+  const activityMountedRef = useRef(true)
+  const activityReqIdRef = useRef(0)
+  useEffect(() => {
+    activityMountedRef.current = true
+    return () => { activityMountedRef.current = false }
+  }, [])
   /// Live đang bật (default ON — tab BRAIN là đài quan sát não)
   const [liveOn, setLiveOn] = useState(true)
   /// Tăng sau train (trainOutcome mới xuất hiện) → BrainStage refetch weights
@@ -235,12 +290,20 @@ export function BrainTabContent() {
   const [activityHead, setActivityHead] = useState<SurrogateHead>('success')
 
   const fetchActivity = useCallback(async () => {
+    // request-id chống đua: chỉ response MỚI NHẤT được ghi (fetch giữ nguyên
+    // chuỗi pin r92-E — không thêm option/signal vào lời gọi)
+    const reqId = ++activityReqIdRef.current
     try {
       const q = selectedBrainKey === 'surrogate' ? `&head=${activityHead}` : ''
       const res = await fetch(`/api/brain/activity?brain=${selectedBrainKey}${q}`)
       // 400 (query rác) → bỏ qua lặng lẽ — poll không toast spam (15-a contract)
       if (!res.ok) return
-      const json = (await res.json()) as BrainActivity & { ok: boolean }
+      const json = (await res.json()) as BrainActivity & {
+        ok: boolean
+        backprop?: StageBackprop | null
+        training?: StageTraining | null
+      }
+      if (!activityMountedRef.current || reqId !== activityReqIdRef.current) return
       if (!json.ok) return
       setActivity({
         status: json.status,
@@ -250,35 +313,58 @@ export function BrainTabContent() {
         featureNames: json.featureNames,
         sourceLabel: json.sourceLabel,
         fetchedAt: json.fetchedAt,
+        // Hợp đồng 26-BE (phòng thủ — field chưa có → null)
+        backprop: json.backprop
+          ? {
+              deltas: json.backprop.deltas ?? null,
+              yTrue: json.backprop.yTrue ?? null,
+              loss: json.backprop.loss ?? null,
+              label: json.backprop.label ?? null,
+            }
+          : null,
+        training: json.training ?? null,
       })
-    } catch { /* lỗi mạng → giữ activity cũ (fail-open) */ }
+    } catch { /* lỗi mạng/response trễ → giữ activity cũ (fail-open) */ }
   }, [selectedBrainKey, activityHead])
 
-  // Poll 2.5s — CHỈ chạy khi liveOn && tab trình duyệt đang hiện (ẩn thì
-  // dừng hẳn; hiện lại → fetch ngay + tiếp tục nhịp). liveOn tắt → dừng
-  // hẳn (bấm bật lại → fetch ngay một lần rồi tiếp tục).
+  // Poll THÍCH ỨNG (Task 26 B5 — thay setInterval cố định 2.5s của 15-d):
+  // nhanh POLL_HOT_MS (1.5s) khi agentRunInProgress || training running,
+  // chậm POLL_CALM_MS (~10s) khi yên; POLL_ACTIVITY_MS (2.5s) làm nhịp
+  // bootstrap tới phản hồi đầu. CHỈ chạy khi liveOn && tab trình duyệt đang
+  // hiện (ẩn thì dừng hẳn; hiện lại → fetch ngay + tiếp tục nhịp). liveOn
+  // tắt → dừng hẳn (bấm bật lại → fetch ngay một lần rồi tiếp tục).
   useEffect(() => {
     if (!liveOn) return
-    let timer: ReturnType<typeof setInterval> | null = null
-    const start = () => {
-      if (timer === null) timer = setInterval(() => { void fetchActivity() }, POLL_ACTIVITY_MS)
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const nextDelay = () => {
+      const a = activityRef.current
+      if (!a) return POLL_ACTIVITY_MS
+      const hot = a.agentRunInProgress || a.training?.status === 'running'
+      return hot ? POLL_HOT_MS : POLL_CALM_MS
+    }
+    const schedule = () => {
+      if (timer !== null) clearTimeout(timer)
+      timer = setTimeout(async () => {
+        await fetchActivity()
+        schedule()
+      }, nextDelay())
     }
     const stop = () => {
       if (timer !== null) {
-        clearInterval(timer)
+        clearTimeout(timer)
         timer = null
       }
     }
     if (document.visibilityState !== 'hidden') {
       queueMicrotask(() => { void fetchActivity() })
-      start()
+      schedule()
     }
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') {
         stop()
       } else {
         void fetchActivity()
-        start()
+        schedule()
       }
     }
     document.addEventListener('visibilitychange', onVisibility)
@@ -550,16 +636,15 @@ export function BrainTabContent() {
   // nhất nên state tab không bao giờ bị remount mất). ──
   const consolePanel = (
     <div className="space-y-2.5" role="tabpanel" aria-label="Console não vận hành">
-      {/* Thanh tab 5 nút (style giống tab head brain-stage UX-3; 18-c thêm
-          tab "Hàm & công thức" — bảng tham chiếu trình bày; Task 25 thêm tab
-          "Quan sát" — OBS-P3 tích hợp vào SECTION 3 theo chỉ thị user) */}
+      {/* Thanh tab 4 nút (Task 26: bỏ tab "Quan sát" — chuyển lên SECTION 1
+          selector "Chế độ quan sát" + panel dưới đài SECTION 2 theo chỉ thị
+          user 2026-10-13; style giống tablist console hiện có) */}
       <div className="flex overflow-hidden rounded-md border border-stone-700/70" role="tablist" aria-label="Bảng điều khiển não">
         {([
           ['train', 'Training Console'],
           ['tuning', 'Tham số runtime'],
           ['log', 'Nhật ký tinh chỉnh'],
           ['ref', 'Hàm & công thức'],
-          ['observation', 'Quan sát'],
         ] as const).map(([id, label]) => (
           <button
             key={id}
@@ -720,14 +805,6 @@ export function BrainTabContent() {
         // "liệu đã có thông tin để lựa chọn… có đầy đủ chưa" (audit 18-KEHOACH).
         <BrainReference />
       )}
-
-      {consoleTab === 'observation' && (
-        // Task 25 (chỉ thị user 2026-10-13): tab Quan sát OBS-P3 tích hợp
-        // VÀO SECTION 3 tab BRAIN — timeline + kim tuyến runId + panel nhãn&não
-        // (read-only). Component render không kèm prop điều hướng — đã ĐANG
-        // ở trong tab BRAIN (prop cũ đã gỡ khỏi observation-tab.tsx).
-        <ObservationTabContent />
-      )}
     </div>
   )
 
@@ -823,14 +900,42 @@ export function BrainTabContent() {
               </Badge>
               <Badge variant="outline" className="h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] text-stone-400 border-stone-600/50">in: {selectedEntry.defaultInputMode}</Badge>
             </div>
+
+            {/* ── Task 26 (chỉ thị user 2026-10-13): khối "Chế độ quan sát" —
+                chọn nội dung hiển thị dưới đài quan sát SECTION 2 ("chọn quan
+                sát cái gì ở trên thì xem được ở đài bên dưới"); tab Quan sát
+                cũ của SECTION 3 chuyển lên đây. Pattern tablist y hệt console
+                SECTION 3: role tablist/tab + aria-selected + min-h-44 mobile. */}
+            <div className="mt-3 border-t border-stone-800/70 pt-3">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <Eye className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+                <h5 className="text-[11px] font-semibold text-stone-100">Chế độ quan sát</h5>
+                <span className="text-[10px] text-stone-500">chọn chế độ — nội dung hiển thị dưới đài quan sát bên dưới</span>
+              </div>
+              <div className="flex overflow-hidden rounded-md border border-stone-700/70" role="tablist" aria-label="Chế độ quan sát">
+                {OBS_MODES.map(m => (
+                  <button
+                    key={m.id}
+                    role="tab"
+                    aria-selected={obsMode === m.id}
+                    onClick={() => setObsMode(m.id)}
+                    className={`min-h-[44px] md:min-h-[32px] flex-1 px-2 text-[10px] ${obsMode === m.id ? 'bg-amber-500/20 text-amber-300' : 'text-stone-400 hover:text-stone-200'}`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>
 
       {/* ── SECTION 2 — ĐÀI QUAN SÁT NÃO: sân khấu UX-3 v2 (đài quan sát
-          thật) full-width fit-height (18-a geometry v3: center-align + kích
-          thước điểm thích ứng) + live + chú thích bất biến ── */}
-      <div className="nc-wrap nc-amber" role="region" aria-label="Đài quan sát não theo thời gian thực">
+          thật) full-width fit-height (Task 26: nơ-ron tím + cạnh thẳng +
+          đường ngược vàng per-edge + hạt tín hiệu thật canvas) + live +
+          PANEL QUAN SÁT theo obsMode (Task 26 — chỉ thị user "chọn xong não
+          nào có thể xem ngay dưới đài quan sát não") + chú thích bất biến ── */}
+      <div className="nc-wrap nc-amber space-y-4" role="region" aria-label="Đài quan sát não theo thời gian thực">
         <Card className="nc-panel nc-md nc-border-amber">
           <CardContent className="p-4">
             <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -850,8 +955,8 @@ export function BrainTabContent() {
                   onClick={() => setLiveOn(v => !v)}
                   aria-pressed={liveOn}
                   title={liveOn
-                    ? 'Live ĐANG BẬT — poll /api/brain/activity mỗi 2.5s (READ-ONLY, chỉ chạy khi tab trình duyệt đang hiển thị). Bấm để tắt.'
-                    : 'Live đang TẮT — bấm để bật poll hoạt động não mỗi 2.5s (READ-ONLY).'}
+                    ? 'Live ĐANG BẬT — poll /api/brain/activity thích ứng (1.5s khi agent/train đang chạy, ~10s khi yên — READ-ONLY, chỉ chạy khi tab trình duyệt đang hiển thị). Bấm để tắt.'
+                    : 'Live đang TẮT — bấm để bật poll hoạt động não (READ-ONLY, thích ứng theo nhịp vận hành).'}
                   className={`min-h-[44px] md:min-h-[28px] inline-flex items-center gap-1 rounded-md border px-2 text-[10px] ${
                     liveOn
                       ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
@@ -862,7 +967,7 @@ export function BrainTabContent() {
                   {liveOn ? 'Live' : 'Live tắt'}
                 </button>
                 <span className="text-[9.5px] text-stone-500">
-                  poll 2.5s · READ-ONLY{activity ? ` · dữ liệu ${new Date(activity.fetchedAt).toLocaleTimeString('vi-VN')}` : ''}
+                  poll thích ứng 1.5s/10s · READ-ONLY{activity ? ` · dữ liệu ${new Date(activity.fetchedAt).toLocaleTimeString('vi-VN')}` : ''}
                 </span>
               </div>
               <BrainStage
@@ -876,6 +981,8 @@ export function BrainTabContent() {
                 refreshNonce={refreshNonce}
                 initialHead={activityHead}
                 onHeadChange={h => setActivityHead(h)}
+                backprop={activity?.backprop ?? null}
+                training={activity?.training ?? null}
               />
               <p className="text-[9.5px] leading-relaxed text-stone-500">
                 ⚠ Bản nháp KHÔNG tự lên runtime — chỉ qua train thắng đối chứng CV (bất biến A1); runtime chỉ
@@ -885,11 +992,32 @@ export function BrainTabContent() {
             </div>
           </CardContent>
         </Card>
+
+        {/* ── Task 26: PANEL QUAN SÁT NGAY DƯỚI ĐÀI — nội dung theo obsMode
+            chọn ở SECTION 1 (chỉ thị user 2026-10-13: "chọn xong não nào có
+            thể xem ngay dưới đài quan sát não, và chọn quan sát cái gì ở trên
+            thì xem được ở đài bên dưới"). Mỗi panel tự mount/unmount theo
+            obsMode → poll tự dừng khi không hiển thị (B5). neurons dùng
+            CÙNG activity fetch của đài (1 poller duy nhất). */}
+        <Card className="nc-panel nc-md nc-border-amber">
+          <CardContent className="p-4">
+            {obsMode === 'neurons' && (
+              <ObsNeuronsPanel activity={activity} brainKey={selectedBrainKey} brainTitle={selectedEntry.title} />
+            )}
+            {obsMode === 'timeline' && <ObsTimelinePanel />}
+            {obsMode === 'traces' && (
+              <ObsTracesPanel brainKey={selectedBrainKey} brainTitle={selectedEntry.title} />
+            )}
+            {obsMode === 'golden' && <ObsGoldenPanel />}
+          </CardContent>
+        </Card>
       </div>
 
       {/* ── SECTION 3 — BẢNG THÔNG SỐ: 4 tab (Training Console UX-2 / Tham
-          số runtime / Nhật ký / Hàm & công thức) — render INLINE mọi
-          viewport (18-c: bỏ hộp console mobile, console là section cuối) ── */}
+          số runtime / Nhật ký / Hàm & công thức — Task 26: tab Quan sát đã
+          chuyển lên SECTION 1 selector + panel dưới đài SECTION 2) — render
+          INLINE mọi viewport (18-c: bỏ hộp console mobile, console là
+          section cuối) ── */}
       <div className="nc-wrap nc-amber" role="region" aria-label="Bảng thông số điều chỉnh">
         <Card className="nc-panel nc-md nc-border-amber">
           <CardContent className="p-4">

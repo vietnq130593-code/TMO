@@ -3,11 +3,29 @@
  * ============================================================================
  *
  * GET /api/observation/timeline?runId=&actor=&kind=&since=&before=&limit=
+ *     &brain=  (Task 26-BE — đài quan sát v2, hợp đồng 26-RESTORE)
  *
  * Trả sự kiện mới→cũ từ ObservationEvent (model 103), paginate bằng
  * before=seq. Khi có runId → JOIN thêm BrainInferenceTrace (model 104) theo
  * runId — "cả 2 nguồn trong 1 response" (C.4) cho chế độ kim tuyến của UI
  * tab Quan sát (OBS-P3).
+ *
+ * Task 26-BE thêm (hợp đồng 26-RESTORE — FE đang code theo đúng shape):
+ *   - ?brain= (tùy chọn, mặc định KHÔNG lọc — mọi nhánh cũ giữ nguyên):
+ *       · traces: lọc theo CỘT brain (BrainInferenceTrace.brain) đúng giá
+ *         trị — join khi có runId HOẶC brain (AND cả hai nếu cùng truyền).
+ *       · events: lọc JS post-query theo payload.brain === giá trị (SQLite
+ *         không index JSON payload) — cursor vòng gom ĐÚNG limit+1 dòng
+ *         khớp (hasMore/nextBefore đúng trên trang ĐÃ LỌC; payload rách/
+ *         không có brain → loại; trần quét bảo vệ fail-open).
+ *       · LƯU Ý trung thực: `total` đếm ở TẦNG DB (runId/actor/kind/since/
+ *         before) — KHÔNG tính payload.brain (không thể count JSON không
+ *         index) — dùng events.length/hasMore để lật trang dưới filter brain.
+ *         Brain lạ → khớp 0 dòng (fail-open 200 rỗng, KHÔNG 400).
+ *   - alerts24h: count ObservationEvent kind='obs.alert' trong 24 giờ qua
+ *     (count query riêng trên index @@index([kind, ts]) — KHÔNG tương tác
+ *     với filter nào; trường tổng quan cho badge cảnh báo FE). Đếm lỗi →
+ *     0 (fail-open — badge tắt an toàn).
  *
  * Hợp đồng:
  *   - READ-ONLY TUYỆT ĐỐI — chỉ SELECT, không ghi gì (pin r96);
@@ -28,8 +46,11 @@ export const dynamic = 'force-dynamic'
 /** Limit mặc định + trần (tương tự pattern take các route quan sát sẵn có). */
 const DEFAULT_LIMIT = 50
 const MAX_LIMIT = 200
-/** Trần số trace join theo runId (kim tuyến — đủ dày, không phình response). */
+/** Trần số trace join theo runId/brain (kim tuyến — đủ dày, không phình response). */
 const MAX_TRACES = 100
+/** Task 26-BE — cursor lọc JS payload.brain: cỡ batch mỗi vòng + trần vòng. */
+const BRAIN_FILTER_BATCH = 100
+const BRAIN_FILTER_MAX_ROUNDS = 60 // quét tối đa 6.000 dòng gần nhất rồi dừng (fail-open)
 
 function safeFlag(key: string): boolean {
   try {
@@ -39,11 +60,37 @@ function safeFlag(key: string): boolean {
   }
 }
 
+/** payload.brain của 1 dòng event — parse lỗi/không có brain → null. */
+function payloadBrainOf(payloadJson: string): string | null {
+  try {
+    const p = JSON.parse(payloadJson) as { brain?: unknown }
+    return typeof p.brain === 'string' ? p.brain : null
+  } catch {
+    return null
+  }
+}
+
+/** Dòng event theo select chuẩn của route (26-BE — dùng chung 2 nhánh query). */
+interface EventRow {
+  seq: number
+  ts: Date
+  actor: string
+  kind: string
+  runId: string | null
+  sessionId: string | null
+  table: string | null
+  rowKey: string | null
+  summary: string
+  payloadJson: string
+}
+
 export async function GET(request: Request) {
   const url = new URL(request.url)
   const runId = url.searchParams.get('runId')?.trim() || null
   const actor = url.searchParams.get('actor')?.trim() || null
   const kind = url.searchParams.get('kind')?.trim() || null
+  // Task 26-BE — filter não (traces theo cột brain + events theo payload.brain)
+  const brain = url.searchParams.get('brain')?.trim() || null
   const sinceRaw = url.searchParams.get('since')
   const beforeRaw = url.searchParams.get('before')
   const limitRaw = url.searchParams.get('limit')
@@ -81,30 +128,64 @@ export async function GET(request: Request) {
   }
 
   try {
-    // ── Query sự kiện mới→cũ (mọi filter AND) ──
+    // ── Query sự kiện mới→cũ (mọi filter DB AND) ──
+    // NOTE 26-BE: seq (before) KHÔNG nhét vào `where` ngay — nhánh brain lọc
+    // JS cần lật cursor từng vòng; nhánh thường áp before vào where như cũ.
     const where: Record<string, unknown> = {}
     if (runId) where.runId = runId
     if (actor) where.actor = actor
     if (kind) where.kind = kind
     if (since) where.ts = { gte: since }
-    if (before !== null) {
-      where.seq = where.seq ? { ...(where.seq as object), lt: before } : { lt: before }
+
+    const select = {
+      seq: true, ts: true, actor: true, kind: true, runId: true,
+      sessionId: true, table: true, rowKey: true, summary: true, payloadJson: true,
     }
 
-    const [rows, total] = await Promise.all([
-      db.observationEvent.findMany({
-        where,
+    let rows: EventRow[]
+    let hasMore: boolean
+    if (brain) {
+      // ── 26-BE: lọc JS payload.brain — cursor vòng gom ĐÚNG limit+1 dòng ──
+      const collected: EventRow[] = []
+      let cursor: number | null = before
+      for (let round = 0; round < BRAIN_FILTER_MAX_ROUNDS; round++) {
+        const w: Record<string, unknown> = { ...where }
+        if (cursor !== null) w.seq = { lt: cursor }
+        const batch = await db.observationEvent.findMany({
+          where: w,
+          orderBy: { seq: 'desc' },
+          take: BRAIN_FILTER_BATCH,
+          select,
+        })
+        if (batch.length === 0) break // hết dữ liệu — dừng (fail-open)
+        for (const r of batch) {
+          if (payloadBrainOf(r.payloadJson) === brain) collected.push(r)
+        }
+        if (collected.length > limit) break // đủ limit+1 → có trang sau
+        if (batch.length < BRAIN_FILTER_BATCH) break // hết dữ liệu
+        cursor = batch[batch.length - 1].seq
+      }
+      rows = collected.slice(0, limit + 1)
+      hasMore = collected.length > limit
+    } else {
+      // ── Nhánh cũ (giữ nguyên): before vào where, take limit+1 ──
+      const w: Record<string, unknown> = { ...where }
+      if (before !== null) w.seq = { lt: before }
+      rows = await db.observationEvent.findMany({
+        where: w,
         orderBy: { seq: 'desc' },
         take: limit + 1, // +1 để biết còn trang sau
-        select: {
-          seq: true, ts: true, actor: true, kind: true, runId: true,
-          sessionId: true, table: true, rowKey: true, summary: true, payloadJson: true,
-        },
-      }),
-      db.observationEvent.count({ where }),
-    ])
+        select,
+      })
+      hasMore = rows.length > limit
+    }
 
-    const hasMore = rows.length > limit
+    // total: đếm tầng DB (runId/actor/kind/since/before) — KHÔNG tính
+    // payload.brain (JSON không index — xem JSDoc header 26-BE)
+    const countWhere: Record<string, unknown> = { ...where }
+    if (before !== null) countWhere.seq = { lt: before }
+    const total = await db.observationEvent.count({ where: countWhere })
+
     const page = (hasMore ? rows.slice(0, limit) : rows).map(r => {
       let payload: Record<string, unknown> = {}
       try {
@@ -127,10 +208,15 @@ export async function GET(request: Request) {
     })
 
     // ── Kim tuyến: JOIN BrainInferenceTrace theo runId (C.4) ──
+    // 26-BE: join khi có runId HOẶC brain (lọc cột brain thật); cả hai cùng
+    // truyền → AND (mọi filter AND — cùng quy ước nhánh cũ)
     let traces: Array<Record<string, unknown>> = []
-    if (runId) {
+    if (runId || brain) {
+      const tWhere: Record<string, unknown> = {}
+      if (runId) tWhere.runId = runId
+      if (brain) tWhere.brain = brain
       const tRows = await db.brainInferenceTrace.findMany({
-        where: { runId },
+        where: tWhere,
         orderBy: { ts: 'desc' },
         take: MAX_TRACES,
         select: {
@@ -152,6 +238,17 @@ export async function GET(request: Request) {
       }))
     }
 
+    // ── 26-BE: alerts24h — count obs.alert 24 giờ qua (index [kind, ts]) ──
+    // KHÔNG tương tác với filter — trường tổng quan cho badge FE; đếm lỗi → 0
+    let alerts24h = 0
+    try {
+      alerts24h = await db.observationEvent.count({
+        where: { kind: 'obs.alert', ts: { gte: new Date(Date.now() - 24 * 3600_000) } },
+      })
+    } catch {
+      alerts24h = 0 // fail-open — badge tắt an toàn, response vẫn 200
+    }
+
     return NextResponse.json({
       ok: true,
       flags: {
@@ -167,6 +264,8 @@ export async function GET(request: Request) {
       traces,
       // kind catalog cho UI filter bar (single-source kinds.ts — doctrine #9)
       kinds: OBS_KINDS,
+      // 26-BE (hợp đồng 26-RESTORE) — badge cảnh báo FE
+      alerts24h,
     })
   } catch (err) {
     console.error('[ObservationTimeline] GET failed:', err instanceof Error ? err.message : String(err))

@@ -68,6 +68,9 @@ import { makeRng } from '../init'
 import { acquireTrainLock, releaseTrainLock } from '../train-lock'
 // OBS-P1 hook (§C.3 đợt 1) — brain.train start/end (static — không chu trình)
 import { observeBrainTrain } from '@/lib/observation/ledger'
+// Task 26-BE — train-progress bus (đài quan sát v2; train-progress chỉ import
+// type từ ../registry — không chu trình)
+import { trainProgressStart, trainProgressEnd } from '../train-progress'
 // OBS-P2 hook (§C.3 đợt 2) — vết suy diễn organ replay_eval
 import { traceInference } from '@/lib/observation/trace'
 import { BRAIN_VERSIONS_KEEP } from '../registry'
@@ -571,17 +574,32 @@ export async function trainBrainSurrogate(
   }
   // OBS-P1 hook (§C.3 đợt 1 — brain.train start/end; bỏ lệnh trùng A7 không phát)
   observeBrainTrain('surrogate', 'start', { inputMode, useDraft: override != null })
+  // Task 26-BE — train-progress bus (đài quan sát v2): start SAU lock (bỏ lệnh
+  // trùng A7 — cùng tiền lệ observeBrainTrain), TRƯỚC mọi query của hàm
+  // Locked; end ở mọi lối ra (done/failed). Additive — không đụng logic train.
+  trainProgressStart('surrogate', null)
   const t0 = Date.now()
   try {
     const result = await trainBrainSurrogateLocked(inputMode, override)
     observeBrainTrain('surrogate', 'end', {
       inputMode, useDraft: override != null, durationMs: Date.now() - t0, result,
     })
+    // 26-BE: surrogate 3 head — head=null, summary phần số để NULL hết
+    // (epochsRun/finalLoss/gradAbsMean mỗi head một khác — điền 1 trong 3 là
+    // nói dối; trung thực vì đa đầu). trained=false = "ngủ an toàn" → done +
+    // reason (không phải failed).
+    trainProgressEnd(
+      'surrogate',
+      true,
+      { epochsRun: null, finalLoss: null, gradAbsMean: null },
+      result.trained ? null : result.error ?? 'ngủ an toàn (không đủ dữ liệu)',
+    )
     return result
   } catch (err) {
     observeBrainTrain('surrogate', 'end', {
       inputMode, useDraft: override != null, durationMs: Date.now() - t0, error: err,
     })
+    trainProgressEnd('surrogate', false) // throw → failed (bus fail-open)
     throw err
   } finally {
     releaseTrainLock('surrogate')

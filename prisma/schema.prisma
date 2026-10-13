@@ -2654,3 +2654,63 @@ model BrainInferenceTrace {
   @@index([brain, ts])
   @@index([runId, ts])
 }
+// ==================== APPEND BẮT ĐẦU (26-c — copy vào cuối schema thật) ====================
+
+/// HN-P1 (BLUEPRINT-HYPERNAS-P1-P5 §3.2 — Task 26-c) — 1 phiên chạy search
+/// của 1 brain. KHÔNG BAO GIỜ ghi BrainModel/active (bất biến H1/H2 — search
+/// chỉ đề xuất; đường lên runtime vẫn train → thắng CV → thăng cấp A1).
+/// Số thứ tự model theo blueprint HyperNAS: 101 (vật lý nằm sau 104 vì OBS-P1
+/// Task 23 triển khai trước — đánh số giữ theo blueprint §3.2).
+model BrainSearchRun {
+  id              String    @id @default(cuid())
+  /// 'calibration_v3' | 'surrogate' | 'policy' — khớp BRAIN_REGISTRY (registry.ts)
+  brain           String
+  /// running | done | failed | cancelled (§4.2 — cancelled có đường cancel riêng)
+  status          String    @default("running")
+  /// seed tất định toàn session (H4 — same seed + same data → same ranking)
+  seed            Int
+  /// cập nhật sau MỖI ứng viên xong — GET thấy running mà stale > 60s → mark failed "worker chết (restart?)" (§4.2-2b — session mồ côi không treo vĩnh viễn, triển khai HN-P2)
+  heartbeatAt     DateTime  @default(now())
+  /// SHA-256 (nSamples, inputMode, sorted-sample-ids) — chống drift predictor HN-P3 (§1.3-2)
+  dataFingerprint String
+  /// chế độ đầu vào của phiên search (vd 'features-10' / 'runs-features')
+  inputMode       String
+  /// ngân sách H3 thực tế của session (SEARCH_MAX_CANDIDATES / SEARCH_MAX_WALL_MS — search-space.ts)
+  candidatesMax   Int
+  wallMsMax       Int
+  /// tổng kết khi done: best candidate id, top-5 score, durationMs, nCandidates (§3.2)
+  summaryJson     String?
+  error           String?
+  startedAt       DateTime  @default(now())
+  finishedAt      DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([brain, createdAt])
+}
+
+/// HN-P1 — 1 ứng viên đã đánh giá trong 1 session. KHÔNG lưu weights (H6 —
+/// mlp.ts tất định bit-đối-bit theo (seed, data) → thăng cấp = train lại cùng
+/// seed, không cần đường ghi BrainModel mới). Số thứ tự model theo blueprint:
+/// 102. Prune theo session cha (H5 — SEARCH_SESSIONS_KEEP=5 session/brain ×
+/// SEARCH_CANDIDATES_KEEP=60 ứng viên/session, triển khai ở HN-P2).
+model BrainSearchCandidate {
+  id           String   @id @default(cuid())
+  runId        String
+  /// thứ tự sinh trong session (0-based) — tất định theo seed (H4)
+  idx          Int
+  /// BrainDraftSpec normalized (đúng format BrainSpecDraft.specJson — spec-schema.ts)
+  specJson     String
+  /// vector 96 chiều (§3.1 — search-space.ts encodeDraft) — input sẵn cho HN-P3 predictor
+  encodingJson String
+  /// metrics thật: cvScore + CI, nSamples, params, trainMs, beatActive chi tiết (§3.2)
+  metricsJson  String
+  /// cột Float thật hoá từ metricsJson.cvScore để index sort — chú thích §3.2 "CHỐT khi triển khai" (SQLite không index expression)
+  cvScore      Float
+  /// true khi ứng viên này thắng bản active trên CÙNG fold (bằng chứng H2/Q3 §8)
+  beatActive   Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@unique([runId, idx])
+  @@index([runId, cvScore(sort: Desc)])
+}
+

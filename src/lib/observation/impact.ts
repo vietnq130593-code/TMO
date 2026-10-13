@@ -15,6 +15,12 @@
  *      window — KHÔNG claim nhân quả (nhiều thứ đổi song song).
  *   2. Health pass — phát 1 sự kiện kind 'obs.health' mỗi tick: queue/
  *      dropped/failed của ledger + trace (GAP-7 meta-health).
+ *   3. Task 26-BE thêm vào CÙNG tick (không timer mới): (a) GAP-1
+ *      ensureDailyKpiSnapshots — KpiSnapshot hôm nay làm mới mỗi 2h + hôm
+ *      qua final 1 lần nếu thiếu (nguyên liệu cho pass impact — xem
+ *      kpi-snapshots.ts); (b) GAP-2 runAlertChecks — 3 rule cảnh báo chủ
+ *      động stall/token-burn/job-stale (xem alerts.ts; chạy cả khi
+ *      obs_ledger off — console.warn vẫn phát, sự kiện tự no-op).
  *
  * Cờ `obs_impact` (off mặc định) — tick kiểm tra cờ MỖI vòng (bật là có
  * hiệu lực ngay, không cần restart). Cờ off → tick rỗng (rẻ). Output duy
@@ -28,6 +34,8 @@ import { getTuningEnum } from '@/lib/learning/tuning-store'
 import { observeEvent, getObservationHealth, flushObservationQueue, isObsLedgerEnabled } from './ledger'
 import { getTraceHealth } from './trace'
 import { KPI_REGISTRY } from '@/lib/kpi/registry'
+// Task 26-BE (GAP-2) — alerts KHÔNG import ngược impact (không chu trình)
+import { runAlertChecks } from './alerts'
 
 // ==================== HẰNG SỐ (doctrine #1 — nguồn §C.6 + §7 Q5 chốt) ====================
 
@@ -273,13 +281,28 @@ export function isObsImpactEnabled(): boolean {
 async function tick(): Promise<void> {
   const st = workerState()
   if (st.running) return // tick trước chưa xong — bỏ (không xếp chồng)
-  // FB-OBS-R1-11: output duy nhất của worker là SỰ KIỆN — obs_ledger off
-  // thì tick rỗng (không quét candidates/dedup/KPI vô ích)
-  if (!isObsImpactEnabled() || !isObsLedgerEnabled()) return
+  // FB-OBS-R1-11: obs_impact off → tick rỗng HOÀN TOÀN (impact + kpi-ensure
+  // + alerts đều là việc của tick này — tắt worker là tắt tất cả, đúng precedent)
+  if (!isObsImpactEnabled()) return
   st.running = true
   try {
-    await computeImpactEstimates()
-    await emitObservationHealth()
+    // Impact + KPI-snapshot (GAP-1) + health: output duy nhất là SỰ KIỆN (snapshot
+    // là nguyên liệu cho impact) — obs_ledger off thì bỏ cả 3 (FB-OBS-R1-11:
+    // không quét dedup/KPI vô ích + không đếm giả)
+    if (isObsLedgerEnabled()) {
+      await computeImpactEstimates()
+      // GAP-1 (Task 26-BE): ensure KpiSnapshot hôm nay (làm mới 2h) + hôm qua
+      // (final 1 lần nếu thiếu) — dynamic import vì kpi-snapshots import
+      // kpiDateOf từ impact này (chống chu trình tĩnh — tiền lệ ledger note)
+      const { ensureDailyKpiSnapshots } = await import('./kpi-snapshots')
+      await ensureDailyKpiSnapshots()
+      await emitObservationHealth()
+    }
+    // GAP-2 (Task 26-BE): cảnh báo chủ động — chạy NGAY SAU pass impact; chạy
+    // CẢ khi obs_ledger off (console.warn [OBS-ALERT] vẫn phát; sự kiện
+    // obs.alert tự no-op ở ledger). Tự check cờ obs_alerts bên trong (off →
+    // return ngay — rẻ).
+    await runAlertChecks()
   } catch {
     // fail-open — worker không bao giờ throw làm chết interval
   } finally {

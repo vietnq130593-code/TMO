@@ -21,7 +21,7 @@
  *      → run.end, cùng runId + sessionId (kim tuyến GAP-1).
  *   H. Source-scan wiring (r92-E precedent): reward.log (GAP-4) + 3 pipeline
  *      observeBrainTrain + qentry.add + verdict.add + learn.episode + auto-learn
- *      db.write + 4 cờ TUNING_SPECS (26–29).
+ *      db.write + 4 cờ TUNING_SPECS (26–29) + cờ thứ 30 obs_alerts (26-BE).
  *   I. verdict.add nhánh DELEGATE có rowKey trỏ dòng ArbiterVerdict thật (FB-OBS-R1-08).
  *
  * DB CÔ LẬP qua preload (tests/db-isolation-preload.ts) — không đụng
@@ -46,7 +46,7 @@ import { insertArbiterVerdict } from '@/lib/metrics-db'
 
 const readSrc = (rel: string): string => readFileSync(join(process.cwd(), rel), 'utf-8')
 
-const OBS_FLAG_KEYS = ['obs_ledger', 'obs_brain_trace', 'obs_impact', 'ui_observation'] as const
+const OBS_FLAG_KEYS = ['obs_ledger', 'obs_brain_trace', 'obs_impact', 'ui_observation', 'obs_alerts'] as const
 
 async function wipeObsTables(): Promise<void> {
   await db.observationEvent.deleteMany({})
@@ -67,6 +67,7 @@ beforeAll(async () => {
   delete process.env.OBS_BRAIN_TRACE
   delete process.env.OBS_IMPACT
   delete process.env.UI_OBSERVATION
+  delete process.env.OBS_ALERTS
   await db.tuningParam.deleteMany({ where: { key: { in: [...OBS_FLAG_KEYS] } } })
   await refreshTuningSnapshot()
   await wipeObsTables()
@@ -77,6 +78,7 @@ afterAll(async () => {
   delete process.env.OBS_BRAIN_TRACE
   delete process.env.OBS_IMPACT
   delete process.env.UI_OBSERVATION
+  delete process.env.OBS_ALERTS
   // chờ hook straggler (dynamic import) no-op hoá + drain hết queue đang chạy
   // — tránh deleteMany đụng lock SQLite với transaction drain (timeout 5s)
   await settleAndFlush()
@@ -348,8 +350,8 @@ describe('r95 · H — source-scan wiring đợt 1+2 (OBS-P1/P2 hooks)', () => {
     expect(readSrc('src/lib/brain/brains/policy.ts')).toContain("organ: 'policy_mixture'")
   })
 
-  test('H5 TUNING_SPECS đủ 4 cờ obs (26–29) đúng envKey/default/nodeId', () => {
-    expect(TUNING_SPECS.length).toBe(29) // PIN UPDATE Task 23: 25 → 29 (4 cờ OBS)
+  test('H5 TUNING_SPECS đủ 5 cờ obs (26–30) đúng envKey/default/nodeId', () => {
+    expect(TUNING_SPECS.length).toBe(30) // PIN UPDATE Task 26-BE: 29 → 30 (cờ obs_alerts GAP-2)
     for (const key of OBS_FLAG_KEYS) {
       const spec = getTuningSpec(key)
       expect(spec, key).toBeDefined()
@@ -360,22 +362,32 @@ describe('r95 · H — source-scan wiring đợt 1+2 (OBS-P1/P2 hooks)', () => {
     }
     expect(getTuningSpec('obs_ledger')?.envKey).toBe('OBS_LEDGER')
     expect(getTuningSpec('ui_observation')?.envKey).toBe('UI_OBSERVATION')
+    expect(getTuningSpec('obs_alerts')?.envKey).toBe('OBS_ALERTS') // 26-BE — cờ thứ 30
   })
 
-  test('H6 kinds.ts — 16 kind chuẩn + kind HyperNAS search.* đặt trước (single-source §9 HyperNAS)', () => {
-    expect(OBS_KINDS.length).toBe(16)
+  test('H6 kinds.ts — 17 kind chuẩn + obs.alert nhóm alert (Task 26-BE GAP-2) + kind HyperNAS search.* đặt trước (single-source §9 HyperNAS)', () => {
+    expect(OBS_KINDS.length).toBe(17) // PIN UPDATE Task 26-BE: 16 → 17 (obs.alert)
     expect(OBS_KINDS.map(k => k.kind)).toContain('search.session')
     expect(OBS_KINDS.map(k => k.kind)).toContain('impact.estimate')
     expect(OBS_KINDS.map(k => k.kind)).toContain('brain.infer-ref')
+    // 26-BE — cảnh báo quan sát (nhóm alert, chip amber — hợp đồng 26-RESTORE)
+    const alertDef = OBS_KINDS.find(k => k.kind === 'obs.alert')
+    expect(alertDef?.group).toBe('alert')
+    expect(alertDef?.label).toBe('Cảnh báo quan sát')
   })
 
-  test('H7 tab Quan sát đăng ký TRONG brain-tab SECTION 3 (OBS-P3 — Task 25 tích hợp theo chỉ thị user 2026-10-13)', () => {
-    // Task 25: KHÔNG còn tab riêng cấp module Smolab — component render như 1
-    // tab console SECTION 3 của tab BRAIN (consoleTab union + entry tablist).
-    expect(brainTab).toContain("'train' | 'tuning' | 'log' | 'ref' | 'observation'")
-    expect(brainTab).toContain("['observation', 'Quan sát']")
-    expect(brainTab).toContain("consoleTab === 'observation'")
-    expect(brainTab).toContain('ObservationTabContent')
+  test('H7 tab Quan sát đăng ký theo cấu trúc Task 26 — selector SECTION 1 + panel dưới đài (OBS-P3; PIN UPDATE 26-FE/26-BE)', () => {
+    // Task 25: tab Quan sát từng là tab console thứ 5 SECTION 3. Task 26
+    // (chỉ thị user 2026-10-13 — "tích hợp vào ô Chọn não… xem ngay dưới đài
+    // quan sát"): 26-FE chuyển Quan sát LÊN selector "Chế độ quan sát" 4 nút
+    // SECTION 1 + 4 panel mount/unmount theo obsMode NGAY DƯỚI đài SECTION 2,
+    // bỏ tab console 'observation' (brain-tab.tsx 26-FE — r93 pin chi tiết).
+    expect(brainTab).toContain("useState<ObsMode>('neurons')")
+    expect(brainTab).toContain("obsMode === 'timeline'")
+    expect(brainTab).toContain('<ObsTimelinePanel />')
+    // SECTION 3 còn 4 tab console — KHÔNG còn 'observation'
+    expect(brainTab).toContain('obsMode')
+    expect(brainTab).not.toContain("'train' | 'tuning' | 'log' | 'ref' | 'observation'")
     // smolab-module: KHÔNG còn đăng ký tab riêng + localStorage cũ chuyển hướng 'brain'
     expect(smolab).not.toContain("{ id: 'observation'")
     expect(smolab).not.toContain("activeSmolabTab === 'observation'")

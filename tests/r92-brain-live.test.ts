@@ -82,6 +82,7 @@ import { parseTuningInput } from '@/lib/learning/tuning-input'
 import { TUNING_SPECS, getTuningSpec, type TuningSpec } from '@/lib/learning/neural-types'
 import { getTuningEnum, resetTuningValue, refreshTuningSnapshot } from '@/lib/learning/tuning-store'
 import { buildStageLayout, STAGE_LIMITS, type StageColumn } from '@/lib/brain/stage-geometry'
+import { trainProgressReset, trainProgressStart, trainProgressEnd } from '@/lib/brain/train-progress'
 import {
   buildSurrogateFeatureRow,
   buildSurrogateVocab,
@@ -243,7 +244,8 @@ describe('r92 · B parseTuningInput — lõi validate editor TuningParamDialog',
 
 // ==================== C. GET /api/brain/activity (DB CÔ LẬP — route handler trực tiếp) ====================
 
-/** Response shape route activity (contract 15-a — đối chiếu registry.BrainActivity). */
+/** Response shape route activity (contract 15-a — đối chiếu registry.BrainActivity).
+ *  Task 26-BE: += backprop/training (hợp đồng đài quan sát v2 — 26-RESTORE). */
 interface ActivityJson {
   ok: boolean
   brain: string
@@ -255,6 +257,22 @@ interface ActivityJson {
   featureNames: string[] | null
   sourceLabel: string | null
   fetchedAt: string
+  backprop: {
+    deltas: number[][] | null
+    yTrue: number[] | null
+    loss: number | null
+    label: string | null
+  } | null
+  training: {
+    brain: string
+    head: string | null
+    status: 'running' | 'done' | 'failed'
+    startedAt: string
+    endedAt: string | null
+    epochsRun: number | null
+    finalLoss: number | null
+    gradAbsMean: number[] | null
+  } | null
   error?: string
 }
 
@@ -286,6 +304,9 @@ describe('r92 · C GET /api/brain/activity — đài quan sát não READ-ONLY (D
     await db.brainModel.deleteMany({
       where: { brain: { in: ['calibration_v3', 'surrogate', 'policy'] } },
     })
+    // 26-BE: bus train-progress là state PROCESS (globalThis) — reset để pin
+    // training=null tất định bất kể file test nào chạy trước (bun test 1 process)
+    trainProgressReset()
   })
 
   afterAll(async () => {
@@ -329,6 +350,10 @@ describe('r92 · C GET /api/brain/activity — đài quan sát não READ-ONLY (D
       expect(json.featureNames).toBeNull()
       expect(json.sourceLabel).toBeNull()
       expect(Number.isNaN(Date.parse(json.fetchedAt))).toBe(false) // ISO hợp lệ
+      // 26-BE: dormant → backprop KHÔNG tính (quyết định 15-a: inputVector
+      // chưa chuẩn hóa) + bus trống → training null
+      expect(json.backprop).toBeNull()
+      expect(json.training).toBeNull()
     }
     // head CHỈ surrogate — non-surrogate bỏ qua head rác, trả head=null
     const ignored = await activity('calibration_v3', 'tokens')
@@ -492,6 +517,86 @@ describe('r92 · C GET /api/brain/activity — đài quan sát não READ-ONLY (D
     expect(dur.head).toBe('durationMs')
     expect(dur.activations).not.toBeNull()
     expect(dur.activations!).toHaveLength(3)
+  })
+
+  test("26-BE backprop — gradient THẬT 1 mẫu gần nhất qua bản active (surrogate 3 head) + training snapshot bus", async () => {
+    // State tại đây (các test trước seed): bản surrogate active (vocab
+    // alpha/beta/Omega D=4, means [0.1..0.4], stds 1, targetStats tokens
+    // {mean 6, std 1} / durationMs {mean 9, std 1}) + run gần nhất =
+    // run_r92_completed (complete=true, tokensUsed=120, durationMs=1500)
+    // — nhãn thật ĐẦY ĐỦ cho cả 3 head (đúng transform pipeline — JSDoc route)
+    const x = [-0.1, -0.2, -0.3, -0.4]
+
+    // (a) head success — y = [complete?1:0] = [1]
+    const json = await activity('surrogate')
+    expect(json.backprop).not.toBeNull()
+    expect(json.backprop!.yTrue).toEqual([1])
+    expect(typeof json.backprop!.loss).toBe('number')
+    expect(Number.isFinite(json.backprop!.loss)).toBe(true)
+    expect(json.backprop!.label).toContain('AgentRun')
+    expect(json.backprop!.label).toContain('complete=1')
+    // deltas = db của MLP seed 42 dựng lại (tất định — bit-đối-bit)
+    const mlpSuccess = new MLP({
+      layers: [
+        { units: 4, activation: 'linear' },
+        { units: 8, activation: 'tanh' },
+        { units: 1, activation: 'sigmoid' },
+      ],
+      loss: 'bce', optimizer: 'adam', lr: 0.01, l2: 0.01, seed: 42,
+    })
+    expect(json.backprop!.deltas).toEqual(
+      mlpSuccess.backward(x, [1]).db.map(d => Array.from(d)),
+    )
+
+    // (b) head tokens — y = (log1p(120) − 6)/1 ĐÚNG targetStats bản active
+    const tokens = await activity('surrogate', 'tokens')
+    const yTokens = [Math.log1p(120) - 6]
+    expect(tokens.backprop!.yTrue).toEqual(yTokens)
+    expect(tokens.backprop!.label).toContain('tokens=120')
+    const mlpTokens = new MLP({
+      layers: [
+        { units: 4, activation: 'linear' },
+        { units: 8, activation: 'tanh' },
+        { units: 1, activation: 'linear' },
+      ],
+      loss: 'huber', optimizer: 'adam', lr: 0.01, l2: 0.01, seed: 43,
+    })
+    expect(tokens.backprop!.deltas).toEqual(
+      mlpTokens.backward(x, yTokens).db.map(d => Array.from(d)),
+    )
+
+    // (c) head durationMs — y = log1p(1500) − 9
+    const dur = await activity('surrogate', 'durationMs')
+    const yDur = [Math.log1p(1500) - 9]
+    expect(dur.backprop!.yTrue).toEqual(yDur)
+    expect(dur.backprop!.label).toContain('durationMs=1500')
+
+    // (d) training — bus trống trong nhóm C (beforeAll reset) → null
+    expect(json.training).toBeNull()
+  })
+
+  test("26-BE training — bus snapshot lật theo start/end (route đọc MỌI brain — FE tự so khớp)", async () => {
+    // Bus là state process — route đọc thẳng (không phụ thuộc DB), pin qua
+    // chính GET activity: start surrogate (khác brain đang xem) vẫn trả về
+    trainProgressReset()
+    const before = await activity('calibration_v3')
+    expect(before.training).toBeNull() // bus trống
+    trainProgressStart('surrogate', null)
+    const running = await activity('calibration_v3')
+    expect(running.training).not.toBeNull()
+    expect(running.training!.brain).toBe('surrogate') // KHÔNG lọc theo brain
+    expect(running.training!.status).toBe('running')
+    expect(running.training!.endedAt).toBeNull()
+    expect(Number.isNaN(Date.parse(running.training!.startedAt))).toBe(false)
+    trainProgressEnd('surrogate', true, { epochsRun: 7, finalLoss: 0.25, gradAbsMean: [0.1, 0.2] })
+    const done = await activity('calibration_v3')
+    expect(done.training!.status).toBe('done')
+    expect(done.training!.brain).toBe('surrogate')
+    expect(done.training!.epochsRun).toBe(7)
+    expect(done.training!.finalLoss).toBe(0.25)
+    expect(done.training!.gradAbsMean).toEqual([0.1, 0.2])
+    expect(done.training!.endedAt).not.toBeNull()
+    trainProgressReset() // dọn — không rò sang test khác
   })
 
   test('READ-ONLY pin: count 5 bảng (AgentRunRecord/EvalResult/EvalCase/BrainModel/TuningParam) trước/sau chuỗi GET GIỐNG HỆT', async () => {
@@ -801,11 +906,13 @@ describe('r92 · F cờ UI mặc định BRAIN-LIVE — TUNING_SPECS chống h�
     await refreshTuningSnapshot()
   })
 
-  test('TUNING_SPECS giữ đúng 29 entry + 3 cờ UI đủ enumValues/default/envKey đúng nguồn', () => {
+  test('TUNING_SPECS giữ đúng 30 entry + 3 cờ UI đủ enumValues/default/envKey đúng nguồn', () => {
     // Count không đổi qua BRAIN-LIVE (15-a chỉ ĐỔI default, không thêm key).
     // PIN UPDATE (Task 23 OBS-P1 2026-10-13): 25 → 29 — thêm 4 cờ quan sát V2
     // (obs_ledger/obs_brain_trace/obs_impact/ui_observation — không đụng 3 cờ UI pin dưới).
-    expect(TUNING_SPECS.length).toBe(29)
+    // PIN UPDATE (Task 26-BE 2026-10-14): 29 → 30 — thêm cờ obs_alerts (GAP-2
+    // cảnh báo chủ động stall/token-burn/job-stale — không đụng 3 cờ UI pin dưới).
+    expect(TUNING_SPECS.length).toBe(30)
     // ui_synapse_fx — default 'on' (chỉ thị user 2026-10-12: tab BRAIN là
     // đài quan sát não, hiệu ứng lan truyền là NỘI DUNG CHÍNH)
     const fx = getTuningSpec('ui_synapse_fx')!

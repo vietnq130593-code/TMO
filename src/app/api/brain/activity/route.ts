@@ -26,12 +26,43 @@
  *     bản active, hoặc từ ledger usable khi dormant (filter ĐÚNG
  *     collectRewardLedger — reward.ts).
  *
+ * Task 26-BE (đài quan sát v2 — hợp đồng API chốt 26-RESTORE) THÊM 2 field:
+ *   - training: snapshot từ train-progress bus (in-memory) — lượt train GẦN
+ *     NHẤT/đang chạy của MỌI nguồn (nút train UI + auto-retrain), kể cả
+ *     brain khác brain đang xem (FE tự so khớp); null khi bus trống.
+ *   - backprop: gradient THẬT của 1 MẪU THẬT — mẫu nguồn gần nhất (CHÍNH
+ *     mẫu đã dựng inputVector) — qua bản active HIỆN TẠI:
+ *       · deltas[k][j] = δ nơ-ron j lớp activations[k+1] — lấy từ
+ *         MLP.backward(x, yTrue).db (mlp.ts — δ lớp k chính là db[k]); FE
+ *         tính per-edge = |deltas[c][j] × activations[c][i]|.
+ *       · yTrue = nhãn THẬT của mẫu nguồn, đúng transform pipeline train:
+ *         - calibration_v3: y = [answered ? 1 : 0] từ cùng EvalResult (schema
+ *           EvalResult.answered Boolean).
+ *         - surrogate/success: y = [complete ? 1 : 0]; surrogate/tokens &
+ *           durationMs: y = (log1p(giá trị) − mean)/std theo ĐÚNG
+ *           targetStats bản active (surrogate.ts:666-673 — toLogSpace +
+ *           chuẩn hóa; loadActiveSurrogate đã expose targetStats).
+ *         - policy: KHÔNG có nhãn thật cho 1 run riêng lẻ (y là phân phối
+ *           mixture chỉ build được từ reward ledger lúc train) → deltas/
+ *           yTrue/loss null + label giải thích — TRUNG THỰC, không mô phỏng.
+ *       · loss = lossOf(x, yTrue) qua bản active.
+ *     CHỈ tính khi status === 'active' và có inputVector ĐÃ CHUẨN HÓA và có
+ *     nhãn thật của mẫu đó; thiếu 1 điều kiện → backprop=null hoặc object
+ *     null-số + label giải thích. GHI CHÚ TRUNG THỰC: đây là gradient của
+ *     MẪU GẦN NHẤT tính trên weights HIỆN TẠI — KHÔNG phải gradient của lượt
+ *     train lịch sử (khi training.status === 'running' FE dùng để boost hiển
+ *     thị — hạt vàng — chứ đây vẫn là gradient 1 mẫu thật, không phải luồng
+ *     gradient của lượt train đang chạy).
+ *     Perf: 1 pass forward+backward cho 1 mẫu — không đáng kể; bọc try/catch
+ *     fail-open (lỗi → backprop null + message trong `errors`).
+ *
  * Fail-open tuyệt đối: mọi nhánh đọc DB bọc try/catch — thiếu dữ liệu →
  * field null + `error` message, response vẫn 200 (tab quan sát không bao
  * giờ trắng trang vì thiếu dữ liệu). 400 CHỈ cho query rác (brain/head).
  *
  * READ-ONLY TUYỆT ĐỐI: chỉ count/findFirst/findMany/findUnique — KHÔNG
  * create/update/delete, KHÔNG đụng runtime/tuning/BrainModel.active.
+ * Backprop chạy thuần trong RAM trên MLP đã nạp — KHÔNG ghi DB gì cả.
  */
 
 import { NextResponse } from 'next/server'
@@ -48,6 +79,8 @@ import {
   buildSurrogateVocab,
   buildSurrogateFeatureRow,
   surrogateFeatureNames,
+  toLogSpace,
+  type ActiveSurrogate,
   type SurrogateFeatureCtx,
   type SurrogateVocab,
 } from '@/lib/brain/brains/surrogate'
@@ -59,6 +92,8 @@ import {
   type PolicyFeatureCtx,
   type PolicyVocab,
 } from '@/lib/brain/brains/policy'
+import { trainProgressSnapshot } from '@/lib/brain/train-progress'
+import type { MLP } from '@/lib/brain/mlp'
 
 export const dynamic = 'force-dynamic'
 
@@ -136,12 +171,91 @@ function toPlainNumbers(row: readonly (number | null)[]): number[] {
   return row.map(v => (typeof v === 'number' && Number.isFinite(v) ? v : 0))
 }
 
-/** Run gần nhất (mọi status — chạy 'running' vẫn có ctx cfg biết ngay lúc spawn). */
+/** Run gần nhất (mọi status — chạy 'running' vẫn có ctx cfg biết ngay lúc spawn).
+ * 26-BE: select THÊM complete/tokensUsed/durationMs — nhãn thật cho backprop
+ * surrogate (đúng transform pipeline — xem JSDoc header); additive, read-only. */
 async function latestRun() {
   return db.agentRunRecord.findFirst({
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-    select: { model: true, agentName: true, parentRunId: true, createdAt: true },
+    select: {
+      model: true, agentName: true, parentRunId: true, createdAt: true,
+      complete: true, tokensUsed: true, durationMs: true,
+    },
   })
+}
+
+// ==================== 26-BE — BACKPROP (gradient THẬT 1 mẫu — xem JSDoc header) ====================
+
+/** Shape hợp đồng 26-RESTORE — KHÔNG đổi tên key (FE đang code theo). */
+interface BackpropInfo {
+  /** δ theo lớp trọng số k = 0..L−2: deltas[k][j] = δ nơ-ron j lớp activations[k+1] */
+  deltas: number[][] | null
+  /** nhãn thật của mẫu nguồn (đúng transform pipeline — xem JSDoc) */
+  yTrue: number[] | null
+  /** loss mẫu thật qua bản active (lossOf) */
+  loss: number | null
+  /** nhãn nguồn mẫu + nhãn thật, vd 'AgentRun · 12:34 · complete=1' */
+  label: string | null
+}
+
+/** backward + lossOf trên bản active cho 1 cặp (x, y) — Float64 → number[]. */
+function finishBackprop(mlp: MLP, x: number[], y: number[], label: string): BackpropInfo {
+  const grad = mlp.backward(x, y) // δ lớp k chính là grad.db[k] (mlp.ts)
+  return {
+    deltas: grad.db.map(d => Array.from(d)),
+    yTrue: y,
+    loss: mlp.lossOf(x, y),
+    label,
+  }
+}
+
+/** Chưa có nhãn thật → object null-số + label giải thích (trung thực — không mô phỏng). */
+function noLabelBackprop(note: string): BackpropInfo {
+  return { deltas: null, yTrue: null, loss: null, label: note }
+}
+
+/**
+ * Backprop surrogate theo head — y ĐÚNG transform pipeline train
+ * (surrogate.ts:664-673): success = [complete?1:0] · tokens/durationMs =
+ * (toLogSpace(v) − mean)/std theo targetStats bản active (đã expose qua
+ * loadActiveSurrogate — KHÔNG tái chế tạo công thức). Run chưa kết thúc
+ * (complete/tokens/durationMs null) → null-số + label giải thích.
+ */
+function surrogateBackprop(
+  active: ActiveSurrogate,
+  head: SurrogateHead,
+  run: { complete: boolean | null; tokensUsed: number | null; durationMs: number | null; createdAt: Date },
+  x: number[],
+): BackpropInfo {
+  if (head === 'success') {
+    if (typeof run.complete !== 'boolean') {
+      return noLabelBackprop('chưa có nhãn thật cho mẫu gần nhất (run đang chạy — chưa có complete)')
+    }
+    const y = [run.complete ? 1 : 0]
+    return finishBackprop(active.heads.success, x, y, `AgentRun · ${hhmm(run.createdAt)} · complete=${run.complete ? 1 : 0}`)
+  }
+  if (head === 'tokens') {
+    if (typeof run.tokensUsed !== 'number' || !Number.isFinite(run.tokensUsed) || run.tokensUsed < 0) {
+      return noLabelBackprop('chưa có nhãn thật cho mẫu gần nhất (run chưa có tokensUsed)')
+    }
+    // ĐÚNG pipeline: y = (log1p(tokens) − mean)/std theo targetStats bản active
+    const t = toLogSpace(run.tokensUsed)
+    const y = [(t - active.targetStats.tokens.mean) / active.targetStats.tokens.std]
+    return finishBackprop(
+      active.heads.tokens, x, y,
+      `AgentRun · ${hhmm(run.createdAt)} · tokens=${run.tokensUsed} (log1p chuẩn hóa targetStats bản active)`,
+    )
+  }
+  // head === 'durationMs'
+  if (typeof run.durationMs !== 'number' || !Number.isFinite(run.durationMs) || run.durationMs < 0) {
+    return noLabelBackprop('chưa có nhãn thật cho mẫu gần nhất (run chưa có durationMs)')
+  }
+  const t = toLogSpace(run.durationMs)
+  const y = [(t - active.targetStats.durationMs.mean) / active.targetStats.durationMs.std]
+  return finishBackprop(
+    active.heads.durationMs, x, y,
+    `AgentRun · ${hhmm(run.createdAt)} · durationMs=${run.durationMs} (log1p chuẩn hóa targetStats bản active)`,
+  )
 }
 
 export async function GET(request: Request) {
@@ -169,6 +283,12 @@ export async function GET(request: Request) {
   let activations: number[][] | null = null
   let featureNames: string[] | null = null
   let sourceLabel: string | null = null
+  // 26-BE: 2 field mới (hợp đồng 26-RESTORE) — xem JSDoc header
+  let backprop: BackpropInfo | null = null
+  // training = snapshot bus — MỌI nguồn train (nút UI + auto-retrain), kể cả
+  // brain khác brain đang xem (FE tự so khớp); bus trống/quá 30 phút → null.
+  // Bus fail-open nội bộ (không bao giờ throw) — gọi trực tiếp an toàn.
+  const training = trainProgressSnapshot()
 
   // (a) Có AgentRunRecord status='running' đang chạy không (toàn cục — fail-open false)
   try {
@@ -220,6 +340,19 @@ export async function GET(request: Request) {
           inputVector = x
           activations = active.mlp.forwardActivations(x)
           featureNames = [...FEATURE_NAMES]
+          // 26-BE backprop (A): y thật = [answered?1:0] từ CHÍNH EvalResult
+          // dựng x (EvalResult.answered Boolean — schema dòng ~1527) — gradient
+          // 1 mẫu thật qua bản active (bọc fail-open: lỗi → null + errors)
+          try {
+            const yTrue = [r.answered === true ? 1 : 0]
+            backprop = finishBackprop(
+              active.mlp, x, yTrue,
+              `EvalResult · ${hhmm(r.createdAt)} · answered=${r.answered === true ? 'true' : 'false'}`,
+            )
+          } catch (err) {
+            backprop = null
+            errors.push(`backprop: ${errMsg(err)}`)
+          }
         }
         // DORMANT → inputVector giữ null (quyết định ghi ở header JSDoc).
       }
@@ -251,6 +384,14 @@ export async function GET(request: Request) {
             inputVector = x
             activations = active.heads[head].forwardActivations(x)
             featureNames = surrogateFeatureNames(active.vocab)
+            // 26-BE backprop (B) theo head — y ĐÚNG transform pipeline
+            // (targetStats bản active — xem surrogateBackprop JSDoc)
+            try {
+              backprop = surrogateBackprop(active, head, run, x)
+            } catch (err) {
+              backprop = null
+              errors.push(`backprop: ${errMsg(err)}`)
+            }
           } else {
             // DORMANT: vocab từ AgentRunRecord usable — filter ĐÚNG
             // trainBrainSurrogateLocked (surrogate.ts:573-578) → one-hot THÔ
@@ -318,6 +459,12 @@ export async function GET(request: Request) {
           inputVector = x
           activations = active.mlp.forwardActivations(x)
           featureNames = policyFeatureNames(active.vocab)
+          // 26-BE backprop (C): policy KHÔNG có nhãn thật cho 1 run riêng lẻ
+          // (y là phân phối mixture chỉ build được từ reward ledger lúc train —
+          // xem surrogateBackprop) → TRUNG THỰC null-số + label giải thích
+          backprop = noLabelBackprop(
+            'chưa có nhãn thật cho mẫu gần nhất (policy — phân phối mục tiêu chỉ dựng được từ reward ledger lúc train)',
+          )
         } else {
           // DORMANT: vocab agents từ ledger usable — filter ĐÚNG
           // collectRewardLedger (reward.ts:246-251 — nguồn ctxs khi train
@@ -365,6 +512,10 @@ export async function GET(request: Request) {
     featureNames,
     sourceLabel,
     fetchedAt: new Date().toISOString(),
+    // 26-BE (hợp đồng 26-RESTORE) — gradient thật 1 mẫu gần nhất qua bản active
+    backprop,
+    // 26-BE — snapshot bus train gần nhất/đang chạy (mọi nguồn, mọi brain)
+    training,
     ...(errors.length > 0 ? { error: errors.join('; ') } : {}),
   })
 }

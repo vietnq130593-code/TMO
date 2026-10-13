@@ -2,9 +2,11 @@
  * BRAIN-UX §9.4 (UX-3) — HÌNH HỌC SÂN KHẤU NÃO (THUẦN, test r90)
  * ============================================================================
  *
- * Toàn bộ toán trình bày của BrainStage (đường dây ánh sáng): bezier cạnh,
- * LOD cắt cạnh, hit-target point-to-bezier, lệch pha animation, độ dày cạnh
- * theo |gradient| thật, mũi tên bản tĩnh reduced-motion.
+ * Toán trình bày của BrainStage (đường dây ánh sáng): cạnh THẲNG (Task 26
+ * — chỉ thị user 2026-10-13 "Đường kết nối dạng THẲNG (hiện hơi cong — bỏ
+ * cong)" — thay bezier cong của UX-3), LOD cắt cạnh, hit-target
+ * point-to-segment CHÍNH XÁC (không còn rời rạc hóa), lệch pha animation,
+ * độ dày cạnh theo |gradient| thật, mũi tên bản tĩnh reduced-motion.
  *
  * GEOMETRY v3 (BRAIN-TAB-3PHAN — chỉ thị user 2026-10-12, trích ngắn:
  * "giao diện lớp có thể chỉnh to nhỏ để xem từ tổng quan đến chi tiết được.
@@ -52,11 +54,6 @@ export interface StageEdge {
   y1: number
   x2: number
   y2: number
-  /** Toạ độ điều khiển bezier (vuông góc lệch tại trung điểm) */
-  cx1: number
-  cy1: number
-  cx2: number
-  cy2: number
 }
 
 // ==================== LIMITS (§9.4 — LOD budget) ====================
@@ -73,8 +70,6 @@ export const STAGE_LIMITS = {
   maxDisplayNeurons: 256,
   /** Tối đa cạnh VẼ (§9.4 LOD ~300) — quá thì sampling đại diện tất định */
   maxEdges: 300,
-  /** Số đoạn rời rạc hóa bezier để hit-test (đủ mịn cho touch 44px) */
-  bezierSegments: 24,
   /** Chu kỳ animation nét đứt (giây) — §9.4: 2.4s linear infinite */
   flowPeriodSec: 2.4,
   /**
@@ -188,81 +183,26 @@ export function buildStageLayout(columns: readonly StageColumn[]): {
   return { neurons, colX, height, width, rowStep, radius }
 }
 
-// ==================== BEZIER (§9.4 "uyển chuyển") ====================
+// ==================== CẠNH THẲNG (Task 26 — bỏ cong) ====================
 
 /**
- * Control points bezier cạnh: lệch vuông góc tại trung điểm — cong nhẹ
- * "uyển chuyển" thay đường thẳng. Hướng lệch cố định theo cột (đi lên nhẹ)
- * để mọi cạnh cùng cột uốn nhất quán — đọc được dòng chảy.
- */
-export function bezierControls(x1: number, y1: number, x2: number, y2: number): {
-  cx1: number; cy1: number; cx2: number; cy2: number
-} {
-  const mx = (x1 + x2) / 2
-  const my = (y1 + y2) / 2
-  // Vector đơn vuông góc với (dx, dy) — luôn hướng LÊN (âm y) cho tới 30% dài cạnh
-  const dx = x2 - x1
-  const dy = y2 - y1
-  const len = Math.sqrt(dx * dx + dy * dy)
-  const k = len > 0 ? Math.min(0.3 * len, 14) / len : 0
-  // vuông góc (dy, -dx) chuẩn hóa — với cạnh ngang (dy=0) cho (0, -1): cong lên
-  const px = dy * k
-  const py = -dx * k
-  const t = 0.32 // đặt control gần đầu/cuối hơn trung điểm — cong mềm
-  return {
-    cx1: x1 + (mx - x1) * t + px,
-    cy1: y1 + (my - y1) * t + py,
-    cx2: x2 - (x2 - mx) * t + px,
-    cy2: y2 - (y2 - my) * t + py,
-  }
-}
-
-/** Điểm trên bezier cubic tại t ∈ [0,1] (de Casteljau trực tiếp). */
-export function sampleBezier(
-  x1: number, y1: number, cx1: number, cy1: number,
-  cx2: number, cy2: number, x2: number, y2: number,
-  t: number,
-): { x: number; y: number } {
-  const u = 1 - t
-  const b0 = u * u * u
-  const b1 = 3 * u * u * t
-  const b2 = 3 * u * t * t
-  const b3 = t * t * t
-  return {
-    x: b0 * x1 + b1 * cx1 + b2 * cx2 + b3 * x2,
-    y: b0 * y1 + b1 * cy1 + b2 * cy2 + b3 * y2,
-  }
-}
-
-/**
- * Khoảng cách điểm→cạnh bezier: rời rạc hóa STAGE_LIMITS.bezierSegments đoạn
- * rồi chấm point-to-segment — hit-target bấm cạnh (r90 pin chính xác).
+ * Khoảng cách điểm→cạnh THẲNG: công thức chiếu vuông góc chuẩn — CHÍNH XÁC
+ * cho mọi điểm (Task 26 thay bezier: trước đây rời rạc hóa 24 đoạn rồi chấm
+ * point-to-segment — sai số nhỏ nhưng thừa; cạnh thẳng cho khoảng cách đóng
+ * dạng đóng, không cần mẫu). Thuần.
  */
 export function distToEdge(
   px: number,
   py: number,
-  e: Pick<StageEdge, 'x1' | 'y1' | 'cx1' | 'cy1' | 'cx2' | 'cy2' | 'x2' | 'y2'>,
-  segments: number = STAGE_LIMITS.bezierSegments,
+  e: Pick<StageEdge, 'x1' | 'y1' | 'x2' | 'y2'>,
 ): number {
-  let min = Infinity
-  let prev = { x: e.x1, y: e.y1 }
-  for (let s = 1; s <= segments; s++) {
-    const cur = sampleBezier(e.x1, e.y1, e.cx1, e.cy1, e.cx2, e.cy2, e.x2, e.y2, s / segments)
-    const d = distPointToSegment(px, py, prev.x, prev.y, cur.x, cur.y)
-    if (d < min) min = d
-    prev = cur
-  }
-  return min
-}
-
-function distPointToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
-  const dx = bx - ax
-  const dy = by - ay
+  const dx = e.x2 - e.x1
+  const dy = e.y2 - e.y1
   const lenSq = dx * dx + dy * dy
   let t = 0
-  if (lenSq > 0) t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq))
-  const cx = ax + t * dx
-  const cy = ay + t * dy
+  if (lenSq > 0) t = Math.max(0, Math.min(1, ((px - e.x1) * dx + (py - e.y1) * dy) / lenSq))
+  const cx = e.x1 + t * dx
+  const cy = e.y1 + t * dy
   return Math.sqrt((px - cx) * (px - cx) + (py - cy) * (py - cy))
 }
 
@@ -354,20 +294,5 @@ export function strokeWidthForGrad(
 }
 
 // ==================== MŨI TÊN BẢN TĨNH (reduced-motion) ====================
-
-/**
- * Góc (độ) của tiếp tuyến bezier tại t — đặt mũi tên cho bản tĩnh reduced-
- * motion + lưng cạnh khi động (đầu mũi tên luôn chỉ chiều lan truyền).
- * t=1 là cuối cạnh (điểm đến). Thuần.
- */
-export function bezierTangentDeg(
-  x1: number, y1: number, cx1: number, cy1: number,
-  cx2: number, cy2: number, x2: number, y2: number,
-  t: number,
-): number {
-  const u = 1 - t
-  // Đạo hàm bezier cubic: 3u²(P1−P0) + 6ut(P2−P1) + 3t²(P3−P2)
-  const dx = 3 * u * u * (cx1 - x1) + 6 * u * t * (cx2 - cx1) + 3 * t * t * (x2 - cx2)
-  const dy = 3 * u * u * (cy1 - y1) + 6 * u * t * (cy2 - cy1) + 3 * t * t * (y2 - cy2)
-  return (Math.atan2(dy, dx) * 180) / Math.PI
-}
+// Task 26 (cạnh thẳng): góc tiếp tuyến tại t ≡ góc đoạn thẳng — marker SVG
+// orient="auto" tự lo (không còn cần hàm riêng như bezierTangentDeg của UX-3).

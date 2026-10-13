@@ -83,6 +83,9 @@ import { MLP, type MlpSerialized, type MlpSpec, type FitResult, type FitOptions,
 import { acquireTrainLock, releaseTrainLock } from '../train-lock'
 // OBS-P1 hook (§C.3 đợt 1) — brain.train start/end (static — không chu trình)
 import { observeBrainTrain } from '@/lib/observation/ledger'
+// Task 26-BE — train-progress bus (đài quan sát v2; train-progress chỉ import
+// type từ ../registry — không chu trình)
+import { trainProgressStart, trainProgressEnd } from '../train-progress'
 import type { BrainDraftSpec } from '../spec-schema'
 import { BRAIN_VERSIONS_KEEP } from '../registry'
 // OBS-P2 hook (§C.3 đợt 2) — vết suy diễn organ policy_mixture (không chu trình)
@@ -528,17 +531,38 @@ export async function trainBrainPolicy(
   }
   // OBS-P1 hook (§C.3 đợt 1 — brain.train start/end; bỏ lệnh trùng A7 không phát)
   observeBrainTrain('policy', 'start', { inputMode, useDraft: override != null })
+  // Task 26-BE — train-progress bus (đài quan sát v2): start SAU lock (bỏ lệnh
+  // trùng A7 — cùng tiền lệ observeBrainTrain), TRƯỚC mọi query của hàm
+  // Locked; end ở mọi lối ra (done/failed). Additive — không đụng logic train.
+  trainProgressStart('policy', null)
   const t0 = Date.now()
   try {
     const result = await trainBrainPolicyLocked(inputMode, override)
     observeBrainTrain('policy', 'end', {
       inputMode, useDraft: override != null, durationMs: Date.now() - t0, result,
     })
+    // 26-BE: trained=false là "ngủ an toàn" (thiếu dữ liệu/lệch lớp) — done +
+    // reason, KHÔNG phải failed; summary điền gì có sẵn (history/gradAbsMean
+    // chỉ tồn tại khi trained — không chế tạo). finalLoss = trainLoss epoch
+    // CUỐI của history (PolicyTrainResult không mang finalTrainLoss riêng).
+    trainProgressEnd(
+      'policy',
+      true,
+      {
+        epochsRun: result.history?.length ?? null,
+        finalLoss: result.history && result.history.length > 0
+          ? result.history[result.history.length - 1].trainLoss
+          : null,
+        gradAbsMean: result.gradAbsMean ?? null,
+      },
+      result.trained ? null : result.error ?? 'ngủ an toàn (không đủ dữ liệu)',
+    )
     return result
   } catch (err) {
     observeBrainTrain('policy', 'end', {
       inputMode, useDraft: override != null, durationMs: Date.now() - t0, error: err,
     })
+    trainProgressEnd('policy', false) // throw → failed (bus fail-open)
     throw err
   } finally {
     releaseTrainLock('policy')

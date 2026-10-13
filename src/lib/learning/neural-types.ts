@@ -568,7 +568,8 @@ export const TUNING_SPECS: readonly TuningSpec[] = [
   // OBS-P1 (BLUEPRINT-OBSERVATION §C.3 — 4 cờ giao thức quan sát V2, chốt §7
   // Task 23 2026-10-13): toàn bộ off mặc định — check cờ TRƯỚC khi ghi nên
   // overhead bằng 0 khi tắt (C.3). Thứ 26–29 của TUNING_SPECS (PIN UPDATE
-  // r86/r87/r92: 25 → 29).
+  // r86/r87/r92: 25 → 29). Cờ thứ 30 obs_alerts = Task 26-BE (GAP-2 — PIN
+  // UPDATE r92: 29 → 30).
   {
     // Cờ tổng ghi sổ cái sự kiện (đợt 1+2 — gate MỌI ghi ObservationEvent +
     // BrainInferenceTrace, C.3). Off = hệ thống quan sát ngủ yên tuyệt đối.
@@ -623,12 +624,13 @@ export const TUNING_SPECS: readonly TuningSpec[] = [
     appliesTo: 'observation impact worker (src/lib/observation/impact.ts) — tick nền',
   },
   {
-    // OBS-P3 — cờ trình bày UI tab "Quan sát" (Task 25: tích hợp VÀO tab BRAIN
-    // › SECTION 3 — tab console thứ 5; trước đây tab riêng cạnh BRAIN).
+    // OBS-P3 — cờ trình bày UI quan sát (Task 25: từng là tab console thứ 5
+    // › SECTION 3; Task 26: tích hợp vào SECTION 1 selector "Chế độ quan
+    // sát" + panel dưới đài SECTION 2 theo chỉ thị user).
     key: 'ui_observation',
     label: 'UI_OBSERVATION',
     description:
-      'Bật nội dung tab "Quan sát" (tab BRAIN › SECTION 3 › tab console "Quan sát"): timeline sự kiện live + kim tuyến runId ("toàn cảnh mỗi khi agent vận hành") + panel nhãn & não. Thuần trình bày — đọc API read-only, không đổi vận hành.',
+      'Bật nội dung quan sát (tab BRAIN › SECTION 1 "Chế độ quan sát" + panel dưới đài SECTION 2): timeline sự kiện live + kim tuyến runId + vết suy luận + hoạt động nơ-ron ("toàn cảnh mỗi khi agent vận hành"). Thuần trình bày — đọc API read-only, không đổi vận hành.',
     nodeId: 'hist-feedback',
     type: 'enum',
     enumValues: ['off', 'on'],
@@ -638,7 +640,25 @@ export const TUNING_SPECS: readonly TuningSpec[] = [
       const v = raw.trim().toLowerCase()
       return v === 'on' || v === '1' || v === 'true' ? 'on' : v === 'off' || v === '0' || v === 'false' ? 'off' : undefined
     },
-    appliesTo: 'ObservationTabContent (src/components/smolab/observation-tab.tsx — render bởi brain-tab SECTION 3) — hiển thị nội dung tab',
+    appliesTo: 'các panel quan sát (src/components/smolab/observation-tab.tsx — render bởi brain-tab SECTION 2 dưới đài, chọn ở SECTION 1) — hiển thị nội dung',
+  },
+  // Task 26-BE (GAP-2 — GIAO_THUC_GIAM_SAT D1.1/D1.4 + HyperNAS §4.2-2b):
+  // cờ thứ 30 của TUNING_SPECS — cùng worker tick 10 phút obs_impact.
+  {
+    key: 'obs_alerts',
+    label: 'OBS_ALERTS',
+    description:
+      'Bật job nền cảnh báo chủ động trong tick quan sát 10 phút (cùng worker obs_impact): stall run — AgentRunRecord running mà không hoạt động > 15 phút (D1.1) · token-burn — run vừa kết thúc tiêu > 500K tokens (D1.4) · job heartbeat mồ côi — BrainSearchRun running mà heartbeatAt cũ > 30 phút (HyperNAS §4.2-2b) + CronJob nextRunAt quá hạn > 60 phút. Mỗi cảnh báo: console.warn [OBS-ALERT] + sự kiện obs.alert (timeline nhóm Cảnh báo, badge alerts24h). Cần obs_ledger on để GHI sự kiện (off thì vẫn console.warn); tick chỉ chạy khi obs_impact on. Bật/tắt có hiệu lực ngay không restart.',
+    nodeId: 'hist-feedback',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'off',
+    envKey: 'OBS_ALERTS',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' || v === '1' || v === 'true' ? 'on' : v === 'off' || v === '0' || v === 'false' ? 'off' : undefined
+    },
+    appliesTo: 'runAlertChecks (src/lib/observation/alerts.ts) — gọi từ tick worker impact.ts',
   },
 ] as readonly TuningSpec[]
 
@@ -916,7 +936,7 @@ export const NEURAL_NODES: readonly NeuralNode[] = [
     functions: [
       { name: 'TRUST_MIN_N / TRUST_MAX_CI_WIDTH', file: 'src/lib/learning/historical-feedback.ts', line: 25 },
     ],
-    paramKeys: ['obs_ledger', 'obs_brain_trace', 'obs_impact', 'ui_observation'],
+    paramKeys: ['obs_ledger', 'obs_brain_trace', 'obs_impact', 'ui_observation', 'obs_alerts'],
   },
   {
     id: 'anomaly',

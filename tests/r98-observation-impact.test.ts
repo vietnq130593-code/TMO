@@ -24,11 +24,16 @@
  *   G. Worker singleton: start ×2 không throw + globalThis guard; stop dọn
  *      sạch (timer null, started false); cờ off → tick no-op. G4: obs_ledger
  *      off → computeImpactEstimates 0 không đếm giả (FB-OBS-R1-11).
+ *      G5 (Task 26-BE): tick gọi THÊM ensureDailyKpiSnapshots (GAP-1) +
+ *      runAlertChecks (GAP-2) — cùng 1 setInterval, KHÔNG timer mới; mọi
+ *      pass mới có guard cờ đúng (source-scan pin chống hồi quy cấu trúc).
  *
  * DB CÔ LẬP qua preload — cleanup afterAll pattern r92.
  */
 
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { db } from '@/lib/db'
 import {
   estimateKpiImpact, formatImpactDelta, computeImpactEstimates, emitObservationHealth,
@@ -73,8 +78,9 @@ beforeAll(async () => {
   delete process.env.OBS_IMPACT
   delete process.env.OBS_BRAIN_TRACE
   delete process.env.UI_OBSERVATION
+  delete process.env.OBS_ALERTS
   await db.tuningParam.deleteMany({
-    where: { key: { in: ['obs_ledger', 'obs_brain_trace', 'obs_impact', 'ui_observation'] } },
+    where: { key: { in: ['obs_ledger', 'obs_brain_trace', 'obs_impact', 'ui_observation', 'obs_alerts'] } },
   })
   await refreshTuningSnapshot()
   await db.observationEvent.deleteMany({})
@@ -88,7 +94,8 @@ afterAll(async () => {
   delete process.env.OBS_IMPACT
   delete process.env.OBS_BRAIN_TRACE
   delete process.env.UI_OBSERVATION
-  for (const k of ['obs_ledger', 'obs_brain_trace', 'obs_impact', 'ui_observation']) {
+  delete process.env.OBS_ALERTS
+  for (const k of ['obs_ledger', 'obs_brain_trace', 'obs_impact', 'ui_observation', 'obs_alerts']) {
     try { await resetTuningValue(k) } catch { /* chưa set — bỏ */ }
   }
   await refreshTuningSnapshot()
@@ -394,5 +401,34 @@ describe('r98 · G — worker singleton (tick precedent GoalLoopWorker)', () => 
       await db.tuningChangeLog.deleteMany({})
       await db.kpiSnapshot.deleteMany({})
     }
+  })
+
+  test('G5 (Task 26-BE) tick gọi thêm kpi-ensure + alerts — cùng setInterval, mọi pass có guard cờ (source-scan)', () => {
+    // GAP-1 + GAP-2 đi qua CÙNG tick của worker impact (KHÔNG timer mới):
+    // pin cấu trúc chống hồi quy — đọc nguồn như r95-H/r96-G3 precedent.
+    const src = readFileSync(join(process.cwd(), 'src/lib/observation/impact.ts'), 'utf-8')
+    // GAP-1: ensureDailyKpiSnapshots gọi trong tick qua dynamic import
+    // (chống chu trình tĩnh kpi-snapshots → impact.kpiDateOf)
+    expect(src).toContain("await import('./kpi-snapshots')")
+    expect(src).toContain('ensureDailyKpiSnapshots()')
+    // GAP-2: runAlertChecks gọi NGAY SAU pass impact (static import — không
+    // chu trình vì alerts không import ngược impact)
+    expect(src).toContain("import { runAlertChecks } from './alerts'")
+    expect(src).toContain('await runAlertChecks()')
+    // KHÔNG timer mới (cùng tick — precedent GoalLoopWorker): đúng 1 call-site
+    // setInterval( trong file (dòng 321; các match khác là comment/type)
+    expect(src.split('setInterval(').length).toBe(2)
+    // Guard cờ giữ nguyên tinh thần FB-OBS-R1-11: obs_impact off → tick rỗng
+    expect(src).toContain('if (!isObsImpactEnabled()) return')
+    // pass impact/kpi/health nằm TRONG nhánh obs_ledger on (output là sự kiện)
+    expect(src).toContain('if (isObsLedgerEnabled())')
+    // alerts.ts tự check cờ obs_alerts MỖI vòng (off → return ngay — rẻ)
+    const alerts = readFileSync(join(process.cwd(), 'src/lib/observation/alerts.ts'), 'utf-8')
+    expect(alerts).toContain('isObsAlertsEnabled()')
+    expect(alerts).toContain('if (!isObsAlertsEnabled()) return')
+    // kpi-snapshots.ts tái dụng computeAllKpis (KHÔNG nhân bản logic KPI)
+    const kpi = readFileSync(join(process.cwd(), 'src/lib/observation/kpi-snapshots.ts'), 'utf-8')
+    expect(kpi).toContain('computeAllKpis')
+    expect(kpi).toContain('KPI_ENSURE_EVERY_MS')
   })
 })

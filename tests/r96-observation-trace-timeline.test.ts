@@ -47,8 +47,9 @@ beforeAll(async () => {
   delete process.env.OBS_BRAIN_TRACE
   delete process.env.UI_OBSERVATION
   delete process.env.OBS_IMPACT
+  delete process.env.OBS_ALERTS
   await db.tuningParam.deleteMany({
-    where: { key: { in: ['obs_ledger', 'obs_brain_trace', 'obs_impact', 'ui_observation'] } },
+    where: { key: { in: ['obs_ledger', 'obs_brain_trace', 'obs_impact', 'ui_observation', 'obs_alerts'] } },
   })
   await refreshTuningSnapshot()
   await db.observationEvent.deleteMany({})
@@ -60,7 +61,8 @@ afterAll(async () => {
   delete process.env.OBS_BRAIN_TRACE
   delete process.env.OBS_IMPACT
   delete process.env.UI_OBSERVATION
-  for (const k of ['obs_ledger', 'obs_brain_trace', 'obs_impact', 'ui_observation']) {
+  delete process.env.OBS_ALERTS
+  for (const k of ['obs_ledger', 'obs_brain_trace', 'obs_impact', 'ui_observation', 'obs_alerts']) {
     try { await resetTuningValue(k) } catch { /* chưa set — bỏ */ }
   }
   await refreshTuningSnapshot()
@@ -211,8 +213,9 @@ describe('r96 · D — GET /api/observation/timeline', () => {
     }
     // traces CHỈ join khi có runId (C.4) — không filter → rỗng
     expect(json.traces).toEqual([])
-    // kinds catalog single-source (kinds.ts — 16 kind)
-    expect(json.kinds.length).toBe(16)
+    // kinds catalog single-source (kinds.ts — 17 kind; PIN UPDATE Task 26-BE:
+    // 16 → 17 thêm obs.alert nhóm alert)
+    expect(json.kinds.length).toBe(17)
   })
 
   test('D2 filter kind + actor', async () => {

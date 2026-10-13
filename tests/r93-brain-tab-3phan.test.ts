@@ -35,17 +35,25 @@
  *      null (D động) → validateBrainDraft ok → normalized giữ đủ →
  *      buildSurrogateSpecs truyền đúng → engine new MLP(spec) NHẬN (không
  *      throw + forward finite — validateSpec engine chặn thật).
- *   C. Source-scan wiring 3 SECTION + 5 tab console (pattern stripComments
- *      của r92-E — helper copy NGUYÊN, string-aware FB-BRAIN-LIVE-R1-08):
+ *   C. Source-scan wiring 3 SECTION + 4 tab console (PIN UPDATE Task 26 —
+ *      chỉ thị user 2026-10-13: "tab Quan sát trong Bảng thông số nên tích
+ *      hợp vào ô Chọn não và kiến trúc — chọn xong não nào có thể xem ngay
+ *      dưới đài quan sát não, và chọn quan sát cái gì ở trên thì xem được ở
+ *      đài bên dưới" — pattern stripComments của r92-E, helper copy NGUYÊN,
+ *      string-aware FB-BRAIN-LIVE-R1-08):
  *      brain-tab 3 role="region" + 3 aria-label + KHÔNG còn máy bottom-sheet
  *      (consoleSheetOpen/useIsDesktopViewport/bottom-4 right-4/
- *      DESKTOP_BREAKPOINT) + 5 giá trị tab 'train'|'tuning'|'log'|'ref'|
- *      'observation' (Task 25 tích hợp OBS-P3) +
+ *      DESKTOP_BREAKPOINT) + 4 giá trị tab 'train'|'tuning'|'log'|'ref'
+ *      (PIN UPDATE Task 26: BỎ 'observation' — Quan sát chuyển lên SECTION 1
+ *      selector + panel dưới đài SECTION 2 theo chỉ thị user) +
  *      BrainReference import/render + 2 chuỗi chốt r92-E ('&head=
  *      ${activityHead}' + tall) · brain-studio segmented (aria-pressed +
  *      sm:grid-cols-3) + α/β editor (DRAFT_LIMITS + nhánh leakyRelu/swish +
- *      placeholder default) + KHÔNG selectorOpen · brain-stage ResizeObserver
- *      + layout.width + layout.radius + stageBox 440/520/600 ·
+ *      placeholder default) + KHÔNG selectorOpen · brain-stage TASK 26
+ *      (nơ-ron tím radial #c084fc + cạnh thẳng + đường ngược vàng per-edge
+ *      |δ×a| + canvas hạt 60fps rAF + wheel/pan rAF coalesce + weights cache
+ *      + ResizeObserver + layout.width + layout.radius + stageBox
+ *      440/520/600) ·
  *      training-console hằng optimizer (SGD_MOMENTUM/ADAM_BETA1 import) +
  *      field huberDelta (input δ chỉ head huber) · brain-reference
  *      (stripComments FB-BRAIN-TAB-R1-01 — pin asserting CODE, không phụ
@@ -363,13 +371,18 @@ describe('r93 · C source-scan wiring 3 SECTION — pin chống hồi quy cấu 
     expect(tabCode).not.toContain('DESKTOP_BREAKPOINT')
   })
 
-  test("brain-tab: 5 tab console ('train' | 'tuning' | 'log' | 'ref' | 'observation') + tab 'ref' render BrainReference (import tồn tại) + 2 chuỗi chốt r92-E còn nguyên", () => {
-    // 5 giá trị tab — type state (Task 25 thêm 'observation' — OBS-P3 tích hợp
-    // vào SECTION 3 theo chỉ thị user 2026-10-13; 18-c gốc chỉ 4 giá trị)
-    expect(tabCode).toContain("'train' | 'tuning' | 'log' | 'ref' | 'observation'")
+  test("brain-tab: 4 tab console ('train' | 'tuning' | 'log' | 'ref') — PIN UPDATE Task 26: BỎ tab 'observation' (Quan sát chuyển lên SECTION 1 selector) + tab 'ref' render BrainReference + 2 chuỗi chốt r92-E còn nguyên", () => {
+    // 4 giá trị tab — type state (Task 26 bỏ 'observation' theo chỉ thị user
+    // 2026-10-13; 18-c gốc chỉ 4 giá trị, Task 25 từng thêm 'observation')
+    expect(tabCode).toContain("'train' | 'tuning' | 'log' | 'ref'")
+    expect(tabCode).not.toContain("'train' | 'tuning' | 'log' | 'ref' | 'observation'")
     // Entry tab 'ref' + nhãn hiển thị + nhánh render
     expect(tabCode).toContain("['ref', 'Hàm & công thức']")
     expect(tabCode).toContain("consoleTab === 'ref'")
+    // Task 26: KHÔNG còn tab Quan sát trong SECTION 3 (chống hồi quy)
+    expect(tabCode).not.toContain("['observation', 'Quan sát']")
+    expect(tabCode).not.toContain("consoleTab === 'observation'")
+    expect(tabCode).not.toContain('ObservationTabContent')
     // BrainReference — bảng tham chiếu (18-c NEW FILE) import + render
     expect(tabCode).toContain("import { BrainReference } from '@/components/smolab/brain-reference'")
     expect(tabCode).toContain('<BrainReference />')
@@ -377,6 +390,45 @@ describe('r93 · C source-scan wiring 3 SECTION — pin chống hồi quy cấu 
     // do `bun test tests/r92-brain-live.test.ts` chứng minh — mục D, no-code)
     expect(tabCode).toContain('&head=${activityHead}') // template fetch activity
     expect(tabCode).toMatch(/\btall\b/) // prop tall truyền BrainStage
+  })
+
+  test('TASK 26 (chỉ thị user 2026-10-13): SECTION 1 có khối "Chế độ quan sát" tablist 4 nút (OBS_MODES single-source) + state obsMode + nhãn giải thích', () => {
+    // Import 4 panel + OBS_MODES + type ObsMode từ observation-tab (refactor 4 panel)
+    expect(tabCode).toContain("from '@/components/smolab/observation-tab'")
+    expect(tabCode).toContain('OBS_MODES')
+    expect(tabCode).toContain('ObsNeuronsPanel')
+    expect(tabCode).toContain('ObsTimelinePanel')
+    expect(tabCode).toContain('ObsTracesPanel')
+    expect(tabCode).toContain('ObsGoldenPanel')
+    // State obsMode (useState — không localStorage) + mặc định 'neurons'
+    expect(tabCode).toContain("useState<ObsMode>('neurons')")
+    // Khối selector trong SECTION 1: tablist + aria-label + nhãn giải thích
+    // (chỉ thị user: "chọn quan sát cái gì ở trên thì xem được ở đài bên dưới")
+    expect(tabCode).toContain('Chế độ quan sát')
+    expect(tabCode).toContain('aria-label="Chế độ quan sát"')
+    expect(tabCode).toContain('nội dung hiển thị dưới đài quan sát bên dưới')
+    // Tablist pattern console (min-h-44 mobile) dùng chung cho selector
+    expect(tabCode).toContain('min-h-[44px] md:min-h-[32px]')
+  })
+
+  test('TASK 26: SECTION 2 có PANEL QUAN SÁT NGAY DƯỚI ĐÀI — 4 panel render theo obsMode (mount/unmount → poll dừng) + BrainStage nhận backprop/training (hợp đồng 26-BE) + poll thích ứng', () => {
+    // 4 nhánh render theo obsMode — panel nằm trong SECTION 2 (sau BrainStage)
+    expect(tabCode).toContain("obsMode === 'neurons'")
+    expect(tabCode).toContain("obsMode === 'timeline'")
+    expect(tabCode).toContain("obsMode === 'traces'")
+    expect(tabCode).toContain("obsMode === 'golden'")
+    // neurons panel dùng CÙNG activity fetch của đài (1 poller duy nhất — B5)
+    expect(tabCode).toContain('activity={activity}')
+    expect(tabCode).toContain('ObsNeuronsPanel activity={activity}')
+    // BrainStage props hợp đồng 26-BE (đường ngược vàng + chip ĐANG TRAIN)
+    expect(tabCode).toContain('backprop={activity?.backprop ?? null}')
+    expect(tabCode).toContain('training={activity?.training ?? null}')
+    // Poll thích ứng 1.5s/10s (Task 26 B5 — thay setInterval 2.5s của 15-d)
+    expect(tabCode).toContain('POLL_HOT_MS')
+    expect(tabCode).toContain('POLL_CALM_MS')
+    // fetchActivity phòng thủ hợp đồng: đọc json.backprop + json.training
+    expect(tabCode).toContain('json.backprop')
+    expect(tabCode).toContain('json.training')
   })
 
   test('brain-studio: segmented 3 nút (aria-pressed + sm:grid-cols-3 + b.key === selectedKey) + α/β editor (DRAFT_LIMITS alphaMin/betaMin + nhánh leakyRelu/swish + placeholder default) + KHÔNG còn selectorOpen', () => {
@@ -395,19 +447,46 @@ describe('r93 · C source-scan wiring 3 SECTION — pin chống hồi quy cấu 
     expect(studioCode).not.toContain('selectorOpen')
   })
 
-  test('brain-stage: ResizeObserver + baseView theo layout.width (động) + layout.radius (render r từng cột) + stageBox tall 440/520/600', () => {
-    // Container full-width fit-height (18-a): ResizeObserver đo box → setSize
-    // SVG thủ công giữ aspect (element rect ≡ viewBox rect)
+  test('brain-stage TASK 26: nơ-ron TÍM tỏa sáng (radial #c084fc + rgba(168,85,247) + HALO r×2.2) + cạnh THẲNG (KHÔNG bezier) + đường NGƯỢC vàng per-edge thật (bwdSignal |δ×a|, EDGE_PARALLEL_OFFSET, KHÔNG vẽ khi null) + canvas hạt 60fps (rAF + MAX_PARTICLES + lighter) + wheel/pan rAF coalesce + weights cache + giữ vỏ BRAIN-LIVE (ResizeObserver + layout.width + layout.radius + stageBox 440/520/600)', () => {
+    // Task 26 B2 — nơ-ron tím: radial gradient + core violet + halo
+    expect(stageCode).toContain('id="bs-neuron"')
+    expect(stageCode).toContain('#c084fc')
+    expect(stageCode).toContain('rgba(168,85,247')
+    expect(stageCode).toContain('r={rC * 2.2}') // HALO r ≈ rC×2.2
+    // Task 26 B1 — cạnh THẲNG: KHÔNG còn import bezier (path C cubic bỏ)
+    expect(stageCode).not.toContain('bezierControls')
+    // Task 26 B3 — đường ngược vàng per-edge THẬT: gradient bs-bwd giữ +
+    // bwdSignal |δ×a| + lệch song song EDGE_PARALLEL_OFFSET + gate 0.5%
+    expect(stageCode).toContain('url(#bs-bwd)')
+    expect(stageCode).toContain('bwdSignal')
+    expect(stageCode).toContain('EDGE_PARALLEL_OFFSET')
+    expect(stageCode).toContain('SIGNAL_GATE_RATIO')
+    // Task 26 B4 — canvas hạt thật 60fps: rAF loop + cap + sprite lighter
+    expect(stageCode).toContain('canvasRef')
+    expect(stageCode).toContain('MAX_PARTICLES')
+    expect(stageCode).toContain("globalCompositeOperation = 'lighter'")
+    expect(stageCode).toContain('requestAnimationFrame')
+    expect(stageCode).toContain('PARTICLE_SPEED_PX')
+    // Tắt hạt khi ẩn/reduced-motion (SVG tĩnh vẫn đẹp)
+    expect(stageCode).toContain('document.hidden')
+    expect(stageCode).toContain('prefers-reduced-motion')
+    // Task 26 B5 — wheel/pan gom sự kiện áp 1 lần/frame qua rAF
+    expect(stageCode).toContain('pendingWheelRef')
+    expect(stageCode).toContain('panPendingRef')
+    // Weights cache theo brain+head trong ref + AbortController
+    expect(stageCode).toContain('weightsCacheRef')
+    expect(stageCode).toContain('AbortController')
+    // GIỮ vỏ BRAIN-TAB-3PHAN (đối chứng r93 cũ)
     expect(stageCode).toContain('ResizeObserver')
-    // baseView dùng layout.width ĐỘNG (bỏ hằng STAGE_WIDTH 340 cứng)
     expect(stageCode).toContain('layout.width')
     expect(stageCode).toContain('baseView')
-    // Render r theo TỪNG CỘT (layout.radius — cột dày đặc chấm nhỏ)
     expect(stageCode).toContain('layout.radius')
-    // stageBox cao xác định theo breakpoint (tall — tab BRAIN 3 phần)
     expect(stageCode).toContain('h-[440px]')
     expect(stageCode).toContain('md:h-[520px]')
     expect(stageCode).toContain('xl:h-[600px]')
+    // Màu chỉ thị user giữ: tiến XANH emerald + ngược VÀNG yellow
+    expect(stageCode).toContain('rgba(16,185,129')
+    expect(stageCode).toContain('rgba(250,204,21')
   })
 
   test("training-console: hằng optimizer khóa engine (import SGD_MOMENTUM/ADAM_BETA1 từ optimizers) + input δ Huber chỉ head loss='huber' (field huberDelta)", () => {
