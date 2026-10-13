@@ -238,7 +238,23 @@ async function checkStallRuns(now: number): Promise<void> {
         if (recent > 0) continue // còn hoạt động — không stall
       }
       markAlerted('stall', targetId, now)
-      const stalledMinutes = Math.round((now - lastActivityMs) / 60_000)
+      // Task 33 (§0b lượt 2): stalledMinutes = độ stale THẬT (mốc sự kiện
+      // cuối của run, có run.heart nuôi), KHÔNG phải tuổi run — bản cũ in
+      // "đóng băng 38 phút" cho run 38 phút tuổi dù hoạt động cuối chỉ cách
+      // 16 phút (đo thật 18:40:40) — chẩn đoán sai mức độ.
+      let stalledMinutes = Math.round((now - lastActivityMs) / 60_000)
+      if (r.runId) {
+        try {
+          const lastEvt = await db.observationEvent.findFirst({
+            where: { runId: r.runId },
+            orderBy: { ts: 'desc' },
+            select: { ts: true },
+          })
+          if (lastEvt?.ts) stalledMinutes = Math.round((now - lastEvt.ts.getTime()) / 60_000)
+        } catch {
+          /* fail-open — giữ mốc createdAt */
+        }
+      }
       emitAlert(
         {
           rule: 'stall',
@@ -262,15 +278,25 @@ async function checkStallRuns(now: number): Promise<void> {
 /** Rule 2 — TOKEN-BURN (D1.4): run vừa kết thúc tiêu > 500K tokens. */
 async function checkTokenBurn(now: number): Promise<void> {
   try {
-    // Run "vừa kết thúc" = bản ghi mới trong cửa sổ ~15 phút (AgentRunRecord
-    // được ghi LÚC run kết thúc — schema comment dòng ~1185; completedAt chính
-    // xác hơn khi có). JS lọc lại bằng shouldAlertTokenBurn sau query.
+    // Run "vừa kết thúc" — Task 33 (§0b lượt 2) FIX CỬA SỔ: bản cũ lọc
+    // createdAt ≥ now−15' theo assumption "row được ghi LÚC KẾT THÚC" —
+    // SAI với kiến trúc hiện tại (insertAgentRunRecordRunning insert row
+    // 'running' NGAY LÚC BẮT ĐẦU): run dài > 15' rơi hết cửa sổ → alert
+    // D1.4 MISSED hoàn toàn (đo thật: Omega 1.681.651 token · 42 phút ·
+    // cancelled 18:44:45 — tick 18:50:40 im lặng vì createdAt 18:02:48).
+    // Cửa sổ đúng = mốc KẾT THÚC (completedAt); nhánh fallback giữ hành vi
+    // cũ cho row completedAt null (code cũ/kẹt — endedAt=createdAt trong JS).
+    const windowStart = new Date(now - ALERT_TOKEN_BURN_WINDOW_MS)
     const rows = await db.agentRunRecord.findMany({
       where: {
         status: { in: [...ALERT_TERMINAL_STATUSES] },
-        createdAt: { gte: new Date(now - ALERT_TOKEN_BURN_WINDOW_MS) },
+        OR: [
+          { completedAt: { gte: windowStart } },
+          { completedAt: null, createdAt: { gte: windowStart } },
+        ],
       },
       select: { id: true, runId: true, agentName: true, status: true, tokensUsed: true, completedAt: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
       take: SCAN_CAP_RUNS * 2,
     })
     for (const r of rows) {

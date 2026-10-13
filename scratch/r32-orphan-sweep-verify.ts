@@ -77,3 +77,5 @@ main().catch(err => {
   console.error('VERIFY FAILED:', err)
   process.exit(1)
 })
+
+export {}

@@ -255,6 +255,9 @@ export async function GET(request: Request) {
         obsLedger: safeFlag('obs_ledger'),
         obsBrainTrace: safeFlag('obs_brain_trace'),
         obsImpact: safeFlag('obs_impact'),
+        // Task 33 (§0b lượt 2): cờ thứ 5 của giao thức — 26-BE thêm rule +
+        // alerts24h nhưng sót khối flags (UI không thấy trạng thái cảnh báo)
+        obsAlerts: safeFlag('obs_alerts'),
         uiObservation: safeFlag('ui_observation'),
       },
       events: page,

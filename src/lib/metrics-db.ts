@@ -20,7 +20,7 @@
  * tracker/API route) tự .catch(() => {}) theo pattern fire-and-forget.
  */
 
-import { db } from '@/lib/db'
+import { db, withSqliteRetry } from '@/lib/db'
 // OBS-P2 hook (§C.3 đợt 2) — verdict.add (static — không chu trình)
 import { observeEvent } from '@/lib/observation/ledger'
 
@@ -471,15 +471,24 @@ export async function resolveArbiterVerdictsDetailed(
 ): Promise<{ total: number; confirmed: number; refuted: number }> {
   const now = new Date()
   if (hasArbiterVerdictDelegate(client)) {
-    // updateMany không set giá trị per-row được → 2 nhóm confirmed/refuted
-    const confirmed = await client.arbiterVerdict.updateMany({
-      where: { sessionId, outcome: null, complete: runComplete },
-      data: { outcome: 'confirmed', outcomeAt: now, runStopReason, runComplete },
-    })
-    const refuted = await client.arbiterVerdict.updateMany({
-      where: { sessionId, outcome: null, complete: !runComplete },
-      data: { outcome: 'refuted', outcomeAt: now, runStopReason, runComplete },
-    })
+    // updateMany không set giá trị per-row được → 2 nhóm confirmed/refuted.
+    // Task 33 (§0b lượt 2): bọc withSqliteRetry — đo thật cụm close burst làm
+    // arbiterVerdict.updateMany dính Socket timeout (dev.log ~11850); resolve
+    // theo (sessionId, outcome null) — idempotent, retry an toàn.
+    const confirmed = await withSqliteRetry(
+      () => client.arbiterVerdict.updateMany({
+        where: { sessionId, outcome: null, complete: runComplete },
+        data: { outcome: 'confirmed', outcomeAt: now, runStopReason, runComplete },
+      }),
+      { label: 'resolveArbiterVerdicts(confirmed)' },
+    )
+    const refuted = await withSqliteRetry(
+      () => client.arbiterVerdict.updateMany({
+        where: { sessionId, outcome: null, complete: !runComplete },
+        data: { outcome: 'refuted', outcomeAt: now, runStopReason, runComplete },
+      }),
+      { label: 'resolveArbiterVerdicts(refuted)' },
+    )
     return { total: confirmed.count + refuted.count, confirmed: confirmed.count, refuted: refuted.count }
   }
 
@@ -628,28 +637,42 @@ export async function updateLatestAgentRunRecord(
   if (sets.length === 0) return 0
 
   if (hasAgentRunRecordDelegate()) {
+    // Task 33 (§0b lượt 2): cả delegate-path bọc withSqliteRetry — đo thật
+    // 18:43 cụm close burst làm agentRunRecord.update dính Socket timeout
+    // → persistAgentRunRecord (endAgentRun) fail → row kẹt 'running' tới khi
+    // orphan-sweep 30' (bằng chứng sub_1791916072938_2). Update theo id —
+    // idempotent, retry an toàn.
     let targetId: string | null = null
     if (runId) {
-      const byRunId = await db.agentRunRecord.findFirst({
-        where: { sessionId, runId },
-        orderBy: { createdAt: 'desc' },
-        select: { id: true },
-      })
+      const byRunId = await withSqliteRetry(
+        () => db.agentRunRecord.findFirst({
+          where: { sessionId, runId },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true },
+        }),
+        { label: 'updateLatestAgentRunRecord(find by runId)' },
+      )
       targetId = byRunId?.id ?? null
     }
     if (!targetId) {
-      const latest = await db.agentRunRecord.findFirst({
-        where: { sessionId },
-        orderBy: { createdAt: 'desc' },
-        select: { id: true },
-      })
+      const latest = await withSqliteRetry(
+        () => db.agentRunRecord.findFirst({
+          where: { sessionId },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true },
+        }),
+        { label: 'updateLatestAgentRunRecord(find latest)' },
+      )
       targetId = latest?.id ?? null
     }
     if (!targetId) return 0
-    await db.agentRunRecord.update({
-      where: { id: targetId },
-      data: buildAgentRunDelegateData(data),
-    })
+    await withSqliteRetry(
+      () => db.agentRunRecord.update({
+        where: { id: targetId as string },
+        data: buildAgentRunDelegateData(data),
+      }),
+      { label: 'updateLatestAgentRunRecord(update)' },
+    )
     return 1
   }
 

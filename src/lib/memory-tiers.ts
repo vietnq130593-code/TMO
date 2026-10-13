@@ -25,7 +25,7 @@
  *   - "meta" domain: never decays (patterns about user interaction)
  */
 
-import { db } from '@/lib/db'
+import { db, withSqliteRetry } from '@/lib/db'
 // TOMBSTONE GUARD (fix review 2026-09-08): session đã bị user xóa → KHÔNG ghi
 // thêm working-memory mồ côi (goal-loop chạy dở sau delete vẫn viết HOT entries).
 import { isSessionDeleted } from '@/lib/session-tombstone'
@@ -203,16 +203,25 @@ export async function addToWorkingMemory(params: {
   try {
     // Tombstone guard — session đã xóa thì KHÔNG tạo row mới (anti-orphan)
     if (params.sessionId && isSessionDeleted(params.sessionId)) return
-    await db.workingMemory.create({
-      data: {
-        agentId: params.agentId,
-        sessionId: params.sessionId,
-        content: params.content.slice(0, 5000), // cap content length
-        role: params.role,
-        importance: params.importance ?? 0.8,
-        expiresAt: new Date(Date.now() + WORKING_MEMORY_TTL_MS),
-      },
-    })
+    // Task 33 (§0b lượt 2): withSqliteRetry — đo thật 19:1x cụm ghi run-close
+    // làm workingMemory.create dính "Socket timeout" 6 lần trong 1 giờ
+    // (dev.log ~49500 — đường lỗi NHIỀU NHẤT cụm này) → tin nhắn chat mất
+    // khỏi HOT tier memory. Retry an toàn: query timeout đa số kẹt trong pool
+    // queue chưa execute; trường hợp hiếm commit-mà-mất-response chấp nhận
+    // duplicate 1 row nội dung (tốt hơn mất context).
+    await withSqliteRetry(
+      () => db.workingMemory.create({
+        data: {
+          agentId: params.agentId,
+          sessionId: params.sessionId,
+          content: params.content.slice(0, 5000), // cap content length
+          role: params.role,
+          importance: params.importance ?? 0.8,
+          expiresAt: new Date(Date.now() + WORKING_MEMORY_TTL_MS),
+        },
+      }),
+      { label: `addToWorkingMemory(${params.role})` },
+    )
   } catch (err) {
     // Non-critical — don't break chat if working memory fails
     console.warn('[MemoryTiers] addToWorkingMemory failed:', err instanceof Error ? err.message : String(err))

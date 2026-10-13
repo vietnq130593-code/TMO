@@ -25,7 +25,7 @@
  * agent-run-tracker ↔ metrics-db).
  */
 
-import { db } from '@/lib/db'
+import { db, withSqliteRetry } from '@/lib/db'
 import { getTuningEnum } from '@/lib/learning/tuning-store'
 
 // ==================== HẰNG SỐ (doctrine #1 — hardcode kèm nguồn) ====================
@@ -193,28 +193,37 @@ async function drain(): Promise<void> {
   }
 }
 
-/** 1 sự kiện = 1 transaction ngắn cấp seq MAX+1 rồi create (RO-4). */
+/** 1 sự kiện = 1 transaction ngắn cấp seq MAX+1 rồi create (RO-4).
+ * Task 33 (§0b lượt 2): bọc withSqliteRetry — đo thật 3 sự kiện MẤT (2 run.end
+ * + 1 brain.train) vì "$transaction expired 5000ms" dưới cụm ghi run-close
+ * (10088ms/20040ms/5032ms — dev.log 41318/43212/43899). run.end là sự kiện
+ * ĐÓNG KIM TUYẾN — mất nó là timeline đứt + stall rule mù. Retry chạy
+ * transaction MỚI hoàn toàn (seq đọc lại — transaction cũ hết hạn chưa bao
+ * giờ commit nên an toàn; drain loop đơn luồng không tự đua). */
 async function writeOne(evt: ObserveEventInput): Promise<void> {
   const payloadJson = capPayload(evt.payload)
-  await db.$transaction(async tx => {
-    const last = await tx.observationEvent.findFirst({
-      orderBy: { seq: 'desc' },
-      select: { seq: true },
-    })
-    await tx.observationEvent.create({
-      data: {
-        seq: (last?.seq ?? 0) + 1,
-        actor: evt.actor,
-        kind: evt.kind,
-        summary: evt.summary,
-        payloadJson,
-        runId: evt.runId ?? null,
-        sessionId: evt.sessionId ?? null,
-        table: evt.table ?? null,
-        rowKey: evt.rowKey ?? null,
-      },
-    })
-  })
+  await withSqliteRetry(
+    () => db.$transaction(async tx => {
+      const last = await tx.observationEvent.findFirst({
+        orderBy: { seq: 'desc' },
+        select: { seq: true },
+      })
+      await tx.observationEvent.create({
+        data: {
+          seq: (last?.seq ?? 0) + 1,
+          actor: evt.actor,
+          kind: evt.kind,
+          summary: evt.summary,
+          payloadJson,
+          runId: evt.runId ?? null,
+          sessionId: evt.sessionId ?? null,
+          table: evt.table ?? null,
+          rowKey: evt.rowKey ?? null,
+        },
+      })
+    }),
+    { label: `ledger.writeOne(${evt.kind})` },
+  )
 }
 
 /** Độ dài BYTE UTF-8 của chuỗi — khác .length (đếm đơn vị UTF-16 — FB-OBS-R1-03). */

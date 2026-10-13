@@ -178,3 +178,88 @@ if (!globalForPrisma.sqlitePragmasApplied) {
   }
   applyPragmas()
 }
+
+// ==================== SQLITE TRANSIENT RETRY (Task 33 — 2026-10-13, §0b lượt 2) ====================
+//
+// QUAN SÁT GỐC RỄ (đo thật trong dev.log, 51 lỗi): các cụm "Socket timeout
+// (the database failed to respond to a query within the configured timeout)"
+// tập trung ĐÚNG các thời điểm run-close ghi bùng nổ — metrics + verdict
+// resolve + QEntry + token persist + auto-train + auto-learn + ledger đồng
+// thời. SQLite 1 writer: hàng đợi vượt timeout query engine → lỗi. Hành vi
+// ĐÚNG với lock tạm thời là RETRY, không phải bỏ cuộc.
+//
+// Thiệt hại đã đo khi KHÔNG retry: (1) updateQ mất vĩnh viễn tín hiệu
+// Q-learning (QEntry=0 → Brain-C "Lệnh" đứt nguồn — không dirty-state như
+// TokenTracker); (2) persistAgentRunRecord đóng run fail → row kẹt
+// 'running' tới khi orphan-sweep 30' (sub_1791916072938_2); (3) TokenTracker
+// retry có sẵn nhưng isTransientDbError (llm.ts) thiếu pattern này.
+//
+// Các đường critical bọc qua withSqliteRetry: updateQ (q-table) ·
+// updateLatestAgentRunRecord + resolveArbiterVerdictsDetailed (metrics-db).
+// llm.ts isTransientDbError DELEGATE xuống isTransientSqliteError.
+
+/** Họ lỗi SQLite/Prisma tạm thời — retry được (lock/contention/timeout).
+ * Xuất riêng để llm.ts + q-table.ts dùng chung (single source — doctrine #9). */
+const TRANSIENT_SQLITE_PATTERNS: readonly string[] = [
+  'Unable to open',
+  'SQLITE_BUSY',
+  'SQLITE_CANTOPEN',
+  'Error code 14',
+  'database is locked',
+  'Connection is closed',
+  'prepared statement failed',
+  // Task 33: họ socket-timeout của Prisma query engine (SQLite connector) —
+  // message chuẩn "Socket timeout (the database failed to respond...)" +
+  // P2024 "Timed out fetching a new connection...".
+  'Socket timeout',
+  'Timed out fetching',
+  // Task 33 (tiếp — ledger run.end bị mất): $transaction hết hạn dưới contention
+  // — "Transaction API error: Transaction already closed: A commit cannot be
+  // executed on an expired transaction." Retry = transaction mới hoàn toàn.
+  'expired transaction',
+]
+
+export function isTransientSqliteError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const msg = err.message || ''
+  return TRANSIENT_SQLITE_PATTERNS.some(p => msg.includes(p))
+}
+
+/** Dòng đầu message lỗi đã trim — log không còn "trông rỗng" khi message
+ * multiline bắt đầu bằng \n (đo thật: `[QTable] updateQ(...) failed: ` trống
+ * vì message Prisma bắt đầu bằng xuống dòng). */
+export function firstErrLine(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err)
+  return (msg.split('\n').find(l => l.trim()) || '').trim().slice(0, 200)
+}
+
+/**
+ * Chạy op với retry backoff cho lỗi SQLite tạm thời (Task 33). Mặc định 3 thử
+ * thêm (tổng 4 lần, delay 400ms → 1.2s → 3.6s) — đủ hấp thụ cụm ghi run-close
+ * (đo thật: cửa sổ contention dài vài giây). Lỗi KHÔNG tạm thời (validation,
+ * constraint...) ném nguyên trạng ngay. Hết retry → ném lỗi gốc cho caller tự
+ * xử lý theo doctrine từng đường (fail-open ở caller, không nuốt ở đây).
+ * op phải IDEMPOTENT (chạy lại an toàn — đọc-tính-ghi hoặc update theo id).
+ */
+export async function withSqliteRetry<T>(
+  op: () => Promise<T>,
+  opts: { retries?: number; baseDelayMs?: number; label?: string } = {},
+): Promise<T> {
+  const retries = opts.retries ?? 3
+  const baseDelayMs = opts.baseDelayMs ?? 400
+  let lastErr: unknown
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await op()
+    } catch (err) {
+      lastErr = err
+      if (!isTransientSqliteError(err) || attempt === retries) break
+      const delay = baseDelayMs * Math.pow(3, attempt) // 400ms → 1.2s → 3.6s
+      console.warn(
+        `[DB] ${opts.label ?? 'op'} transient SQLite (lần ${attempt + 1}/${retries}) — retry sau ${delay}ms: ${firstErrLine(err)}`,
+      )
+      await new Promise(resolve => setTimeout(resolve, delay))
+    }
+  }
+  throw lastErr
+}

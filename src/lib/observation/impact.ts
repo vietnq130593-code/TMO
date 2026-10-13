@@ -30,7 +30,7 @@
  */
 
 import { db } from '@/lib/db'
-import { getTuningEnum } from '@/lib/learning/tuning-store'
+import { getTuningEnum, refreshTuningSnapshot } from '@/lib/learning/tuning-store'
 import { observeEvent, getObservationHealth, flushObservationQueue, isObsLedgerEnabled } from './ledger'
 import { getTraceHealth } from './trace'
 import { KPI_REGISTRY } from '@/lib/kpi/registry'
@@ -286,6 +286,17 @@ async function tick(): Promise<void> {
   if (!isObsImpactEnabled()) return
   st.running = true
   try {
+    // Task 33 (§0b lượt 2): WAL passive checkpoint mỗi tick — đo thật
+    // 2026-10-13 có cửa sổ WAL ~4MB (1043 trang) quanh các cụm ghi run-close
+    // khiến truy vấn chậm hơn + góp phần socket-timeout (51 lỗi trong ngày).
+    // PASSIVE không bao giờ chặn (nhún nếu có reader giữ snapshot cũ); tự
+    // checkpoint mặc định chỉ chạy khi vượt 1000 trang — tick 10' giữ WAL
+    // gọn thường xuyên hơn. Fail-open tuyệt đối.
+    try {
+      await db.$queryRawUnsafe('PRAGMA wal_checkpoint(PASSIVE)')
+    } catch {
+      /* fail-open — hygiene không được phép chết tick */
+    }
     // Impact + KPI-snapshot (GAP-1) + health: output duy nhất là SỰ KIỆN (snapshot
     // là nguyên liệu cho impact) — obs_ledger off thì bỏ cả 3 (FB-OBS-R1-11:
     // không quét dedup/KPI vô ích + không đếm giả)
@@ -321,8 +332,15 @@ export function startObservationImpactWorker(): void {
   st.timer = setInterval(() => {
     void tick()
   }, OBS_IMPACT_TICK_MS)
-  // Chạy 1 vòng ngay lúc boot (đỡ chờ 10 phút đầu — vẫn fail-open)
-  void tick()
+  // Chạy 1 vòng ngay lúc boot — Task 33 (§0b lượt 2): WARM TUNING STORE
+  // TRƯỚC. Đo thật 19:00 restart: snapshot tuning lazy-load qua request đầu
+  // tiên — boot tick cũ đọc cờ off (mặc định) dù store DB đang on → tick đầu
+  // LUÔN rỗng → 10 phút mù sau mỗi restart (obs.health/kpi/alerts trễ cả
+  // tick). refreshTuningSnapshot nạp snapshot từ DB (fail-open — lỗi vẫn
+  // tick như cũ, tick sau tự đọc lại).
+  void refreshTuningSnapshot()
+    .catch(() => { /* fail-open — warm lỗi thì tick với default như cũ */ })
+    .then(() => tick())
   try {
     // Bun/Node Timer.unref tồn tại runtime — không giữ process (test/CLI thoát sạch)
     st.timer.unref()

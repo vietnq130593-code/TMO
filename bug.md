@@ -341,3 +341,86 @@ Directive mơ hồ (UI không qua guard — BUG-008)
 - Mojibake ký tự hỏng trong thought (BUG-009b) — nguồn provider, không sửa được tầng hệ thống; theo dõi tần suất ở mission kế.
 - Đồng bộ 2 nguồn đếm token lệch 1.7% (ghi nhận kèm BUG-012) — cosmetic, chưa đáng can thiệp cấu trúc.
 - Kiểm chứng sống: mission kế qua hệ thống mới sẽ xác nhận cả 9 fix r68 + 9 fix r69 (đặc biệt: guard UI inlog "Directive-guard", READ-ONLY strip log, digest re-inject, exitCode receipt, khối bàn giao uncommitted).
+
+---
+
+## PHIÊN QUAN SÁT LƯỢT 2 — TASK 33 (§0b chuẩn mực đứng — kích hoạt 2026-10-13 ~18:15Z)
+
+> **Đối tượng:** vận hành TOÀN HỆ THỐNG theo yêu cầu user: thực thi tác vụ agent (Omega run_1791914568700_1 "Mối quan hệ giữa ML và Neural Network" + sub-agent HAN sub_1791916072938_2) · database · hệ thống não bộ A/B/C · HyperNAS.
+> **Phạm vi:** từ lúc kích hoạt đến khi run hoàn thành + khắc phục mọi vấn đề phát hiện (fix cấu trúc ngay trong phiên theo §0b).
+
+### BUG-033-01 · G · P1 · 18:22Z · Fixture test lọt DB production — auto-learn thật còn validate chúng
+- **Hiện tượng:** 3 dòng `test-lesson-p1c-db` / `test-lesson-p1c-llm` / `test-lesson-r39-low` trong LessonRecord production (tạo 13:28:34 sau restore); auto-learn validate trên run close thật → phát learn.episode bẩn vào ledger (17:02:44, 17:31:29 — timesApplied lên 9).
+- **Bằng chứng:** SQL readback LessonRecord (3/25 dòng test-*); ledger seq 63-64 hôm 2026-10-13 "Lesson: test-lesson-p1c-llm conf 0.82"; `tests/lesson-attribution.test.ts` L17-19 fallback ép `DATABASE_URL = file:/home/z/tmo-app/db/custom.db` (DB production) khi chưa isolated.
+- **Đánh giá:** root-cause = 9 file .test.ts giữ fallback "ép DB đúng tmo-app" từ thời tiền-Task-54; mọi lượt `bun test` chạy từ cwd NGOÀI project (bunfig preload không nạp → TMO_TEST_DB_ISOLATED không set) ghi thẳng DB thật. Fix: 9 file đổi fallback thành fail-fast throw + dọn 3 dòng fixture (xem Task 33 worklog).
+- **Liên kết:** bug Task 54 (workspace cướp isActive) — cùng họ "test chạm DB production".
+
+### BUG-033-02 · F/G · P1 · 17:08:57Z · updateQ fail thầm lặng (Socket timeout) → QEntry=0 → não C (policy) đứt nguồn dữ liệu
+- **Hiện tượng:** `[QTable] updateQ(mode-agent-tier-1, deepseek-…) failed (fail-open): ` — message trông RỖNG (thực ra multiline bắt đầu `\n`); QEntry 0 dòng dù có run hoàn thành reward=+1.
+- **Bằng chứng:** dev.log dòng ~20933-20943: lỗi thật là `Socket timeout (the database failed to respond to a query within the configured timeout)` trên `qEntry.upsert`; chuỗi `[GoalLoop] MEGATRON resolved 1 verdict → 1 confirmed → reward=1 (1✓/0✗)` chạy ĐÚNG điều kiện updateQ ngay trước đó.
+- **Đánh giá:** cụm ghi bùng nổ lúc run close (metrics + verdict + auto-train + auto-learn + ledger đồng thời) vượt timeout query engine; updateQ KHÔNG retry (không giữ dirty-state) → mất vĩnh viễn tín hiệu Q-learning → Brain-C "Lệnh" không bao giờ đủ 30+ QEntry để train → HyperNAS P2 (cần brain awake) bị chặn ngầm toàn nhánh policy. Fix: withSqliteRetry (db.ts) + log trim dòng đầu.
+- **Liên kết:** 51 lỗi "Socket timeout" tổng trong dev.log (cùng họ: agentRunRecord.update, arbiterVerdict.updateMany, dailyTokenUsage.upsert).
+
+### BUG-033-03 · G · P2 · 18:25-18:31Z · TokenTracker retry không nhận "Socket timeout" — bỏ cuộc ngay lần đầu
+- **Hiện tượng:** `[TokenTracker] Failed to persist daily tokens` lặp lại (cluster cuối 18:2x-18:3x) dù có retryDbOp 3 lần.
+- **Bằng chứng:** dev.log ~26178-26300: `dailyTokenUsage.upsert` Socket timeout tại retryDbOp llm.ts:513; `isTransientDbError` (llm.ts L482-492) KHÔNG chứa pattern 'Socket timeout'/'Timed out fetching' → `!isTransientDbError(err)` break ngay.
+- **Đánh giá:** dirty-state giữ được dữ liệu (tự lành khi persist thành công lần sau) nhưng cửa sổ mất dữ liệu mở rộng (đặc biệt nếu OOM kill giữa chừng). Fix: isTransientDbError delegate isTransientSqliteError (db.ts) thêm 2 pattern.
+
+### BUG-033-04 · H · P1 · 18:40:40Z · Rule stall D1.1 FALSE-POSITIVE khi run đang sống — pha EXECUTE "mù" sự kiện
+- **Hiện tượng:** alert "Run Omega đóng băng 38 phút (D1.1)" bắn lúc 18:40:40 trong khi run ĐANG SỐNG (sub-agent HAN tool calls 18:31:09/18:31:47 + LLM call đang chạy).
+- **Bằng chứng:** ledger seq 71; trace jsonl run_1791914568700_1 (tool cuối 18:27:52) + sub_1791916072938_2 (18:31:47); rule stall chỉ đếm ObservationEvent có runId — tool calls chỉ ghi ToolMetric (bảng riêng, không ledger) → pha EXECUTE dài không phát sự kiện nào.
+- **Đánh giá:** Task 32 đã nối verdict.add vào runId nhưng pha EXECUTE vẫn tối — LLM call dài (deepseek/kimi 4-5') × nhiều vòng → dễ vượt 15'. Fix: run.heart (paced 2 phút/run) từ recordAgentRunTool — mọi tool call chảy qua choke-point này, run.heart có runId → rule thấy nhịp sống. Kèm fix text "đóng băng X phút" (đang in tuổi run, không phải độ stale thật).
+- **Liên kết:** Task 32 ghi nhận "1 alert GIẢ cho run đang sống" — nay tái lập đủ điều kiện nâng fix cấu trúc.
+
+### BUG-033-05 · B/G · P1-mức-cảnh-báo · 18:30:16Z · Sub-agent HAN `bun add neo4j-driver` SỬA FILE TRACKED CỦA REPO PRODUCTION qua thư mục rác
+- **Hiện tượng:** package.json constraint neo4j-driver `^6.0.1`→`^6.2.0` + bun.lock rewrite + prisma generate chạy — agent đột biến file tracked của repo giữa run.
+- **Bằng chứng:** trace sub_1791916072938_2 event 18:30:16: `cd "/home/z/tmo-app/E:\APP\TMO-clone" && bun add neo4j-driver` — thư mục rác (artifact restore, KHÔNG có package.json) → bun đi ngược lên tìm package.json CHA → /home/z/tmo-app/package.json; stat: bun.lock 18:30:12, package.json 18:30:16. Infra-guard đã chặn đúng .env/db (event 18:31:09 "TỪ CHỐI (infra-guard)") nhưng không phủ package.json/bun add.
+- **Hiệu chỉnh trung thực (sau khi đối chiếu lockfile HEAD):** bản resolve của lock HEAD vốn ĐÃ là 6.2.0 trong range `^6.0.1` → KHÔNG có drift version thật — agent chỉ thu hẹp constraint manifest + rewrite lock (resolution không đổi) + trigger prisma generate. Mức độ hạ từ P0-cảnh-báo → P1: vẫn là đột biến file tracked ngoài phê duyệt + chạy postinstall giữa phiên, nhưng không đổi code đang chạy.
+- **Đánh giá:** chuỗi nhân quả 3 lớp: (1) thư mục rác `E:\APP\TMO-clone` tồn tại làm bẫy cwd; (2) bun resolve package.json đi ngược lên; (3) agent cần neo4j-driver cho script nghiên cứu (workaround .cjs absolute-require đã chạy OK 18:27 — bản "dọn đẹp" chủ quan). Fix phiên này: revert package.json/bun.lock về HEAD (node_modules 6.2.0 vốn đúng lock — bun install xác nhận no changes) + DỌN thư mục rác (đã dọn 18:33). Ghi nhận chính sách: cân nhắc thêm package.json/bun.lock vào infra-guard (câu hỏi thiết kế — coordinator cân nhắc, chưa đổi chính sách trong phiên).
+- **Liên kết:** Task 26-FINAL từng dọn chính thư mục này vì phá r69 workspace-git porcelain.
+
+### BUG-033-06 · H · P3 · 18:17Z · Timeline API thiếu cờ obsAlerts (trả 4/5 cờ)
+- **Hiện tượng:** GET /api/observation/timeline response `flags` chỉ có obsLedger/obsBrainTrace/obsImpact/uiObservation — thiếu obsAlerts dù là cờ thứ 5 của giao thức (§0b).
+- **Bằng chứng:** timeline route L254-258; UI panel không thấy trạng thái cờ cảnh báo.
+- **Đánh giá:** 26-BE thêm alerts24h + kinds obs.alert nhưng quên cập nhật khối flags. Fix: += `obsAlerts: safeFlag('obs_alerts')`.
+
+### GHI CHÚ QUAN SÁT ĐÚNG THIẾT KẾ (không phải bug — đối chiếu kiến trúc)
+- Não B (surrogate): auto-train chạy đúng hook run-close, skip trung thực "insufficient data 4/60" (DB wipe sau reset — đúng fail-open thiết kế).
+- Não A (calibration_v3): auto-train sau eval run (runner.ts L440) — EvalResult 0 → ngủ, đúng thiết kế (nguồn dữ liệu = eval KB).
+- Não C (policy): wiring đúng nhưng ĐÓI vì BUG-033-02 (QEntry=0) — fix xong sẽ tự tích luỹ.
+- HyperNAS HN-P1: 114/114 test pass, model 101/102 schema đúng, 0 rows (chưa chạy search — đúng roadmap §8: P2 cần brain awake). BrainSearchRun/Candidate + BrainSpecDraft = 0 hợp lệ.
+- Ledger + KPI + alerts + orphan-sweep + boot-sweeper: hoạt động đúng (healthy, 11 KPI/ngày, 6 alert thật trước false-positive, 3 mồ côi được đóng đúng).
+- WAL: checkpoint passive trọn vẹn (busy=0) — không tắc nghẽn mạn tính; timeout là bùng nổ cụm ghi run-close.
+
+### BUG-033-07 · H · P1 · 19:00Z · Rule token-burn D1.4 MISS hoàn toàn run dài — cửa sổ lọc sai cột
+- **Hiện tượng:** Omega 1.681.651 token · 42 phút · cancelled 18:44:45 — KHÔNG có alert D1.4 nào (đáng lẽ tick 18:50:40 phải bắn).
+- **Bằng chứng:** alerts.ts checkTokenBurn query `createdAt >= now−15'` theo assumption cũ "row được ghi LÚC KẾT THÚC" — nhưng kiến trúc hiện tại insert row 'running' NGAY LÚC BẮT ĐẦU (insertAgentRunRecordRunning) → run > 15' có createdAt ngoài cửa sổ → không bao giờ vào tập quét.
+- **Đánh giá:** chính xác loại burn nguy hiểm nhất (run dài đốt token khủng) là loại bị mù. Fix: cửa sổ theo completedAt (OR fallback createdAt khi completedAt null) + orderBy createdAt desc.
+- **Liên kết:** họ "assumption schema cũ" — cùng rủi ro tiềm ẩn ở các rule khác nếu schema tiếp tục tiến hóa (đã rà: stall dùng createdAt CHO ĐÚNG nghĩa — mốc spawn run).
+
+### BUG-033-08 · F/H · P1 · 19:05Z · LEDGER MẤT SỰ KIỆN — $transaction expired dưới contention (2 run.end + 1 brain.train)
+- **Hiện tượng:** `[OBS-LEDGER] ghi sự kiện thất bại (fail-open, tiếp tục drain): Transaction API error: Transaction already closed ... expired ... 10088ms/20040ms/5032ms · kind=run.end (×2) + brain.train` — sự kiện rơi VĨNH VIỄN (fail-open drop, không retry).
+- **Bằng chứng:** dev.log dòng 41318 (run.end, 10s), 43212 (run.end, 20s!), 43899 (brain.train, 5s) — đúng các cụm close burst; timeline thiếu run.end của run bị ảnh hưởng.
+- **Đánh giá:** ledger là XƯƠNG SỐP QUAN SÁT — mất run.end là đứt kim tuyến + stall rule mù đúng lúc cần nhất (lúc hệ thống đang chịu tải). Fix: writeOne bọc withSqliteRetry (pattern 'expired transaction' thêm vào isTransientSqliteError — transaction mới hoàn toàn, seq đọc lại an toàn vì transaction cũ không bao giờ commit).
+- **Liên kết:** cùng họ contention với BUG-033-02/03 — 1 cụm run-close sinh 3 lớp mất dữ liệu (QEntry + token + ledger event); mỗi lớp một cơ chế chống chịu riêng, giờ đã đủ bộ retry.
+
+### BUG-033-09 · H · P3 · 19:02Z · Boot tick của worker observation LUÔN rỗng sau restart (10 phút mù)
+- **Hiện tượng:** sau restart 19:00, log `[ObservationImpact] worker bắt đầu — tick 600s (cờ obs_impact off — tick rỗng)` dù cờ đang ON trong DB — không có obs.health nào tới tick 19:10.
+- **Bằng chứng:** dev.log dòng 45xxx sau restart; tuning store lazy-load (refreshTuningSnapshot chỉ chạy khi request đầu tiên chạm) → boot tick đọc default off.
+- **Đánh giá:** mỗi restart mở 1 cửa sổ mù 10 phút của toàn bộ giao thức (health/kpi/alerts/heartbeat HyperNAS). Fix: startObservationImpactWorker warm store (refreshTuningSnapshot) TRƯỚC boot tick — fail-open giữ hành vi cũ nếu warm lỗi.
+
+### BUG-033-10 · G/F · P1 · 19:2xZ · 3 đường ghi run-close burst CHƯA bọc retry — same-family BUG-033-02/03/08
+- **Hiện tượng:** sau khi 4 fix retry của phiên này hot-reload, cụm ghi 19:1x vẫn lộ 3 đường lỗi mới: `workingMemory.create` ×6 (nhiều nhất), `opusSettings.upsert` ×4 (P1008 Timed out — Opus review auto chạy đúng lúc burst), `toolMetric.create` ×2.
+- **Bằng chứng:** dev.log 48000+ aggregate `Invalid ...invocation` (workingMemory 6 · opusSettings 4 · toolMetric 2); context 49500-49600 cho thấy chuỗi NIM rescue → 2 tool calls → burst ghi đồng thời.
+- **Đánh giá:** cùng họ contention cụm run-close nhưng nằm ngoài 4 đường đã bọc đợt 1 (qEntry/agentRunRecord/arbiterVerdict/ledger/dailyTokenUsage). Hậu quả mỗi đường: tin nhắn chat mất khỏi HOT tier memory (workingMemory) · kill switch Opus đọc fail (opusSettings — may mắn isKilled fail-open an toàn) · metric tool mất vĩnh viễn (toolMetric — fail-open nuốt). Fix: withSqliteRetry cả 3 (opusSettings upsert idempotent tuyệt đối; workingMemory/toolMetric chấp nhận duplicate row hiếm hoi trong trường hợp commit-mà-mất-response — tốt hơn mất dữ liệu).
+- **Xác nhận ngược CHẠY ĐÚNG:** cùng cửa sổ, `dailyTokenUsage.upsert` dính Socket timeout → log `[TokenTracker] DB busy, retry 1/3 in 1000ms...` — fix BUG-033-03 (isTransientDbError nhận Socket timeout) đã hot-reload và TỰ CHỮA được lỗi thật.
+
+### BUG-033-05 (bổ sung hoàn tất cấu trúc) · B/G · P1 · 19:3xZ · Infra-guard check 4e: pkg-manager từ thư mục con
+- **Hoàn tất câu hỏi thiết kế treo:** hiện thực guard chặn `bun add`/`npm install`... chạy với cwd HIỆU DỤNG là thư mục con trong workspace (theo dõi `cd` trong lệnh ghép + flag `--cwd`/`--prefix`, resolve manifest bun SẼ mutate bằng cách đi ngược lên cha, dừng ở root). Chặn khi (a) manifest đích = package.json GỐC mà cwd ≠ root (đúng kịch bản sự cố 18:30:16) hoặc (b) manifest nằm trong vùng bảo vệ (mini-services). bun add TỪ ROOT vẫn được phép — chính sách 2026-10-27 giữ nguyên; cwd ngoài workspace (/tmp) cho qua; `cd -`/`$(...)` fail-open không chặn oan.
+- **Thư mục rác tái xuất hiện:** `E:\APP\TMO-clone` bị dọn 18:33 nhưng TÁI TẠO 18:56 (chứa .git init rỗng + prisma trống — agent khác chạy lại git init/prisma). Đã dọn lại lần 2 + lần này có guard 4e chặn đúng lớp lỗi mà thư mục rác từng khai thác (dù thư mục được tạo lại, `bun add` từ trong nó sẽ bị TỪ CHỐI với hint chạy từ root).
+- **Test:** E1-E10 (10 case) pin đủ nhánh: sự cố thật 18:30:16 CHẶN · cd relative/param-cwd/flag bun/flag npm/lồng sâu CHẶN · cd - fail-open · ngoài workspace KHÔNG chặn · /tmp workspace khác KHÔNG chặn · message có hint "workspace root". 63/63 pass cả file.
+
+### GHI CHÚ DỌN DỌN PHIÊN NÀY (Task 33 tiếp — 19:4xZ)
+- Dọn 3 dòng fixture `test-lesson-*` khỏi LessonRecord production (26 → 23) — BUG-033-01 phần dọn dữ liệu (đã bị auto-learn validate thêm lần cuối 18:53-18:56 trước khi dọn; embeddingId null → không rác Qdrant).
+- dev.log dòng ~2800-3000 có error `bezierControls not found` — RÁC LỊCH SỬ (trạng thái mid-edit của phiên trước): file hiện tại đã sạch import (tsc pass, không import bezierControls), lỗi ngừng lặp từ lâu, KHÔNG phải lỗi hiện hành.
+- Verify live sau fix: 5/5 cờ BẬT (kể cả obsAlerts mới — BUG-033-06 ✓) · run.heart chảy thật seq 243-247 paced 2 phút (BUG-033-04 ✓) · verdict.add mang runId (Task 32 ✓) · 3 run đang sống không còn alert giả D1.1 mới (alert cuối 18:50:40 — trước fix) · obs.health 19:16 drop 0.

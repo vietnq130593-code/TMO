@@ -31,7 +31,7 @@
  * (learning side-channel KHÔNG BAO GIỜ làm gãy run agent).
  */
 
-import { db } from '@/lib/db'
+import { db, firstErrLine, withSqliteRetry } from '@/lib/db'
 import { getTuningNumber } from './tuning-store'
 // OBS-P2 hook (§C.3 đợt 2) — db.write QEntry (static — ledger không import q-table)
 import { observeEvent } from '@/lib/observation/ledger'
@@ -290,53 +290,67 @@ async function updateQStepInner(
   nextStateKey: string,
 ): Promise<void> {
   try {
-    const existing = await db.qEntry.findUnique({
-      where: { stateKey_actionKey: { stateKey, actionKey } },
-      select: { qValue: true, visits: true },
-    })
-    const currentQ = existing?.qValue ?? 0
-    const visits = existing?.visits ?? 0
+    // Task 33 (§0b lượt 2): đọc-tính-ghi trọn bộ trong withSqliteRetry — đo
+    // thật 17:08:57 cụm ghi run-close làm qEntry.upsert dính "Socket timeout"
+    // (dev.log ~20933) → QEntry KHÔNG BAO GIỜ được ghi (không dirty-state)
+    // → Brain-C "Lệnh" đứt nguồn dữ liệu (QEntry=0 < 30+). Toàn bộ chuỗi
+    // idempotent (đọc lại + tính lại + upsert cùng key) nên retry an toàn.
+    await withSqliteRetry(
+      async () => {
+        const existing = await db.qEntry.findUnique({
+          where: { stateKey_actionKey: { stateKey, actionKey } },
+          select: { qValue: true, visits: true },
+        })
+        const currentQ = existing?.qValue ?? 0
+        const visits = existing?.visits ?? 0
 
-    // max_a' Q(s',·) THUẦN trên entry có sẵn (FB-P6-R1-A-01) — state kế rỗng
-    // → 0 (uniform prior). SQLite REAL không lưu NaN (hóa NULL) nên max không
-    // bao giờ NaN từ DB; qLearningUpdate vẫn NaN-guard cho tầng thuần.
-    const nextEntries = await db.qEntry.findMany({
-      where: { stateKey: nextStateKey },
-      select: { qValue: true },
-    })
-    const maxNextQ = nextEntries.length > 0 ? Math.max(...nextEntries.map(e => e.qValue)) : 0
+        // max_a' Q(s',·) THUẦN trên entry có sẵn (FB-P6-R1-A-01) — state kế rỗng
+        // → 0 (uniform prior). SQLite REAL không lưu NaN (hóa NULL) nên max không
+        // bao giờ NaN từ DB; qLearningUpdate vẫn NaN-guard cho tầng thuần.
+        const nextEntries = await db.qEntry.findMany({
+          where: { stateKey: nextStateKey },
+          select: { qValue: true },
+        })
+        const maxNextQ = nextEntries.length > 0 ? Math.max(...nextEntries.map(e => e.qValue)) : 0
 
-    // NEURAL-ARCH (2026-10-11): α/γ đọc runtime từ tuning-store
-    // (q_learning_alpha / q_learning_gamma — STORE > ENV > hằng số spec
-    // 0.1/0.9). getTuningNumber là tra Map in-process (rẻ) + fail-open về
-    // default khi DB chết — không làm chậm/gãy chuỗi learning. Hằng số
-    // export Q_LEARNING_ALPHA/GAMMA giữ nguyên làm default + cho test r79.
-    const newQ = qLearningUpdate(
-      currentQ,
-      reward,
-      maxNextQ,
-      getTuningNumber('q_learning_alpha'),
-      getTuningNumber('q_learning_gamma'),
-    )
-    await db.qEntry.upsert({
-      where: { stateKey_actionKey: { stateKey, actionKey } },
-      create: { stateKey, actionKey, qValue: newQ, visits: visits + 1 },
-      update: { qValue: newQ, visits: { increment: 1 } },
-    })
-    // OBS-P2 hook (§C.3 đợt 2 — db.write bảng học): QEntry ghi xong mới phát
-    // (fire-and-forget — learning side-channel KHÔNG bao giờ bị quan sát làm chậm)
-    observeEvent({
-      actor: 'system',
-      kind: 'qentry.add',
-      table: 'QEntry',
-      rowKey: `${stateKey}|${actionKey}`,
-      summary: `Q[${stateKey.slice(0, 24)}][${actionKey.slice(0, 24)}] = ${newQ.toFixed(4)} (lần ${visits + 1})`,
-      payload: { stateKey, actionKey, qValue: newQ, visits: visits + 1, reward, maxNextQ },
+        // NEURAL-ARCH (2026-10-11): α/γ đọc runtime từ tuning-store
+        // (q_learning_alpha / q_learning_gamma — STORE > ENV > hằng số spec
+        // 0.1/0.9). getTuningNumber là tra Map in-process (rẻ) + fail-open về
+        // default khi DB chết — không làm chậm/gãy chuỗi learning. Hằng số
+        // export Q_LEARNING_ALPHA/GAMMA giữ nguyên làm default + cho test r79.
+        const newQ = qLearningUpdate(
+          currentQ,
+          reward,
+          maxNextQ,
+          getTuningNumber('q_learning_alpha'),
+          getTuningNumber('q_learning_gamma'),
+        )
+        await db.qEntry.upsert({
+          where: { stateKey_actionKey: { stateKey, actionKey } },
+          create: { stateKey, actionKey, qValue: newQ, visits: visits + 1 },
+          update: { qValue: newQ, visits: { increment: 1 } },
+        })
+        return { newQ, visits }
+      },
+      { label: `updateQ(${stateKey.slice(0, 24)}, ${actionKey.slice(0, 24)})` },
+    ).then(({ newQ, visits }) => {
+      // OBS-P2 hook (§C.3 đợt 2 — db.write bảng học): QEntry ghi xong mới phát
+      // (fire-and-forget — learning side-channel KHÔNG bao giờ bị quan sát làm chậm)
+      observeEvent({
+        actor: 'system',
+        kind: 'qentry.add',
+        table: 'QEntry',
+        rowKey: `${stateKey}|${actionKey}`,
+        summary: `Q[${stateKey.slice(0, 24)}][${actionKey.slice(0, 24)}] = ${newQ.toFixed(4)} (lần ${visits + 1})`,
+        payload: { stateKey, actionKey, qValue: newQ, visits: visits + 1, reward },
+      })
     })
   } catch (err) {
+    // Task 33: firstErrLine — message Prisma multiline bắt đầu \n làm log cũ
+    // "trông rỗng" (`failed (fail-open): ` không có gì theo sau).
     console.warn(
-      `[QTable] updateQ(${stateKey}, ${actionKey}) failed (fail-open):`,
-      err instanceof Error ? err.message : String(err),
+      `[QTable] updateQ(${stateKey}, ${actionKey}) failed sau retry (fail-open):`,
+      firstErrLine(err),
     )
   }
 }

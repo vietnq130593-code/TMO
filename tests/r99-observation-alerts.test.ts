@@ -349,8 +349,8 @@ describe('r99 · B — pure thresholds (r99 test trực tiếp — xem alerts.ts
 // ==================== C. kinds + TUNING_SPECS (GAP-2 khai báo) ====================
 
 describe('r99 · C — kinds obs.alert + cờ obs_alerts (TUNING_SPECS thứ 30)', () => {
-  test('C1 OBS_KINDS 17 + obs.alert nhóm alert + class amber (hợp đồng 26-RESTORE)', () => {
-    expect(OBS_KINDS.length).toBe(17) // PIN UPDATE 26-BE: 16 → 17 (obs.alert)
+  test('C1 OBS_KINDS 18 + obs.alert nhóm alert + class amber (hợp đồng 26-RESTORE)', () => {
+    expect(OBS_KINDS.length).toBe(18) // PIN UPDATE Task 33: 17 → 18 (run.heart — nhịp sống EXECUTE nuôi rule stall D1.1)
     const def = obsKindDef('obs.alert')
     expect(def).not.toBeNull()
     expect(def!.group).toBe('alert')

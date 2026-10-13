@@ -15,7 +15,7 @@
 
 /** Nhóm kind — quyết định màu chip UI + nhóm filter bar (OBS-P3 C.5-2). */
 export type ObsKindGroup =
-  | 'run' // vòng đời run agent: run.start | run.end
+  | 'run' // vòng đời run agent: run.start | run.end | run.heart (Task 33 — nhịp sống pha EXECUTE)
   | 'db' // ghi bảng học: db.write | qentry.add | verdict.add | learn.episode
   | 'brain' // não: brain.train | brain.infer-ref
   | 'tuning' // tham số & cờ: tuning.change | flag.flip
@@ -35,6 +35,9 @@ export interface ObsKindDef {
 export const OBS_KINDS: readonly ObsKindDef[] = [
   { kind: 'run.start', group: 'run', label: 'Run bắt đầu' },
   { kind: 'run.end', group: 'run', label: 'Run kết thúc' },
+  // Task 33 (§0b lượt 2): nhịp sống run trong pha EXECUTE (tool calls) —
+  // paced 2 phút/run từ recordAgentRunTool; nuôi rule stall D1.1 khỏi mù.
+  { kind: 'run.heart', group: 'run', label: 'Run nhịp sống' },
   { kind: 'db.write', group: 'db', label: 'Ghi DB' },
   { kind: 'qentry.add', group: 'db', label: 'QEntry' },
   { kind: 'verdict.add', group: 'db', label: 'Phán quyết' },

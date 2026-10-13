@@ -29,12 +29,20 @@
 // Test ghi file tạm prisma/test-guard-*.tmp rồi tự dọn — KHÔNG đụng file thật.
 // ============================================================================
 
-// Ép DB đúng của tmo-app — chống shell DATABASE_URL nhiễm path my-project.
-// NHƯNG khi đang ở chế độ test cô lập (tests/db-isolation-preload.ts đã trỏ
-// DATABASE_URL vào bản copy trong /tmp) thì PHẢI GIỮ NGUYÊN. Ghi đè ở đây
-// sẽ đưa test về ghi thẳng DB production của app đang chạy (bug Task 54).
+// Task 33 (§0b lượt 2 — 2026-10-13): TỪ CHỐI chạy khi DB chưa được cô lập.
+// Bản cũ ép DATABASE_URL thẳng file:/home/z/tmo-app/db/custom.db (DB
+// PRODUCTION của app) — mọi lượt `bun test` chạy từ cwd NGOÀI project
+// (bunfig preload không nạp → TMO_TEST_DB_ISOLATED không set) ghi fixture
+// thẳng DB thật. Bằng chứng đo thật: 3 dòng test-lesson-* trong
+// LessonRecord production (13:28:34 sau restore) — auto-learn thật còn
+// validate + phát learn.episode bẩn vào ledger (2026-10-13). Đường hợp lệ
+// duy nhất: `bun test` từ project root — preload (tests/db-isolation-preload.ts)
+// copy DB sang /tmp + set TMO_TEST_DB_ISOLATED=1. Ngoài đường đó → fail NGAY
+// (doctrine fail-loud Task 54), tuyệt đối không ghi DB production.
 if (process.env.TMO_TEST_DB_ISOLATED !== '1') {
-  process.env.DATABASE_URL = 'file:/home/z/tmo-app/db/custom.db'
+  throw new Error(
+    '[DB-ISOLATION] Test từ chối chạy trên DB production. Chạy `bun test` từ thư mục gốc tmo-app — bunfig.toml [test].preload sẽ cô lập DB (copy /tmp). Xem tests/db-isolation-preload.ts.',
+  )
 }
 
 import { createHash } from 'crypto'
@@ -143,6 +151,35 @@ ok('C11. `grep -c model prisma/schema.prisma` (đọc) KHÔNG chặn',
   !g('grep -c model prisma/schema.prisma').blocked)
 ok('C12. `wc -l db/custom.db` (đọc) KHÔNG chặn', !g('wc -l db/custom.db').blocked)
 ok('C13. `mkdir -p src/new-mod` KHÔNG chặn', !g('mkdir -p src/new-mod').blocked)
+
+// ==================== E. TASK 33 (BUG-033-05): PKG-MANAGER TỪ THƯ MỤC CON ====================
+// Sự cố thật 18:30:16: `cd "/home/z/tmo-app/E:\APP\TMO-clone" && bun add neo4j-driver`
+// (thư mục rác KHÔNG có package.json) → bun đi ngược lên mutate package.json
+// GỐC + rewrite bun.lock + chạy postinstall giữa phiên. Check 4e: chặn khi cwd
+// HIỆU DỤNG của lệnh cài/gỡ là thư mục con trong workspace (bun sẽ mutate
+// manifest gốc); bun add TỪ ROOT vẫn được phép (chính sách 2026-10-27 giữ nguyên).
+console.log('\n━━━ E. Pkg-manager từ thư mục con (BUG-033-05) ━━━')
+
+ok('E1. `cd "<thư mục rác>" && bun add neo4j-driver` (SỰ CỐ THẬT 18:30:16) CHẶN',
+  g('cd "/home/z/tmo-app/E:\\APP\\TMO-clone" && bun add neo4j-driver').blocked)
+ok('E2. `cd src && bun add x` (thư mục con relative) CHẶN',
+  g('cd src && bun add x').blocked)
+ok('E3. `bun add x` với cwd=src (param cwd) CHẶN',
+  g('bun add x', '/home/z/tmo-app/src').blocked)
+ok('E4. `bun add x --cwd src` (flag bun) CHẶN',
+  g('bun add x --cwd src').blocked)
+ok('E5. `npm install react --prefix src` (flag npm) CHẶN',
+  g('npm install react --prefix src').blocked)
+ok('E6. `cd sub1/sub2 && bun add x` (lồng sâu) CHẶN',
+  g('cd sub1/sub2 && bun add x').blocked)
+ok('E7. `cd - && bun add x` (cd không track tĩnh được) FAIL-OPEN không chặn',
+  !g('cd - && bun add x').blocked)
+ok('E8. `cd /tmp/other-ws && bun add x` (ngoài workspace) KHÔNG chặn',
+  !g('cd /tmp/other-ws && bun add x').blocked)
+ok('E9. `cd src && bun add x` ở /tmp workspace khác KHÔNG chặn',
+  !g('cd src && bun add x', '/tmp/task-ws').blocked)
+ok('E10. message chặn E1 có hint chạy từ workspace root',
+  g('cd "/home/z/tmo-app/E:\\APP\\TMO-clone" && bun add neo4j-driver').message?.includes('workspace root') === true)
 
 // ==================== D. HTTP THẬT — QUA ĐƯỜNG BRIDGE tmo_* DÙNG ====================
 // HARDENING 2026-09-30 (sự cố 06:43): xem header file — 3 lớp phòng vệ.

@@ -56,6 +56,7 @@
  */
 
 import path from 'path'
+import { existsSync } from 'fs'
 
 /** File đơn (relative workspace root, so sánh thường) — hạ tầng runtime. */
 export const INFRA_PROTECTED_FILES: readonly string[] = [
@@ -184,6 +185,92 @@ const FILE_WRITE_CMD_RE = new RegExp(
  * cài/gỡ package chính thống (bun add/remove) → chặn thẳng (ROUND-6). */
 const PKG_JSON_MUTATE_RE = /\b(?:npm|pnpm|yarn)\s+pkg\s+(?:set|unset|delete)\b/
 
+// ============================================================================
+// TASK 33 (§0b lượt 2 — BUG-033-05): PKG-MANAGER TỪ THƯ MỤC CON
+// ============================================================================
+// Sự cố đo thật 18:30:16 (2026-10-13): sub-agent HAN chạy
+//   `cd "/home/z/tmo-app/E:\\APP\\TMO-clone" && bun add neo4j-driver`
+// từ thư mục rác KHÔNG có package.json → bun ĐI NGƯỢC LÊN thư mục cha tìm
+// manifest gần nhất = /home/z/tmo-app/package.json (PROTECTED) → thu hẹp
+// constraint + rewrite bun.lock + chạy postinstall (prisma generate) giữa
+// phiên — đột biến file tracked của repo production ngoài phê duyệt.
+// Lớp guard hiện tại bắt không được: PKG_MGR_RE chỉ AUDIT (policy 2026-10-27
+// cho phép tự cài package) và lệnh không nhắc token package.json nào.
+//
+// Fix cấu trúc (không đổi chính sách 2026-10-27): suy ra cwd HIỆU DỤNG của
+// từng đoạn cài/gỡ package (theo dõi `cd` trong lệnh ghép + flag --cwd/--prefix)
+// rồi resolve manifest bun/npm SẼ mutate (đi ngược lên cha). Chặn khi:
+//   (a) manifest đích = package.json GỐC mà cwd hiệu dụng ≠ root (mutation
+//       ngoài ý muốn — đúng kịch bản BUG-033-05); hoặc
+//   (b) manifest đích nằm trong vùng bảo vệ (vd mini-services/**/package.json).
+// bun add TỪ ROOT vẫn được phép (chính sách tự phục vụ giữ nguyên); cwd ngoài
+// workspace (/tmp/...) không đụng TMO infra → cho qua (user request 2026-08-29).
+// Hở đã biết: subshell `( cd sub && bun add x )` không tách được ở tầng này —
+// cùng lớp hở sẵn có của guard redirect (không mở rộng phạm vi phiên này).
+// ============================================================================
+
+/** Manifest bun/npm SẼ mutate khi chạy tại effDir: package.json gần nhất đi
+ * ngược lên cha (dừng ở workspace root — vượt lên ngoài root không phải TMO
+ * infra). Null = không thấy trong phạm vi (pkg-mgr tự tạo mới hoặc mò lên
+ * ngoài workspace — không chặn). */
+function resolvePkgManagerManifestTarget(effDir: string, absRoot: string): string | null {
+  let dir = effDir
+  for (let hop = 0; hop < 64; hop++) {
+    try {
+      if (existsSync(path.join(dir, 'package.json'))) return path.join(dir, 'package.json')
+    } catch {
+      return null
+    }
+    if (dir === absRoot) return null
+    const parent = path.dirname(dir)
+    if (parent === dir) return null
+    dir = parent
+  }
+  return null
+}
+
+/** Chuẩn hoá token đường dẫn (strip quote, expand ~, resolve theo base). */
+function resolvePathToken(tok: string, base: string): string {
+  const t = tok.trim().replace(/^["']|["']$/g, '')
+  if (t.startsWith('/') || t.startsWith('~')) {
+    return path.resolve(t.replace(/^~/, process.env.HOME || '~'))
+  }
+  return path.resolve(base, t)
+}
+
+/** Với lệnh ghép: theo dõi từng đoạn `cd <dir>` từ cwd xuất phát, trả cwd HIỆU
+ * DỤNG của MỖI đoạn cài/gỡ package (kèm flag --cwd/--prefix của bun/npm nếu
+ * có). Null = có đoạn không track tĩnh được (cd -, cd trống, $(...), heredoc)
+ * → fail-open toàn bộ (không chặn oan). */
+function pkgInstallSegmentsWithCwd(
+  command: string,
+  absCwd: string,
+): Array<{ seg: string; cwd: string }> | null {
+  const segs = splitTopLevelSegments(command) ?? [command]
+  let cwd = absCwd
+  const hits: Array<{ seg: string; cwd: string }> = []
+  for (const seg of segs) {
+    const cd = seg.match(/^cd(?:\s+(.+))?$/)
+    if (cd) {
+      const target = (cd[1] || '').trim()
+      if (!target || target === '-' || /\$\(|\$\{/.test(target)) return null
+      cwd = resolvePathToken(target, cwd)
+      continue
+    }
+    if (PKG_MGR_RE.test(seg)) {
+      let eff = cwd
+      // --cwd (bun) / --prefix (npm) trỏ manifest đích mà không đổi cwd shell
+      const flag = seg.match(/(?:--cwd|--prefix)(?:\s*=|\s+)("[^"]+"|'[^']+'|\S+)/)
+      if (flag) {
+        if (/\$\(|\$\{/.test(flag[1])) return null
+        eff = resolvePathToken(flag[1], cwd)
+      }
+      hits.push({ seg, cwd: eff })
+    }
+  }
+  return hits
+}
+
 /** sqlite3 CLI ghi thẳng file DB — kết hợp keyword ghi (ROUND-6). */
 const SQLITE3_RE = /\bsqlite3?\b/
 const SQL_WRITE_KW_RE = /\b(?:insert|update|delete|drop|create|alter|replace|attach|detach|pragma|vacuum)\b/i
@@ -245,9 +332,15 @@ const REDIRECT_RE = />{1,2}\|?\s*([^\s|;&)]+)/g
 function buildTargetedHint(detail: string): string {
   const d = detail.toLowerCase()
   if (/package\.json|lock/.test(d)) {
+    // Task 33 (BUG-033-05): nhánh phụ cho lệnh cài chạy từ THƯ MỤC CON —
+    // agent dùng đúng lệnh bun add nhưng sai chỗ; hint phải chỉ ra chỗ sai.
+    const fromSubdir = /thư mục con/.test(d)
     return (
       `\n💡 package.json/lockfile: ĐỌC thoải mái (file_read / cat / grep). THÊM/XOÁ dependency: lệnh chính thống \`bun add <pkg>\` / \`bun remove <pkg>\` (được phép). ` +
-      `KHÔNG sửa tay manifest (tiền lệ: agent từng đè package.json làm app chết toàn bộ route).`
+      `KHÔNG sửa tay manifest (tiền lệ: agent từng đè package.json làm app chết toàn bộ route).` +
+      (fromSubdir
+        ? `\n💡 LỖI CỤ THỂ LẦN NÀY: lệnh cài package đang chạy TỪ THƯ MỤC CON — bun/npm ĐI NGƯỢC LÊN cha tìm package.json gần nhất và sửa MANIFEST GỐC của workspace ngoài ý muốn (đã xảy ra thật: sub-agent bun add trong thư mục rác làm đổi constraint + rewrite lock + chạy postinstall giữa phiên). CHẠY LẠI từ workspace root: bỏ đoạn \`cd <thư mục con> &&\`, hoặc đặt \`--cwd <workspace root>\`, hoặc dùng tool manage_packages.`
+        : '')
     )
   }
   if (/(^|[^a-z])db(\/|:|\s|$)|sqlite|database/.test(d)) {
@@ -684,6 +777,46 @@ function guardShellCommandInner(command: string, cwd: string, root: string): She
         blocked: true,
         reason: `inline-code write (python/node/bun -c/-e) → protected path: ${hit}`,
         message: buildBlockedMessage(hit),
+      }
+    }
+  }
+
+  // 4e) TASK 33 (§0b lượt 2 — BUG-033-05): lệnh cài/gỡ package có cwd HIỆU DỤNG
+  // là thư mục CON trong workspace → bun/npm ĐI NGƯỢC LÊN cha tìm package.json
+  // gần nhất = manifest GỐC (protected) → mutate ngoài ý muốn. Đã xảy ra thật
+  // 18:30:16: `cd "<thư mục rác>" && bun add neo4j-driver` (thư mục KHÔNG có
+  // package.json) → bun đổi constraint + rewrite lock + chạy postinstall giữa
+  // phiên. Chính sách 2026-10-27 GIỮ NGUYÊN: bun add TỪ ROOT vẫn được phép;
+  // cwd ngoài workspace không đụng TMO infra → cho qua. Fail-open khi không
+  // track được cwd tĩnh (cd -, $(...)) — không chặn oan đường hợp lệ.
+  if (PKG_MGR_RE.test(command)) {
+    const hits = pkgInstallSegmentsWithCwd(command, absCwd)
+    if (hits) {
+      for (const h of hits) {
+        const insideRoot = h.cwd === absRoot || h.cwd.startsWith(absRoot + path.sep)
+        if (!insideRoot) continue // ngoài workspace — không phải TMO infra
+        const manifest = resolvePkgManagerManifestTarget(h.cwd, absRoot)
+        if (!manifest) continue // không thấy manifest trong phạm vi → pkg-mgr tự tạo mới/leo lên ngoài root
+        if (manifest === path.join(absRoot, 'package.json')) {
+          if (h.cwd !== absRoot) {
+            return {
+              blocked: true,
+              reason: `pkg-manager từ thư mục con (${h.cwd}) — đi ngược lên mutate package.json gốc`,
+              message: buildBlockedMessage(
+                `package.json/bun.lock — lệnh cài chạy từ thư mục con "${h.cwd}" (bun đi ngược lên mutate manifest GỐC của workspace; sự cố thật BUG-033-05)`,
+              ),
+            }
+          }
+          // cwd hiệu dụng = root → chính sách 2026-10-27: được phép
+        } else if (isProtectedInfraPathSync(manifest, absRoot).protected) {
+          // manifest lồng trong vùng bảo vệ (vd mini-services/**/package.json)
+          return {
+            blocked: true,
+            reason: `pkg-manager mutate manifest protected: ${manifest}`,
+            message: buildBlockedMessage(manifest),
+          }
+        }
+        // manifest lồng NGOÀI vùng bảo vệ (scratch/sub-project riêng) → cho qua
       }
     }
   }

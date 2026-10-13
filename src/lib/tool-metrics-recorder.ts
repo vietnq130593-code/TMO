@@ -15,7 +15,7 @@
  * (`.catch(() => {})`) — metrics KHÔNG BAO GIỜ làm fail tool execution.
  */
 
-import { db } from '@/lib/db'
+import { db, withSqliteRetry } from '@/lib/db'
 
 /** Độ dài tối đa errorTag (dòng đầu message lỗi)
  *  2026-09-26 FIX (Tool health audit): 64 → 200. Trước đây cắt sớm khiến mất
@@ -78,8 +78,14 @@ export function recordToolMetric(params: {
     if (!toolName) return
     // db (instance chính) đã có delegate toolMetric từ Phase 3 — an toàn với
     // cả instance stale (xem metrics-db.ts cho bridge AgentRunRecord)
-    void db.toolMetric
-      .create({
+    //
+    // Task 33 (§0b lượt 2): withSqliteRetry — đo thật 19:1x cụm ghi run-close
+    // làm toolMetric.create dính "Socket timeout" (dev.log ~49500) → metric
+    // mất vĩnh viễn (fail-open nuốt). Retry chỉ chạy lại khi query chưa kịp
+    // execute (đứng trong pool queue — P1008) — trường hợp hiếm commit-mà-
+    // mất-response chấp nhận duplicate 1 row (tốt hơn mất metric).
+    void withSqliteRetry(
+      () => db.toolMetric.create({
         data: {
           toolName,
           sessionId: (params.sessionId || 'unknown').slice(0, 120),
@@ -89,10 +95,11 @@ export function recordToolMetric(params: {
           durationMs: Math.max(0, Math.round(params.durationMs || 0)),
           errorTag: params.success ? null : toErrorTag(params.error),
         },
-      })
-      .catch(() => {
-        /* fail-open — metrics không được phép crash hay block tool exec */
-      })
+      }),
+      { label: `toolMetric.create(${toolName})` },
+    ).catch(() => {
+      /* fail-open — metrics không được phép crash hay block tool exec */
+    })
   } catch {
     /* fail-open */
   }

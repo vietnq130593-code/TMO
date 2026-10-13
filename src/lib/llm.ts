@@ -64,6 +64,10 @@ import {
 // trước đây chỉ tầng parse tool_call strip (r44) nên panel Suy nghĩ + báo cáo
 // vẫn dính rác. tool-calls.ts chỉ import find-balanced-json — không cycle.
 import { stripProviderGarbleMarkers } from '@/lib/tool-calls'
+// Task 33 (§0b lượt 2): isTransientSqliteError cho isTransientDbError — pattern
+// "Socket timeout"/"Timed out fetching" của Prisma query engine (SQLite) mà
+// TokenTracker retryDbOp cần nhận. db.ts KHÔNG import llm.ts — không cycle.
+import { isTransientSqliteError } from '@/lib/db'
 
 /** EventEmitter for real-time token updates (SSE).
  *  Emits 'token-update' event whenever addTokensUsed() or addTokensUsedByAgent() is called.
@@ -478,17 +482,14 @@ async function getDb() {
   return cachedDb
 }
 
-/** Check if an error is a transient SQLite error that can be retried */
+/** Check if an error is a transient SQLite error that can be retried.
+ *  Task 33 (§0b lượt 2): DELEGATE xuống isTransientSqliteError (db.ts — single
+ *  source). Bản cũ tại chỗ thiếu họ "Socket timeout"/"Timed out fetching" —
+ *  đo thật 18:2x-18:3x: persistDailyTokens dính Socket timeout nhưng retry
+ *  break ngay lần đầu (!isTransientDbError) → "[TokenTracker] Failed to
+ *  persist daily tokens" lặp lại dù có retryDbOp 3 lần. */
 function isTransientDbError(err: unknown): boolean {
-  return err instanceof Error && (
-    err.message.includes('Unable to open') ||
-    err.message.includes('SQLITE_BUSY') ||
-    err.message.includes('SQLITE_CANTOPEN') ||
-    err.message.includes('Error code 14') ||
-    err.message.includes('database is locked') ||
-    err.message.includes('Connection is closed') ||
-    err.message.includes('prepared statement failed')
-  )
+  return isTransientSqliteError(err)
 }
 
 /** Retry a database operation with exponential backoff.

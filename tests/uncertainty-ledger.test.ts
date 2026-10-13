@@ -14,12 +14,20 @@
 //  (3) Flaw→Resolver (SDA_ENT_054/055): todo failed/blocked → hint quy trình.
 // ============================================================================
 
-// Ép DB đúng của tmo-app — chống shell DATABASE_URL nhiễm path khác.
-// Giữ nguyên khi đang ở chế độ test cô lập (tests/db-isolation-preload.ts) —
-// nếu ghi đè ở đây thì test chạy trên DB production của app đang hoạt động
-// và rò rỉ row vào đó (bug Task 54).
+// Task 33 (§0b lượt 2 — 2026-10-13): TỪ CHỐI chạy khi DB chưa được cô lập.
+// Bản cũ ép DATABASE_URL thẳng file:/home/z/tmo-app/db/custom.db (DB
+// PRODUCTION của app) — mọi lượt `bun test` chạy từ cwd NGOÀI project
+// (bunfig preload không nạp → TMO_TEST_DB_ISOLATED không set) ghi fixture
+// thẳng DB thật. Bằng chứng đo thật: 3 dòng test-lesson-* trong
+// LessonRecord production (13:28:34 sau restore) — auto-learn thật còn
+// validate + phát learn.episode bẩn vào ledger (2026-10-13). Đường hợp lệ
+// duy nhất: `bun test` từ project root — preload (tests/db-isolation-preload.ts)
+// copy DB sang /tmp + set TMO_TEST_DB_ISOLATED=1. Ngoài đường đó → fail NGAY
+// (doctrine fail-loud Task 54), tuyệt đối không ghi DB production.
 if (process.env.TMO_TEST_DB_ISOLATED !== '1') {
-  process.env.DATABASE_URL = 'file:/home/z/tmo-app/db/custom.db'
+  throw new Error(
+    '[DB-ISOLATION] Test từ chối chạy trên DB production. Chạy `bun test` từ thư mục gốc tmo-app — bunfig.toml [test].preload sẽ cô lập DB (copy /tmp). Xem tests/db-isolation-preload.ts.',
+  )
 }
 
 import {

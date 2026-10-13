@@ -365,8 +365,8 @@ describe('r95 · H — source-scan wiring đợt 1+2 (OBS-P1/P2 hooks)', () => {
     expect(getTuningSpec('obs_alerts')?.envKey).toBe('OBS_ALERTS') // 26-BE — cờ thứ 30
   })
 
-  test('H6 kinds.ts — 17 kind chuẩn + obs.alert nhóm alert (Task 26-BE GAP-2) + kind HyperNAS search.* đặt trước (single-source §9 HyperNAS)', () => {
-    expect(OBS_KINDS.length).toBe(17) // PIN UPDATE Task 26-BE: 16 → 17 (obs.alert)
+  test('H6 kinds.ts — 18 kind chuẩn + obs.alert nhóm alert (Task 26-BE GAP-2) + run.heart nhóm run (Task 33) + kind HyperNAS search.* đặt trước (single-source §9 HyperNAS)', () => {
+    expect(OBS_KINDS.length).toBe(18) // PIN UPDATE Task 33: 17 → 18 (run.heart — nhịp sống EXECUTE nuôi rule stall D1.1)
     expect(OBS_KINDS.map(k => k.kind)).toContain('search.session')
     expect(OBS_KINDS.map(k => k.kind)).toContain('impact.estimate')
     expect(OBS_KINDS.map(k => k.kind)).toContain('brain.infer-ref')

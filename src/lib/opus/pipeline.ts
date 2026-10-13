@@ -46,7 +46,7 @@
  */
 
 import type { AgentProfile, ChatMessage, OpusReview, OpusSettings } from '@prisma/client'
-import { db } from '@/lib/db'
+import { db, withSqliteRetry } from '@/lib/db'
 import { goalLoopWorker } from '@/lib/goal-loop-worker'
 import { getStandaloneAgentTools } from '@/lib/standalone-agents'
 import { getEffectiveToolNames } from '@/lib/tool-access'
@@ -59,13 +59,19 @@ import type { OpusVerdict } from './types'
 
 // ==================== SETTINGS (SINGLETON + KILL SWITCH) ====================
 
-/** Đọc (upsert-read) OpusSettings singleton — kill switch toàn hệ thống */
+/** Đọc (upsert-read) OpusSettings singleton — kill switch toàn hệ thống.
+ * Task 33 (§0b lượt 2): withSqliteRetry — đo thật 19:1x cụm ghi run-close làm
+ * upsert dính P1008 "Timed out" 4 lần (dev.log ~49580 — Opus review auto
+ * chạy đúng lúc burst). Upsert singleton idempotent — retry an toàn tuyệt đối. */
 export async function getOpusSettings(): Promise<OpusSettings> {
-  return db.opusSettings.upsert({
-    where: { id: 'singleton' },
-    update: {},
-    create: { id: 'singleton' },
-  })
+  return withSqliteRetry(
+    () => db.opusSettings.upsert({
+      where: { id: 'singleton' },
+      update: {},
+      create: { id: 'singleton' },
+    }),
+    { label: 'getOpusSettings(upsert-read)' },
+  )
 }
 
 /**
@@ -82,13 +88,16 @@ export async function isKilled(): Promise<boolean> {
   }
 }
 
-/** Bật/tắt kill switch (route /api/opus/kill) */
+/** Bật/tắt kill switch (route /api/opus/kill) — idempotent, retry an toàn */
 export async function setOpusKilled(killed: boolean): Promise<OpusSettings> {
-  return db.opusSettings.upsert({
-    where: { id: 'singleton' },
-    update: { killed, killedAt: killed ? new Date() : null },
-    create: { id: 'singleton', killed, killedAt: killed ? new Date() : null },
-  })
+  return withSqliteRetry(
+    () => db.opusSettings.upsert({
+      where: { id: 'singleton' },
+      update: { killed, killedAt: killed ? new Date() : null },
+      create: { id: 'singleton', killed, killedAt: killed ? new Date() : null },
+    }),
+    { label: `setOpusKilled(${killed})` },
+  )
 }
 
 // ==================== FORMAT DIRECTIVE MESSAGE ====================

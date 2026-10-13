@@ -805,7 +805,51 @@ function counterFor(tool: string): keyof AgentRunCounters | null {
 /**
  * Ghi 1 tool execution (kèm kết quả thật) vào run đang active của session.
  * Được gọi từ executeTool() — che mọi paths: single chat, team, cron.
+ *
+ * TASK 33 (§0b lượt 2) — RUN.HEART: kèm phát sự kiện ledger 'run.heart'
+ * (paced RUN_HEART_MIN_INTERVAL_MS/run). Pha EXECUTE của goal loop KHÔNG
+ * phát ObservationEvent nào (tool calls chỉ ghi ToolMetric — bảng riêng) →
+ * rule stall D1.1 "mù" trong các chu kỳ dài → false alert (đo thật
+ * 18:40:40: "Run Omega đóng băng 38 phút" trong khi sub-agent đang gọi tool
+ * 18:31 + LLM call đang chạy). Mọi tool execution chảy qua choke-point NÀY
+ * (cùng nơi ToolMetric land) — phát nhịp sống có runId thì rule thấy run
+ * còn sống. Ledger tự gate cờ obs_ledger (off → no-op như mọi kind khác).
  */
+export const RUN_HEART_MIN_INTERVAL_MS = 2 * 60_000
+
+function runHeartState(): Map<string, number> {
+  const g = globalThis as unknown as { __tmoRunHeartAt?: Map<string, number> }
+  g.__tmoRunHeartAt ??= new Map<string, number>()
+  return g.__tmoRunHeartAt
+}
+
+function emitRunHeart(run: AgentRun, tool: string, success: boolean): void {
+  try {
+    const hearts = runHeartState()
+    const last = hearts.get(run.runId) ?? 0
+    if (Date.now() - last < RUN_HEART_MIN_INTERVAL_MS) return
+    hearts.set(run.runId, Date.now())
+    // dọn nhẹ khi đọng > 100 run (run cũ đã đóng — quá 24h)
+    if (hearts.size > 100) {
+      const cutoff = Date.now() - 24 * 3600_000
+      for (const [k, v] of hearts) if (v < cutoff) hearts.delete(k)
+    }
+    void import('@/lib/observation/ledger')
+      .then(m =>
+        m.observeEvent({
+          actor: `agent:${run.agentName}`,
+          kind: 'run.heart',
+          runId: run.runId,
+          summary: `Nhịp sống EXECUTE: ${tool.slice(0, 40)} ${success ? '✓' : '✗'} — run đang làm việc`,
+          payload: { tool: tool.slice(0, 40), success, sessionId: run.sessionId },
+        }),
+      )
+      .catch(() => { /* fail-open — nhịp sống KHÔNG được phép ảnh hưởng tool path */ })
+  } catch {
+    /* fail-open tuyệt đối */
+  }
+}
+
 export function recordAgentRunTool(
   sessionId: string | null | undefined,
   entry: {
@@ -828,6 +872,8 @@ export function recordAgentRunTool(
       ? runsOf(sessionId || '').find(r => r.runId === runId && r.status === 'running') || null
       : activeRun(sessionId)
     if (!run) return
+    // Task 33 — run.heart paced (fire-and-forget, fail-open — xem JSDoc trên)
+    emitRunHeart(run, entry.tool, entry.success)
     run.counters.toolCalls++
     // ROUND-23 P1 — đếm tổng failure THẬT của run (thoát khỏi cửa sổ event)
     if (entry.success === false) {
