@@ -16,11 +16,16 @@ import { toast } from '@/hooks/use-toast'
 import { HealthResponse, useTokenStream, TokenUsageData } from '@/components/app-shared'
 
 
-/** NVIDIA NIM model configuration (user directive 2026-11-30):
+/** NVIDIA NIM model configuration (user directive 2026-11-30, cập nhật
+ *  2026-10-13 theo request user "thêm Deepseek v4.1 flash vào ô Agent"):
  *  NIM chỉ giữ: embed (hiển thị ở section khác) + extraction nemotron-550b
- *  (chính — fallback qua chuỗi Zen space-bunny-free) + kimi-k3 (lựa chọn
- *  model agent tạm thời). minimax-m3 + dòng deepseek + gpt-oss-120b đã EOL
- *  410 — LOẠI BỎ TOÀN BỘ (live-probe 2026-11-30). */
+ *  (chính — fallback qua chuỗi Zen space-bunny-free) + 2 lõi agent/chat:
+ *  kimi-k3 (lựa chọn tạm thời, chậm ~2 phút/call) + deepseek-v4.1-flash
+ *  (⚡ nhanh ~2s/call — live-probe Task 28; đồng thời là NIM rescue tier của
+ *  toàn chuỗi Zen — token đo qua callModelWithKeyRotation xoay 4 key NIM).
+ *  Dòng EOL 410 đã bỏ (live-probe 2026-11-30): minimax-m3, deepseek-v4-pro-
+ *  0813, deepseek-v4-flash-0731 (bản v4.0 — KHÔNG phải v4.1-flash),
+ *  gpt-oss-120b. */
 export const NVIDIA_CORE_CONFIG = {
   extraction: {
     label: 'Trích xuất',
@@ -40,6 +45,7 @@ export const NVIDIA_CORE_CONFIG = {
     barColor: '#f59e0b',
     models: [
       { key: 'moonshotai/kimi-k3', label: 'kimi-k3 (lựa chọn tạm thời — NVIDIA NIM)' },
+      { key: 'deepseek-ai/deepseek-v4.1-flash', label: 'deepseek-v4.1-flash (⚡ nhanh — NIM rescue)' },
     ],
   },
 } as const
@@ -355,7 +361,7 @@ export function TokenUsageSection({ health }: { health: HealthResponse | null })
                   <div className="flex items-center gap-1.5">
                     <span className="text-sm">{NVIDIA_CORE_CONFIG.extraction.icon}</span>
                     <span className={`text-xs font-bold ${NVIDIA_CORE_CONFIG.extraction.color}`}>{NVIDIA_CORE_CONFIG.extraction.label}</span>
-                    <span className="text-[9px] text-stone-500">(2 lõi)</span>
+                    <span className="text-[9px] text-stone-500">({NVIDIA_CORE_CONFIG.extraction.models.length} lõi)</span>
                   </div>
                   <span className="text-[10px] font-bold tabular-nums text-stone-300">{extractionTotal > 0 ? formatNumber(extractionTotal) : '—'}</span>
                 </div>
@@ -393,7 +399,7 @@ export function TokenUsageSection({ health }: { health: HealthResponse | null })
                   <div className="flex items-center gap-1.5">
                     <span className="text-sm">{NVIDIA_CORE_CONFIG.agent.icon}</span>
                     <span className={`text-xs font-bold ${NVIDIA_CORE_CONFIG.agent.color}`}>{NVIDIA_CORE_CONFIG.agent.label}</span>
-                    <span className="text-[9px] text-stone-500]">(4 lõi)</span>
+                    <span className="text-[9px] text-stone-500">({NVIDIA_CORE_CONFIG.agent.models.length} lõi)</span>
                   </div>
                   <span className="text-[10px] font-bold tabular-nums text-stone-300">{agentTotal > 0 ? formatNumber(agentTotal) : '—'}</span>
                 </div>
