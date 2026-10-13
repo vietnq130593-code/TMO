@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
       // Free tier MỞ với session → dropdown + CLI đồng bộ trạng thái mới
       const zenFreeModelIds = PROVIDER_MODELS.zen.map(m => m.id)
       clearZenFreeTierBlocks('http', zenFreeModelIds)
-      writeAuthJsonForCli(result.session.accessToken)
+      writeAuthJsonForCli(result.session)
     }
     // status/error http: poll trả 200 cho MỌI kết quả flow hợp lệ (pending/
     // expired/denied là trạng thái flow, không phải lỗi server) — UI đọc

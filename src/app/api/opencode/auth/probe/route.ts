@@ -10,7 +10,7 @@
  */
 
 import { NextResponse } from 'next/server'
-import { getValidZenSessionToken, probeFreeTier, updateSessionFreeTier, writeAuthJsonForCli } from '@/lib/opencode-oauth'
+import { getValidZenSession, probeFreeTier, updateSessionFreeTier, writeAuthJsonForCli } from '@/lib/opencode-oauth'
 import { clearZenFreeTierBlocks } from '@/lib/llm'
 import { PROVIDER_MODELS } from '@/lib/agent-constants'
 
@@ -18,17 +18,17 @@ export const dynamic = 'force-dynamic'
 
 export async function POST() {
   try {
-    const token = await getValidZenSessionToken()
-    if (!token) {
+    const session = await getValidZenSession()
+    if (!session) {
       return NextResponse.json({ error: 'Chưa đăng nhập OpenCode account (hoặc session hết hạn + refresh fail) — POST /api/opencode/auth/login trước' }, { status: 400 })
     }
-    const freeTier = await probeFreeTier(token)
+    const freeTier = await probeFreeTier(session.accessToken)
     // Cập nhật kết quả probe mới nhất vào session store (status route đọc từ đó)
     updateSessionFreeTier({ probedAt: Date.now(), ...freeTier })
     if (freeTier.unlocked) {
       const zenFreeModelIds = PROVIDER_MODELS.zen.map(m => m.id)
       clearZenFreeTierBlocks('http', zenFreeModelIds)
-      writeAuthJsonForCli(token)
+      writeAuthJsonForCli(session)
     }
     return NextResponse.json({ freeTier })
   } catch (err) {

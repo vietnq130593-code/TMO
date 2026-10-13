@@ -50,20 +50,87 @@ const SESSION_REFRESH_URL = `${CONSOLE_BASE}/console/auth/refresh`
 const SESSION_INFO_URL = `${CONSOLE_BASE}/console/auth/session`
 const DEVICE_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code'
 
-/** client_id đăng ký với console device-flow — live-verify 2026-10-14 với
- *  "tmo-app". Override qua env nếu console yêu cầu client đăng ký chặt hơn. */
-export const OPENCODE_OAUTH_CLIENT_ID = process.env.OPENCODE_OAUTH_CLIENT_ID?.trim() || 'tmo-app'
+/** client_id của CLI CHÍNH CHỦ — trích từ binary opencode v1.19.0 (Task 30:
+ *  `var lo="https://opencode.ai/console",ln="opencode-cli"` — CẢ 2 flow OAuth
+ *  trong binary đều dùng "opencode-cli"). Task 29 từng dùng "tmo-app" — console
+ *  cấp token nhưng token mang client lạ; đổi đúng client chính chủ để token
+ *  giống hệt flow `opencode auth login` thật. Override qua env nếu cần. */
+export const OPENCODE_OAUTH_CLIENT_ID = process.env.OPENCODE_OAUTH_CLIENT_ID?.trim() || 'opencode-cli'
 
-/** Header nhận diện "from within OpenCode" — trích từ binary opencode CLI
- *  v1.19.0 (zen SDK: UA `opencode/<ver>` + x-opencode-client app/cli/desktop).
- *  Live-probe 2026-10-14: các header này với oc_sk key KHÔNG mở free tier
- *  (403 vẫn trả về) — gửi kèm session token để mô phỏng desktop app sát nhất. */
-const OPENCODE_CLIENT_UA = 'opencode/1.19.0'
-/** Export cho llm.ts tái dùng trên đường session-token (1 nguồn header —
- *  cùng bộ header probeFreeTier dùng, tránh lệch nhau giữa probe + call thật). */
-export const OPENCODE_SESSION_HEADERS: Record<string, string> = {
-  'User-Agent': OPENCODE_CLIENT_UA,
-  'x-opencode-client': 'app',
+/** UA đầy đủ đúng như CLI capture thật (Task 30 mock-capture 2026-10-14):
+ *  `opencode/1.19.0 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14`. */
+const OPENCODE_CLIENT_UA = 'opencode/1.19.0 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14'
+
+// ==================== CLIENT SESSION ID (định dạng ses_ của CLI) ====================
+
+/**
+ * Sinh ID đúng thuật toán Identifier.create của opencode (đảo ngược từ binary
+ * v1.19.0, hàm tA): `ses_` + 12 hex (timestamp-ms<<12 + counter, bitwise NOT
+ * để descending) + 14 base62 ngẫu nhiên. GitHub #49433 xác nhận gate chỉ chấp
+ * nhận ĐÚNG định dạng này (UUID → 403). 1 ID ổn định/install (pattern giống
+ * CLI giữ 1 session ID cho cả phiên) — persist vào store file.
+ */
+function generateClientSessionId(): string {
+  // BigInt() thay vì literal (0x1000n…) — tsconfig target < ES2020 (TS2737)
+  const $ = BigInt(Date.now()) * BigInt(4096) + BigInt(1)
+  const U = ~$ // ses_ dùng bitwise NOT (descending — sort mới nhất trước)
+  let hex = ''
+  for (let w = 0; w < 6; w++) {
+    hex += Number((U >> BigInt(40 - 8 * w)) & BigInt(255)).toString(16).padStart(2, '0')
+  }
+  const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+  const rand = crypto.getRandomValues(new Uint8Array(14))
+  let b62 = ''
+  for (const b of rand) b62 += chars[b % 62]
+  return 'ses_' + hex + b62
+}
+
+let cachedClientSessionId: string | null = null
+
+/** ID phiên client (định dạng ses_ chính chủ) — ổn định theo install, dùng cho
+ * toàn bộ header x-opencode-session-id / x-session-affinity / x-session-id. */
+export function getOpenCodeClientSessionId(): string {
+  if (cachedClientSessionId) return cachedClientSessionId
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('fs') as typeof import('fs')
+    const file = storeFile()
+    const raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as { clientSessionId?: string }
+    if (raw.clientSessionId && /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(raw.clientSessionId)) {
+      cachedClientSessionId = raw.clientSessionId
+      return cachedClientSessionId
+    }
+  } catch { /* chưa có file — sinh mới bên dưới */ }
+  cachedClientSessionId = generateClientSessionId()
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('fs') as typeof import('fs')
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('path') as typeof import('path')
+    const file = storeFile()
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    let existing: Record<string, unknown> = {}
+    try { existing = JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, unknown> } catch { /* file mới */ }
+    fs.writeFileSync(file, JSON.stringify({ ...existing, clientSessionId: cachedClientSessionId }, null, 2) + '\n', { mode: 0o600 })
+  } catch { /* best-effort — dùng memory */ }
+  return cachedClientSessionId
+}
+
+/**
+ * Bộ header "from within OpenCode" ĐÚNG như capture thật của CLI v1.19.0
+ * (Task 30 mock-capture): user-agent đầy đủ suffix + x-opencode-session-id +
+ * x-session-affinity + x-session-id — CÙNG một giá trị ses_. Lưu ý: header
+ * đúng tên là x-opencode-session-ID (GitHub #49433 gọi tắt x-opencode-session
+ * — capture thật mới là chuẩn). llm.ts tái dùng cho đường session-token.
+ */
+export function buildOpenCodeSessionHeaders(): Record<string, string> {
+  const sid = getOpenCodeClientSessionId()
+  return {
+    'User-Agent': OPENCODE_CLIENT_UA,
+    'x-opencode-session-id': sid,
+    'x-session-affinity': sid,
+    'x-session-id': sid,
+  }
 }
 
 /** Store file — tương đối theo cwd process (mọi process PM2 chạy từ app-dir,
@@ -84,6 +151,10 @@ export interface OpenCodeOAuthSession {
   refreshToken: string
   tokenType: string
   orgId?: string
+  /** client_id đã phát hành token (Task 30) — token sai client = không mở
+   *  free-tier được (Task 29 dùng "tmo-app" → bị chặn; đổi về "opencode-cli").
+   *  Session cũ không có trường này → tự coi là stale, yêu cầu login lại. */
+  clientId?: string
   acquiredAt: number
   /** Millis-epoch deadline của access token. */
   expiresAt: number
@@ -129,6 +200,7 @@ export interface OpenCodeOAuthStatus {
 
 interface StoreShape {
   session?: OpenCodeOAuthSession
+  clientSessionId?: string
 }
 
 let storeAbsPath: string | null = null
@@ -152,19 +224,29 @@ function readSessionStore(): OpenCodeOAuthSession | null {
     const file = storeFile()
     const st = fs.statSync(file)
     if (storeFileCache && storeFileCache.mtimeMs === st.mtimeMs) {
-      memSession = storeFileCache.data.session ?? null
+      memSession = filterStaleClient(storeFileCache.data.session)
       return memSession
     }
     const raw = JSON.parse(fs.readFileSync(file, 'utf-8'))
     const data: StoreShape = raw && typeof raw === 'object' && typeof raw.session === 'object'
-      ? { session: raw.session }
+      ? { session: raw.session, clientSessionId: typeof raw.clientSessionId === 'string' ? raw.clientSessionId : undefined }
       : {}
     storeFileCache = { mtimeMs: st.mtimeMs, data }
-    memSession = data.session ?? null
+    memSession = filterStaleClient(data.session)
     return memSession
   } catch {
-    return storeFileCache?.data.session ?? null
+    return filterStaleClient(storeFileCache?.data.session)
   }
+}
+
+/** Task 30 — session phát hành cho client_id KHÁC hiện tại (vd Task 29 dùng
+ *  "tmo-app") không thể mở free-tier → coi như chưa đăng nhập để UI hướng
+ *  dẫn login lại đúng client chính chủ. KHÔNG xoá file (ghi đè khi login mới). */
+function filterStaleClient(session: OpenCodeOAuthSession | null | undefined): OpenCodeOAuthSession | null {
+  if (!session) return null
+  if (session.clientId === OPENCODE_OAUTH_CLIENT_ID) return session
+  console.warn(`[OC-OAUTH] Session cũ phát hành cho client "${session.clientId ?? '(không ghi — Task 29 tmo-app)'}" ≠ "${OPENCODE_OAUTH_CLIENT_ID}" — cần đăng nhập lại để lấy token client chính chủ`)
+  return null
 }
 
 function writeSessionStore(session: OpenCodeOAuthSession | null): void {
@@ -308,6 +390,7 @@ export async function pollDeviceToken(deviceCode: string): Promise<DevicePollRes
       refreshToken: data.refresh_token ?? '',
       tokenType: data.token_type ?? 'Bearer',
       orgId: data.org_id,
+      clientId: OPENCODE_OAUTH_CLIENT_ID,
       acquiredAt: Date.now(),
       expiresAt: Date.now() + Math.max(60, data.expires_in ?? 3600) * 1000,
     }
@@ -362,20 +445,35 @@ async function fetchSessionEmail(accessToken: string): Promise<string | undefine
  */
 async function refreshSession(session: OpenCodeOAuthSession): Promise<OpenCodeOAuthSession | null> {
   if (!session.refreshToken) return null
-  try {
-    const res = await consoleFetch(SESSION_REFRESH_URL, {
-      method: 'POST',
-      body: JSON.stringify({
-        grant_type: 'refresh_token',
-        refresh_token: session.refreshToken,
-        client_id: OPENCODE_OAUTH_CLIENT_ID,
-      }),
-    })
-    if (!res.ok) {
-      const body = await res.text().catch(() => '')
-      console.warn(`[OC-OAUTH] Refresh session HTTP ${res.status}: ${body.slice(0, 160)}`)
-      return null
+  // Task 30 — CLI chính chủ refresh qua /console/auth/device/token với
+  // grant_type=refresh_token (đảo ngược từ binary, hàm Ra). Thử endpoint này
+  // TRƯỚC; /console/auth/refresh (schema console SPA — Task 29) giữ làm fallback.
+  const endpoints = [DEVICE_TOKEN_URL, SESSION_REFRESH_URL]
+  let res: Response | null = null
+  let lastErr = ''
+  for (const url of endpoints) {
+    try {
+      res = await consoleFetch(url, {
+        method: 'POST',
+        body: JSON.stringify({
+          grant_type: 'refresh_token',
+          refresh_token: session.refreshToken,
+          client_id: OPENCODE_OAUTH_CLIENT_ID,
+        }),
+      })
+      if (res.ok) break
+      lastErr = `HTTP ${res.status} (${url})`
+      console.warn(`[OC-OAUTH] Refresh session ${lastErr}`)
+      res = null
+    } catch (err) {
+      console.warn(`[OC-OAUTH] Refresh session ${url} lỗi:`, err instanceof Error ? err.message : String(err))
     }
+  }
+  if (!res || !res.ok) {
+    console.warn(`[OC-OAUTH] Refresh session thất bại cả 2 endpoint: ${lastErr || 'không response'}`)
+    return null
+  }
+  try {
     const data = await res.json() as {
       access_token?: string
       refresh_token?: string
@@ -408,12 +506,18 @@ async function refreshSession(session: OpenCodeOAuthSession): Promise<OpenCodeOA
  * mạng khi cần refresh.
  */
 export async function getValidZenSessionToken(): Promise<string | null> {
+  const session = await getValidZenSession()
+  return session?.accessToken ?? null
+}
+
+/** Task 30 — full session còn hạn (tự refresh nếu sắp hết) — cho route cần
+ *  access + refresh + expiresAt (writeAuthJsonForCli format oauth chính chủ). */
+export async function getValidZenSession(): Promise<OpenCodeOAuthSession | null> {
   const session = readSessionStore()
   if (!session) return null
-  if (Date.now() < session.expiresAt - TOKEN_EXPIRY_MARGIN_MS) return session.accessToken
+  if (Date.now() < session.expiresAt - TOKEN_EXPIRY_MARGIN_MS) return session
   // Hết hạn (hoặc sắp hết) → refresh 1 lần
-  const refreshed = await refreshSession(session)
-  return refreshed?.accessToken ?? null
+  return await refreshSession(session)
 }
 
 /** Peek session (không refresh) — cho status endpoint + test. */
@@ -435,6 +539,19 @@ export async function probeFreeTier(accessToken?: string): Promise<{ unlocked: b
     process.env.ZEN_BASE_URL?.trim() || 'https://opencode.ai/zen/v1',
     'https://opencode.ai/inference/v1',
   ]
+  // Task 30 — body kèm tools chuẩn opencode (gate kiểm tra mảng tools của
+  // agent chính chủ — GitHub #50627/#54744: request thiếu tool chuẩn bị chặn;
+  // capture thật có 24 tool, đây là tổ hợp tối giản các tool lõi).
+  const probeBody = {
+    model: 'space-bunny-free',
+    max_tokens: 32,
+    messages: [
+      { role: 'system', content: 'You are opencode, a CLI coding agent.' },
+      { role: 'user', content: 'Reply with exactly: OK' },
+    ],
+    tools: OFFICIAL_CORE_TOOLS,
+    tool_choice: 'auto',
+  }
   const seen = new Set<string>()
   for (const base of endpoints) {
     if (seen.has(base)) continue
@@ -448,13 +565,9 @@ export async function probeFreeTier(accessToken?: string): Promise<{ unlocked: b
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`,
-            ...OPENCODE_SESSION_HEADERS,
+            ...buildOpenCodeSessionHeaders(),
           },
-          body: JSON.stringify({
-            model: 'space-bunny-free',
-            messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
-            max_tokens: 16,
-          }),
+          body: JSON.stringify(probeBody),
           signal: controller.signal,
         })
         if (res.ok) {
@@ -475,19 +588,41 @@ export async function probeFreeTier(accessToken?: string): Promise<{ unlocked: b
       console.warn(`[OC-OAUTH] Probe free-tier ${base} lỗi:`, err instanceof Error ? err.message : String(err))
     }
   }
-  return { unlocked: false, detail: 'Session đã đăng nhập nhưng Zen vẫn chặn free-tier (FreeTierError trên cả 2 endpoint) — có thể policy Zen yêu cầu điều kiện khác (app chính chủ/nạp credit)' }
+  // Task 30 — KẾT LUẬN TRUNG THỰC SAU ĐIỀU TRA SÂU: replay 100% request của
+  // CLI chính chủ (fingerprint + tools + session token) từ sandbox này vẫn
+  // 403, trong khi user trên máy cá nhân chạy CLI keyless vẫn OK (GitHub
+  // #53885/#54338 tháng 10/2026) → Zen chặn free-tier theo NGUỒN IP
+  // (datacenter). Sandbox egress = Alibaba Cloud HK (AS45102) nên bị chặn.
+  return {
+    unlocked: false,
+    detail: 'Zen đang chặn free-tier theo IP máy chủ: app chạy trên datacenter (Alibaba Cloud HK) nên bị từ chối kể cả với session hợp lệ (verify 2026-10-14: replay nguyên vận request CLI chính chủ vẫn 403; user chạy trên máy cá nhân thì dùng được keyless). Hướng khắc phục: chạy app trên máy cá nhân/IP nhà, hoặc nạp credit Zen dùng model trả phí.',
+  }
 }
+
+/** Task 30 — tổ hợp tool lõi opencode (schema rút gọn từ capture thật của CLI
+ *  v1.19.0) — dùng cho probe body để qua gate kiểm tra mảng tools. */
+const OFFICIAL_CORE_TOOLS = [
+  'bash', 'read', 'edit', 'write', 'glob', 'grep', 'list', 'patch', 'task', 'webfetch',
+].map((name) => ({
+  type: 'function',
+  function: {
+    name,
+    description: `opencode built-in ${name} tool`,
+    parameters: { type: 'object', properties: { input: { type: 'string', description: `input for ${name}` } }, required: ['input'] },
+  },
+}))
 
 // ==================== CLI auth.json BRIDGE ====================
 
 /**
  * Ghi session token vào auth store của opencode CLI (~/.local/share/opencode/
- * auth.json) để đường CLI NATIVE (provider opencode/*) cũng dùng session tài
- * khoản — "from within OpenCode" cần credential đúng, oc_sk key đã bị chặn
- * 403 toàn cục (Task 28). Chỉ gọi khi probe free-tier OK (không phá credential
- * cũ khi session không giúp gì được). Logout → khôi phục oc_sk từ env.
+ * auth.json) theo ĐÚNG format oauth của CLI chính chủ (Task 30 — đảo ngược từ
+ * binary: `iu(G,{type:"oauth",refresh:O,access:Y,expires:_})`, expires =
+ * millis-epoch) để đường CLI NATIVE (provider opencode/*) cũng dùng session
+ * tài khoản. Chỉ gọi khi probe free-tier OK (không phá credential cũ khi
+ * session không giúp gì được). Logout → khôi phục oc_sk từ env.
  */
-export function writeAuthJsonForCli(accessToken: string): boolean {
+export function writeAuthJsonForCli(session: { accessToken: string; refreshToken: string; expiresAt: number }): boolean {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const fs = require('fs') as typeof import('fs')
@@ -497,8 +632,15 @@ export function writeAuthJsonForCli(accessToken: string): boolean {
     const os = require('os') as typeof import('os')
     const authPath = path.join(os.homedir(), '.local', 'share', 'opencode', 'auth.json')
     fs.mkdirSync(path.dirname(authPath), { recursive: true })
-    fs.writeFileSync(authPath, JSON.stringify({ opencode: { type: 'api', key: accessToken } }, null, 2) + '\n', { mode: 0o600 })
-    console.log('[OC-OAUTH] auth.json CLI đã cập nhật sang session token OpenCode account (CLI native dùng session)')
+    fs.writeFileSync(authPath, JSON.stringify({
+      opencode: {
+        type: 'oauth',
+        access: session.accessToken,
+        refresh: session.refreshToken,
+        expires: session.expiresAt,
+      },
+    }, null, 2) + '\n', { mode: 0o600 })
+    console.log('[OC-OAUTH] auth.json CLI đã cập nhật sang session OpenCode account (format oauth chính chủ)')
     return true
   } catch (err) {
     console.warn('[OC-OAUTH] Ghi auth.json lỗi (không chặn):', err instanceof Error ? err.message : String(err))

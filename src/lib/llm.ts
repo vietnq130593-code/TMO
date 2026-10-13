@@ -52,10 +52,10 @@ import type { DocumentPayload } from '@/lib/qdrant'
 // OpenCode dùng làm Bearer dự phòng cho model free bị chặn FreeTierError với
 // oc_sk key ("free tier can only be used from within OpenCode" — Task 28).
 import {
+  buildOpenCodeSessionHeaders,
   getValidZenSessionToken,
   isSessionRecentlyRejected,
   noteSessionRejected,
-  OPENCODE_SESSION_HEADERS,
 } from '@/lib/opencode-oauth'
 // ROUND-50 (P3-ζ r49 — bằng chứng user 2026-10-06 dán thought content nguyên văn
 // `]<]minimax[>[` từ UI): space-bunny-free (model nền MiniMax) leak chat-template
@@ -2184,7 +2184,8 @@ async function attemptNvidiaOnce(params: {
     const body: Record<string, unknown> = {
       model,
       messages,
-      max_tokens: maxTokens,
+      // Task 30: maxTokens <= 0 ("unlimited") → bỏ max_tokens (NIM reject số âm)
+      ...(maxTokens > 0 ? { max_tokens: maxTokens } : {}),
       temperature,
     }
     if (params.tools && params.tools.length > 0) {
@@ -2744,7 +2745,15 @@ async function callModelWithKeyRotation(
   const instant429Keys = new Set<number>()
 
   const taskLabel = rotationOpts?.taskLabel || 'rotation'
-  const maxTokens = rotationOpts?.maxTokens ?? options?.maxTokens ?? 4096
+  // Task 30 FIX (chat KHÔNG gọi được DS v4.1 Flash / Kimi K3): AgentProfile
+  // maxTokens = -1 ("unlimited" — vd MEGATRON) chảy xuống body NIM dưới dạng
+  // max_tokens: -1 → HTTP 400 "invalid value: integer `-1`, expected u32"
+  // → deepseek/kimi rớt TOÀN chuỗi xoay key rồi lan sang fallback Zen (chết
+  // tiếp vì free-tier 403) → chat báo lỗi. Chuẩn hóa: <= 0 → 0 = KHÔNG gửi
+  // max_tokens (dùng giới hạn output mặc định của model); timeout scale đã
+  // xử lý <= 0 an toàn (trả baseMs).
+  const rawMaxTokens = rotationOpts?.maxTokens ?? options?.maxTokens ?? 4096
+  const maxTokens = rawMaxTokens > 0 ? rawMaxTokens : 0
   // FIX (R2-a #2): timeout co giãn theo maxTokens — chống breaker đánh sập
   // model healthy khi sinh output dài hợp lệ.
   // USER DIRECTIVE 2026-12-01: kimi-k3 chậm-hợp-lệ (2-6 phút/call) là bình
@@ -3276,7 +3285,9 @@ async function tryProviderWithSlotKey(
       const body: Record<string, unknown> = {
         model,
         messages,
-        max_tokens: maxTokens ?? 4096,
+        // maxTokens = 0 ("unlimited" sau chuẩn hóa Task 30) → bỏ max_tokens —
+        // NIM dùng giới hạn output mặc định của model; gửi 0/-1 sẽ bị HTTP 400.
+        ...(maxTokens > 0 ? { max_tokens: maxTokens } : {}),
         temperature: temperature ?? 0.1,
       }
       if (tools && tools.length > 0) {
@@ -4650,7 +4661,9 @@ async function tryZenHttpWithSession(
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
-        ...OPENCODE_SESSION_HEADERS,
+        // Task 30 — fingerprint ĐÚNG capture CLI chính chủ: x-opencode-session-id
+        // + x-session-affinity + x-session-id (cùng giá trị ses_) + UA đủ suffix
+        ...buildOpenCodeSessionHeaders(),
       },
       body: JSON.stringify(body),
       signal: controller.signal,

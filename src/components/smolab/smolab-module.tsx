@@ -6654,7 +6654,7 @@ ${manifest}` : rawText
                                 <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => void reprobeOc()}>
                                   Thử lại probe
                                 </Button>
-                                <span className="text-stone-500 text-[10px]">(policy Zen hay thay đổi — probe lại sau ít phút)</span>
+                                <span className="text-stone-500 text-[10px]">(Task 30: Zen chặn free-tier theo IP máy chủ — datacenter bị từ chối; probe lại sau khi chạy app trên máy cá nhân/IP nhà)</span>
                               </div>
                             )}
                           </div>
