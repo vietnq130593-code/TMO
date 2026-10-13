@@ -3,9 +3,10 @@
  * BLUEPRINT-HYPERNAS-P1-P5 §4.2-2b) — CẢNH BÁO CHỦ ĐỘNG
  * ==========================================================================
  *
- * `runAlertChecks()` — 3 rule cảnh báo chạy trong tick 10 phút của worker
- * impact.ts (CÙNG setInterval — KHÔNG timer mới; gọi NGAY SAU pass impact;
- * static import an toàn vì alerts KHÔNG import ngược impact):
+ * `runAlertChecks()` — 4 rule (3 cảnh báo + 1 dọn mồ côi Task 32) chạy trong
+ * tick 10 phút của worker impact.ts (CÙNG setInterval — KHÔNG timer mới; gọi
+ * NGAY SAU pass impact; static import an toàn vì alerts KHÔNG import ngược
+ * impact):
  *
  *   1. STALL (D1.1 — phát stall trong ≤ 15 phút): AgentRunRecord
  *      status='running' mà mốc hoạt động cuối (createdAt — AgentRunRecord
@@ -24,6 +25,10 @@
  *      §4.2-2b); (b) CronJob enabled + status='active' mà nextRunAt quá hạn
  *      > 60 phút chưa chạy (schema CronJob ĐỦ trường để đánh giá chắc chắn:
  *      enabled/status/nextRunAt — không phải đoán).
+ *   4. ORPHAN SWEEP (Task 32 — D1.2): AgentRunRecord 'running' > 30 phút mà
+ *      runId KHÔNG còn sống trong bộ nhớ process (isRunIdActiveInMemory) →
+ *      đánh dấu failed/crashed + obs.alert rule orphan-sweep. Đóng sổ mồ côi
+ *      giữa phiên — boot sweeper chỉ lo lúc khởi động.
  *
  * Cờ: `obs_alerts` (TUNING_SPECS thứ 30 — off mặc định) check MỖI vòng —
  * off → return ngay (rẻ); bật/tắt có hiệu lực NGAY, không restart.
@@ -64,6 +69,14 @@ export const ALERT_TERMINAL_STATUSES = ['completed', 'failed', 'cancelled', 'inc
 /** Trần quét mỗi rule mỗi tick — chống burst (fail-open, tick sau tiếp). */
 const SCAN_CAP_RUNS = 100
 const SCAN_CAP_JOBS = 100
+/**
+ * GIAO_THUC-GS Task 32 — mồ côi khi DB row 'running' > 30 phút MÀ runId không
+ * còn 'running' trong bộ nhớ process (isRunIdActiveInMemory) — tức run đã chết
+ * giữa chừng (chat abort, exception trước endAgentRun, persist fail...) mà
+ * không ai đóng sổ. 30 phút > ngưỡng stall 15' để chắc chắn không đụng run
+ * LLM-call-dài còn sống (memory check đã chặn, đây là lớp chắn thứ 2).
+ */
+export const ALERT_ORPHAN_AFTER_MS = 30 * 60_000
 
 // ==================== PURE — phần quyết định (test r99 pin biên) ====================
 
@@ -366,10 +379,79 @@ async function checkJobHeartbeats(now: number): Promise<void> {
   }
 }
 
+// ==================== RULE 4 — ORPHAN SWEEP (Task 32 — D1.2 enabler) ====================
+
+/**
+ * DỌN RUN MỒ CÔI GIỮA PHIÊN — con mắt thứ 4 của giao thức quan sát.
+ *
+ * Boot sweeper (instrumentation-node.ts) chỉ chạy lúc KHỞI ĐỘNG; run chết
+ * giữa chừng trong CÙNG process (chat abort, exception trước endAgentRun,
+ * persist AgentRunRecord fail) → DB row kẹt 'running' MÃI TỚI RESTART —
+ * bằng chứng 2026-10-13: MEGATRON 17:01:34 + Omega 16:26:56 kẹt 'running'
+ * ~50-90 phút dù run thật đã chết, rule stall phát alert đúng nhưng KHÔNG ai
+ * đóng sổ → D1.2 ("0 job kẹt quá hạn") fail vĩnh viễn + số liệu vận hành bị
+ * nhiễu (bất cứ query nào đếm 'running' đều sai).
+ *
+ * An toàn 2 lớp: (1) isRunIdActiveInMemory — run còn sống trong process này
+ * (goal-loop đang chạy / LLM call dài) → BỎ QUA; (2) tuổi > 30 phút. Run của
+ * process trước rơi vào boot sweeper — đây chỉ lo mồ côi giữa phiên.
+ * Hành động: update status='failed', stopReason='crashed' + obs.alert rule
+ * orphan-sweep (Đài quan sát thấy việc dọn + lý do). Fail-open tuyệt đối.
+ */
+async function sweepOrphanedRuns(now: number): Promise<void> {
+  try {
+    const stale = await db.agentRunRecord.findMany({
+      where: { status: 'running', createdAt: { lt: new Date(now - ALERT_ORPHAN_AFTER_MS) } },
+      select: { id: true, runId: true, agentName: true, createdAt: true, sessionId: true },
+      take: SCAN_CAP_RUNS,
+    })
+    if (stale.length === 0) return
+    // Dynamic import — tiền lệ ledger note ở tracker (chống chu trình tĩnh:
+    // tracker dynamic-import ledger, ledger KHÔNG import tracker)
+    const { isRunIdActiveInMemory } = await import('@/lib/agent-run-tracker')
+    let swept = 0
+    for (const r of stale) {
+      if (isRunIdActiveInMemory(r.runId)) continue // còn sống thật — không đụng
+      try {
+        await db.agentRunRecord.update({
+          where: { id: r.id },
+          data: { status: 'failed', stopReason: 'crashed', completedAt: new Date() },
+        })
+        swept++
+        const orphanMinutes = Math.round((now - r.createdAt.getTime()) / 60_000)
+        emitAlert(
+          {
+            rule: 'orphan-sweep',
+            targetId: r.runId ?? r.id,
+            runId: r.runId ?? null,
+            agentName: r.agentName ?? null,
+            sessionId: r.sessionId,
+            orphanMinutes,
+            startedAt: r.createdAt.toISOString(),
+            thresholdMinutes: ALERT_ORPHAN_AFTER_MS / 60_000,
+            action: 'AgentRunRecord → failed/crashed (đóng sổ mồ côi giữa phiên)',
+            protocol: 'GIAO_THUC_GIAM_SAT D1.2 (0 run kẹt quá hạn)',
+          },
+          `Dọn run mồ côi ${r.agentName ?? r.runId ?? r.id.slice(0, 8)} — kẹt 'running' ${orphanMinutes} phút (đã chết giữa chừng, bộ nhớ không còn run này) → đánh dấu failed/crashed`,
+          r.runId ?? null,
+        )
+      } catch {
+        // fail-open từng row — row khác vẫn được quét
+      }
+    }
+    if (swept > 0) {
+      console.warn(`[OBS-ALERT] orphan-sweep: đóng sổ ${swept} run mồ côi (status 'running' > ${ALERT_ORPHAN_AFTER_MS / 60_000} phút, không còn sống trong bộ nhớ) → failed/crashed`)
+    }
+  } catch (err) {
+    console.error('[OBS-ALERT] rule orphan-sweep thất bại (fail-open):', err instanceof Error ? err.message : String(err))
+  }
+}
+
 // ==================== ENTRY (gọi từ tick impact.ts) ====================
 
 /**
- * Chạy toàn bộ 3 rule cảnh báo — gọi từ tick worker impact.ts mỗi 10 phút.
+ * Chạy toàn bộ 4 rule (3 cảnh báo + 1 dọn mồ côi) — gọi từ tick worker impact.ts
+ * mỗi 10 phút.
  * Cờ obs_alerts off → return NGAY (rẻ). Cờ obs_ledger off → console.warn vẫn
  * phát; sự kiện obs.alert tự no-op ở ledger (xem header). Fail-open tuyệt
  * đối: KHÔNG throw, KHÔNG log spam (tối đa 1 dòng console.error mỗi rule khi
@@ -382,6 +464,9 @@ export async function runAlertChecks(): Promise<void> {
     await checkStallRuns(now)
     await checkTokenBurn(now)
     await checkJobHeartbeats(now)
+    // Task 32 — chạy SAU stall rule: stall alert (D1.1) phát hiện TRƯỚC cho
+    // operator thấy, sweep đóng sổ (D1.2) SAU — đúng trình tự "phát hiện rồi xử lý".
+    await sweepOrphanedRuns(now)
     // alert vừa phát là fire-and-forget — flush để dedup query của TICK SAU
     // (và test) thấy ngay (an toàn: flush fail-open nội bộ ledger)
     await flushObservationQueue().catch(() => {})

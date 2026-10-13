@@ -1013,3 +1013,25 @@ export function getActiveRunId(sessionId: string | null | undefined): string | n
     return null
   }
 }
+
+/**
+ * GIAO_THUC-GS Task 32 — runId có đang 'running' trong BỘ NHỚ process này?
+ * Cho orphan-sweeper (alerts.ts) phân biệt:
+ *  - true  → run còn sống thật (goal-loop đang chạy, LLM call dài...) → KHÔNG đụng
+ *  - false → run đã kết thúc trong memory (hoặc của process trước) nhưng DB row
+ *            còn kẹt 'running' → mồ côi, sweeper đánh dấu failed/crashed an toàn.
+ * Quét toàn bộ runsBySession (đã bị MAX_RUNS_PER_SESSION + trimSessions chặn
+ * trần — rẻ). Fail-open trả TRUE (không chắc → coi như sống, không giết nhầm).
+ */
+export function isRunIdActiveInMemory(runId: string | null | undefined): boolean {
+  try {
+    if (!runId) return false
+    const reg = registry()
+    for (const runs of reg.runsBySession.values()) {
+      if (runs.some(r => r.runId === runId && r.status === 'running')) return true
+    }
+    return false
+  } catch {
+    return true // fail-open: lỗi registry → không dám kết luận mồ côi
+  }
+}

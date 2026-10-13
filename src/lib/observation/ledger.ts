@@ -75,6 +75,11 @@ interface ObsLedgerState {
   /** đếm ghi từ lần prune cuối (mỗi OBS_PRUNE_EVERY → chạy prune 1 lần) */
   sincePrune: number
   pruning: boolean
+  /** GIAO_THUC-GS Task 32: lỗi ghi gần nhất (message + kind + ts) — obs.health
+   *  hiển thị lý do thay vì chỉ đếm failed mơ hồ; null = chưa từng fail. */
+  lastError: { message: string; kind: string; ts: number } | null
+  /** throttle console.error lỗi ghi (1 dòng/phút — chống spam log) */
+  lastErrorLogTs: number
 }
 
 const globalForObs = globalThis as unknown as { __tmoObsLedger?: ObsLedgerState }
@@ -91,6 +96,8 @@ function state(): ObsLedgerState {
       lastWriteLatencyMs: 0,
       sincePrune: 0,
       pruning: false,
+      lastError: null,
+      lastErrorLogTs: 0,
     }
   }
   return globalForObs.__tmoObsLedger
@@ -159,8 +166,22 @@ async function drain(): Promise<void> {
       st.written++
       st.lastWriteLatencyMs = Date.now() - t0
       st.sincePrune++
-    } catch {
+    } catch (err) {
       st.failed++ // fail-open — sự kiện hỏng KHÔNG dừng drain
+      // GIAO_THUC-GS Task 32: bắt lỗi cụ thể để obs.health chẩn đoán được gốc rễ
+      // (bằng chứng: 3 lần ghi thất bại chỉ hiện con số, không lý do). Log throttle
+      // 1 dòng/phút — giữ fail-open, không spam.
+      try {
+        st.lastError = {
+          message: err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200),
+          kind: evt.kind,
+          ts: Date.now(),
+        }
+        if (Date.now() - st.lastErrorLogTs > 60_000) {
+          st.lastErrorLogTs = Date.now()
+          console.error('[OBS-LEDGER] ghi sự kiện thất bại (fail-open, tiếp tục drain):', st.lastError.message, `· kind=${evt.kind}`)
+        }
+      } catch { /* không được phép throw trong catch */ }
     }
     if (st.sincePrune >= OBS_PRUNE_EVERY && !st.pruning) {
       st.sincePrune = 0
@@ -268,6 +289,8 @@ export interface ObsLedgerHealth {
   dropped: number
   failed: number
   lastWriteLatencyMs: number
+  /** Task 32: lỗi ghi gần nhất (null = chưa từng fail) — chẩn đoán gốc rễ */
+  lastError: { message: string; kind: string; ts: number } | null
 }
 
 /** Ảnh chụp sức khỏe ledger — nguồn cho sự kiện obs.health (GAP-7/RO-7). */
@@ -280,6 +303,7 @@ export function getObservationHealth(): ObsLedgerHealth {
     dropped: st.dropped,
     failed: st.failed,
     lastWriteLatencyMs: st.lastWriteLatencyMs,
+    lastError: st.lastError,
   }
 }
 

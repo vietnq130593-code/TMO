@@ -1,6 +1,6 @@
 # GIAO THỨC GIÁM SÁT AGENTS — HỆ THỐNG VẬN HÀNH TMO (The Magnum Opus)
 
-> **Phiên bản:** 1.4 — 2026-10-08 (round 68: theo chỉ đạo user — **SỔ GHI NHẬN bug.md** trong lúc quan sát mission: mọi vấn đề quan sát được ở TỪNG BƯỚC triển khai/thực thi của agents phải được ghi NGAY LẬP TỨC vào `bug.md` ở repo root (mỗi mục 1 dòng thời điểm + hiện tượng + bằng chứng + đánh giá) — tránh quá tải ngữ cảnh và bỏ sót; cuối phiên tổng hợp toàn bộ vào chính file đó. Bản mẫu: `bug.md` round-68 với 25 mục + phần tổng hợp + bảng fix). v1.3 — 2026-10-07 (round 57: rà soát lượt 2 sau hậu kiểm mission …iahkk3 — tự kiểm định chính watcher: FIX C1/C2/C3 chống nhiễu + false-positive; chính sách hoãn Opus review theo quyết định user; FIX B1 agentRole symmetry + FIX B4 heartbeat pha chuyển chu kỳ + parser A1 bên TMO). v1.2 2026-10-07 round 56: đổi tên "quy trình" → **giao thức** giám sát theo chỉ đạo user; bổ sung kênh quan sát thứ 5 **FINAL REPORTS**. v1.1 2026-10-07 round 52–55: mục 1b kích hoạt theo dõi đồng bộ + kênh THINKING; v1.0 2026-10-01 vòng 18–19)
+> **Phiên bản:** 1.5 — 2026-10-14 (Task 32: bổ sung **§0b MỤC ĐÍCH KÍCH HOẠT** theo chỉ đạo user — chuẩn mực đứng: mỗi khi user yêu cầu "kích hoạt giao thức quan sát" thì thực hiện đúng mục đích §0b; kèm rule 4 ORPHAN SWEEP + verdict.add gắn runId + obs.health lộ lý do ghi fail). v1.4 — 2026-10-08 (round 68: theo chỉ đạo user — **SỔ GHI NHẬN bug.md** trong lúc quan sát mission: mọi vấn đề quan sát được ở TỪNG BƯỚC triển khai/thực thi của agents phải được ghi NGAY LẬP TỨC vào `bug.md` ở repo root (mỗi mục 1 dòng thời điểm + hiện tượng + bằng chứng + đánh giá) — tránh quá tải ngữ cảnh và bỏ sót; cuối phiên tổng hợp toàn bộ vào chính file đó. Bản mẫu: `bug.md` round-68 với 25 mục + phần tổng hợp + bảng fix). v1.3 — 2026-10-07 (round 57: rà soát lượt 2 sau hậu kiểm mission …iahkk3 — tự kiểm định chính watcher: FIX C1/C2/C3 chống nhiễu + false-positive; chính sách hoãn Opus review theo quyết định user; FIX B1 agentRole symmetry + FIX B4 heartbeat pha chuyển chu kỳ + parser A1 bên TMO). v1.2 2026-10-07 round 56: đổi tên "quy trình" → **giao thức** giám sát theo chỉ đạo user; bổ sung kênh quan sát thứ 5 **FINAL REPORTS**. v1.1 2026-10-07 round 52–55: mục 1b kích hoạt theo dõi đồng bộ + kênh THINKING; v1.0 2026-10-01 vòng 18–19)
 > **Phạm vi:** giám sát toàn bộ agents (Omega, Opus, ALISTA, SENTINEL, NEMESIS, Code Team…) trong vòng đời mission: từ dispatch chỉ đạo → thực thi goal-loop → phán quyết → đóng sổ.
 > **Người dùng:** operator / trọng tài vận hành (người hoặc agent giám sát).
 > **Cấu trúc:** mỗi lĩnh vực gồm 4 khối — (1) Mục tiêu · (2) Công việc · (3) Nguồn bằng chứng & cách đo · (4) **Rubric chấm điểm**.
@@ -15,6 +15,38 @@
 4. **Mỗi sự cố lặp ≥ 2 lần phải sinh fix cấu trúc** — không khắc phục lẻ tẻ từng trường hợp.
 5. **Chấm điểm bằng dữ liệu đo được** — mọi tiêu chí dưới đây phải truy vấn/kiểm chứng được, không chấm theo cảm tính.
 6. **Nhìn thấy tường tận mới biết cần khắc phục gì** — mỗi blind spot phát hiện phải trở thành một kênh quan sát mới (r54: không thấy agents NGHĨ GÌ → kênh THINKING; r56: không thấy agents KẾT LUẬN GÌ → kênh FINAL REPORTS). Danh sách kênh chỉ được dài ra, không được rút ngắn.
+
+---
+
+## 0b. MỤC ĐÍCH KÍCH HOẠT GIAO THỨC QUAN SÁT (chuẩn mực đứng — user directive 2026-10-14)
+
+> **Nguyên tắc:** Mỗi khi user yêu cầu **"kích hoạt giao thức quan sát"** (bất kể lúc nào, bất kể agent có đang chạy hay không) — thực hiện theo ĐÚNG mục đích dưới đây. Đây là định nghĩa đứng, không cần user nhắc lại mục đích trong các lần sau.
+
+**Mục đích:** Xác định các **vấn đề trong vận hành** của:
+1. **Agent** — vòng đời run: stall, treo, fail, mồ côi, đốt token bất thường
+2. **Database** — ghi bảng học (QEntry / ArbiterVerdict / AutoLearnRecord / Episode), lỗi ghi, sai lệch dữ liệu, health ledger
+3. **Não agent** (brain) — train / infer-ref, trace vector vào/ra, pipeline calibration/surrogate/policy
+4. **Quá trình thực thi của agent** — tool calls lỗi, vòng lặp lặp, cú pháp tool-call hỏng, verdict thiếu/tự tin sai, thiếu sót trong thực thi
+
+...nhằm xem có **lỗi, vấn đề hay thiếu sót nào cần xử lý hoặc bổ sung** — và **tiến hành xử lý/bổ sung NGAY khi phát hiện** (không chỉ báo cáo rồi để đó).
+
+**Thủ tục kích hoạt (đúng thứ tự):**
+1. **Bật đủ 5 cờ** qua POST `/api/neural-architecture` `{action:'set', key, value:'on'}`: `obs_ledger` (ghi sự kiện) · `obs_brain_trace` (trace não lưu vector) · `obs_impact` (KPI + health worker 10') · `obs_alerts` (cảnh báo chủ động + orphan sweep) · `ui_observation` (4 panel Đài quan sát).
+2. **Xác minh sự kiện chảy**: GET `/api/observation/timeline?limit=5` — cờ ok + sự kiện mới (run.start / obs.health / verdict.add...).
+3. **Quan sát chủ động trong phiên**: theo dõi timeline + AgentRunRecord + alerts (rule stall / token-burn / orphan-sweep) + console `[OBS-ALERT]` / `[OBS-LEDGER]`; mission đang chạy thì thêm `bun scripts/mission-watch.ts --follow` (mục 1b).
+4. **Chẩn đoán từng tín hiệu bất thường** về gốc rễ (đọc trace jsonl + SQL readback + log) — không dừng ở hiện tượng.
+5. **Xử lý/bổ sung ngay khi có**: sửa code cấu trúc (tiền lệ Task 32: rule orphan-sweep đóng sổ run mồ côi giữa phiên + verdict.add gắn runId + obs.health lộ lý do ghi fail), dọn dữ liệu bẩn, điều chỉnh ngưỡng — mọi fix phải qua gate (tsc + lint) + verify + commit.
+6. **Đóng ghi nhận**: kết quả quan sát + vấn đề đã xử lý ghi vào worklog (đúng nguyên tắc #1: bằng chứng máy trước).
+
+**Tín hiệu cần bắt (tối thiểu):**
+| Nguồn | Tín hiệu bất thường | Hành động |
+|---|---|---|
+| Timeline obs | obs.health `healthy:false` · failed>0 · dropped>0 | đọc lastError (Task 32 lộ lý do) → sửa gốc rễ |
+| obs.alert | stall D1.1 · token-burn D1.4 · orphan-sweep D1.2 | đối chiếu run thật (trace jsonl) → can thiệp mục 6 |
+| AgentRunRecord | status 'running' vô lý (không run tương ứng) · failed liên tiếp cùng stopReason | sweep + phân tích gốc rễ |
+| ArbiterVerdict | complete=false lặp · confidence thấp lặp · forcedDowngrade | đọc missing/rootCause → xem thực thi thiếu gì |
+| ToolMetric | tool fail rate cao · cùng tool lặp N lần | soi pattern → fix cấu trúc (tiền lệ stall brake) |
+| BrainInferenceTrace | trace fail · queue dài | xem worker não + Qdrant |
 
 ---
 

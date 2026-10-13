@@ -217,6 +217,11 @@ export async function insertArbiterVerdict(params: {
   missing?: string | null
   rootCause?: string | null
   forcedDowngrade?: boolean
+  /** GIAO_THUC-GS Task 32: gắn verdict vào kim tuyến run (runId) — trước đây
+   *  verdict.add KHÔNG có runId → chuỗi "toàn cảnh 1 run" đứt đoạn giữa
+   *  run.start ↔ run.end, đồng thời rule stall (D1.1) không thấy hoạt động
+   *  của run đang sống (LLM call dài >15') → false-positive "đóng băng". */
+  runId?: string | null
 }): Promise<void> {
   if (hasArbiterVerdictDelegate()) {
     const created = await db.arbiterVerdict.create({
@@ -238,6 +243,7 @@ export async function insertArbiterVerdict(params: {
       actor: params.agentName ? `agent:${params.agentName}` : 'system',
       kind: 'verdict.add',
       sessionId: params.sessionId,
+      ...(params.runId ? { runId: params.runId } : {}),
       table: 'ArbiterVerdict',
       rowKey: created.id, // FB-OBS-R1-08: kim tuyến trỏ dòng ArbiterVerdict thật (đối xứng nhánh raw)
       summary: `Phán quyết cycle ${params.cycle}: ${params.complete ? 'đủ' : 'thiếu'} · conf ${params.confidence.toFixed(2)} · ${params.verified ? 'verified' : 'unverified'}`,
@@ -268,6 +274,7 @@ export async function insertArbiterVerdict(params: {
     actor: params.agentName ? `agent:${params.agentName}` : 'system',
     kind: 'verdict.add',
     sessionId: params.sessionId,
+    ...(params.runId ? { runId: params.runId } : {}),
     table: 'ArbiterVerdict',
     rowKey: id,
     summary: `Phán quyết cycle ${params.cycle}: ${params.complete ? 'đủ' : 'thiếu'} · conf ${params.confidence.toFixed(2)} · ${params.verified ? 'verified' : 'unverified'}`,

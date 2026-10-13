@@ -5147,6 +5147,13 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           sessionId: agentSessionId,
           agentName,
           cycle,
+          // GIAO_THUC-GS Task 32: gắn verdict vào kim tuyến run — verdict.add
+          // mang runId để chuỗi sự kiện "toàn cảnh 1 run" liền mạch (run.start →
+          // verdict.add (mỗi chu kỳ) → run.end) + rule stall D1.1 nhìn thấy
+          // hoạt động của run đang sống (LLM call dài >15' không còn bị coi
+          // "đóng băng" — bằng chứng: alert giả MEGATRON 18-19' lúc run thật
+          // vẫn đang reasoning kimi-k3).
+          runId,
           complete: verdict.complete,
           confidence: verdict.confidence,
           verified: verdict.verified,

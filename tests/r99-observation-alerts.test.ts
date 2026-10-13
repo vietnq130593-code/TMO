@@ -58,6 +58,7 @@ import {
   runAlertChecks, isObsAlertsEnabled, resetAlertDedupState,
   ALERT_STALL_AFTER_MS, ALERT_TOKEN_BURN_LIMIT, ALERT_TOKEN_BURN_WINDOW_MS,
   ALERT_HEARTBEAT_STALE_MS, ALERT_CRON_OVERDUE_MS, ALERT_DEDUP_WINDOW_MS,
+  ALERT_ORPHAN_AFTER_MS,
 } from '@/lib/observation/alerts'
 // C — kinds + spec
 import { OBS_KINDS, OBS_GROUP_CLASSES, obsKindDef } from '@/lib/observation/kinds'
@@ -522,6 +523,55 @@ describe('r99 · D — runAlertChecks (3 rule + dedup + cờ)', () => {
     // nhưng sự kiện KHÔNG được ghi — observeEvent tự gate theo obs_ledger
     const after = await db.observationEvent.count({ where: { kind: 'obs.alert' } })
     expect(after).toBe(before)
+  })
+
+  test('D7 ORPHAN-SWEEP (Task 32 — D1.2) — mồ côi >30\' KHÔNG còn trong bộ nhớ → failed/crashed + obs.alert; run sống trong bộ nhớ / run <30\' → KHÔNG đụng', async () => {
+    // 3 record running:
+    //  - run_orphan_1: 40' tuổi, KHÔNG trong registry → PHẢI bị sweep (failed/crashed)
+    //  - run_live_1:   40' tuổi, TRONG registry (goal-loop đang chạy LLM call dài) → phải còn nguyên 'running'
+    //  - run_young_1:  20' tuổi, không trong registry → dưới ngưỡng 30' → phải còn 'running'
+    await seedRun({ runId: 'run_orphan_1', status: 'running', ageMs: 40 * MIN, agentName: 'MEGATRON' })
+    await seedRun({ runId: 'run_live_1', status: 'running', ageMs: 40 * MIN, agentName: 'Omega' })
+    await seedRun({ runId: 'run_young_1', status: 'running', ageMs: 20 * MIN, agentName: 'Opus' })
+    // Đưa run_live_1 vào bộ nhớ tracker (giống goal-loop thật): dbPersistBy 'caller'
+    // → endAgentRun KHÔNG tạo thêm row DB (giữ test sạch — không đụng seed)
+    const { startAgentRun, endAgentRun, isRunIdActiveInMemory } = await import('@/lib/agent-run-tracker')
+    startAgentRun({ sessionId: 'r99-obs-alerts', agentName: 'Omega', runId: 'run_live_1', dbPersistBy: 'caller' })
+    expect(isRunIdActiveInMemory('run_live_1')).toBe(true)
+    expect(isRunIdActiveInMemory('run_orphan_1')).toBe(false)
+    expect(isRunIdActiveInMemory(null)).toBe(false) // fail-open nhánh an toàn
+    // flush run.start vào DB để stall rule không đụng run_live_1 (deterministic)
+    await flushObservationQueue()
+
+    await runAlertChecks()
+
+    // (1) orphan bị đóng sổ: failed/crashed + completedAt đặt
+    const orphan = await db.agentRunRecord.findFirst({ where: { runId: 'run_orphan_1' } })
+    expect(orphan!.status).toBe('failed')
+    expect(orphan!.stopReason).toBe('crashed')
+    expect(orphan!.completedAt).not.toBeNull()
+    // (2) run sống trong bộ nhớ → KHÔNG bị đụng (LLM call dài không bị giết nhầm)
+    const live = await db.agentRunRecord.findFirst({ where: { runId: 'run_live_1' } })
+    expect(live!.status).toBe('running')
+    // (3) run <30' → dưới ngưỡng → KHÔNG bị đụng
+    const young = await db.agentRunRecord.findFirst({ where: { runId: 'run_young_1' } })
+    expect(young!.status).toBe('running')
+    // (4) obs.alert rule orphan-sweep phát ĐÚNG payload + gắn kim tuyến runId
+    const sweeps = (await alertPayloads()).filter(p => p.rule === 'orphan-sweep')
+    expect(sweeps).toHaveLength(1)
+    expect(sweeps[0].targetId).toBe('run_orphan_1')
+    expect(sweeps[0].runId).toBe('run_orphan_1')
+    expect(sweeps[0].agentName).toBe('MEGATRON')
+    expect(sweeps[0].orphanMinutes).toBe(40)
+    expect(sweeps[0].thresholdMinutes).toBe(ALERT_ORPHAN_AFTER_MS / 60_000)
+    expect(String(sweeps[0].action)).toContain('failed/crashed')
+    expect(String(sweeps[0].protocol)).toContain('D1.2')
+    const evt = await db.observationEvent.findFirst({ where: { kind: 'obs.alert', runId: 'run_orphan_1' } })
+    expect(evt).not.toBeNull() // sự kiện gắn đúng kim tuyến run
+
+    // dọn registry — không rò state sang test sau (globalThis sống qua describe)
+    endAgentRun('r99-obs-alerts', 'run_live_1', 'done')
+    expect(isRunIdActiveInMemory('run_live_1')).toBe(false)
   })
 })
 
