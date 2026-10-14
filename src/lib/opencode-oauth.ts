@@ -166,6 +166,13 @@ export interface OpenCodeOAuthSession {
     unlocked: boolean
     detail: string
     endpoint?: string
+    /** R6 — thông tin egress thật của máy chạy app lúc probe (nói thật môi
+     *  trường thay vì hardcode kết luận sandbox-era). */
+    egress?: { ip: string; org: string; country: string; city?: string; isDatacenter: boolean }
+    /** R6 — true khi opencode CLI trên MÁY CHẠY APP gọi được model free
+     *  (keyless/native): HTTP session có thể bị chặn nhưng lõi free vẫn dùng
+     *  được qua transport CLI (failover tự động của llm.ts). */
+    cliOk?: boolean
   }
 }
 
@@ -180,9 +187,19 @@ export interface DeviceLoginStart {
   intervalSeconds: number
 }
 
+/** Shape kết quả probe free-tier 1 lần (HTTP session — llm.ts/route có thể
+ *  enrich thêm cliOk cho tầng đối chiếu CLI). */
+export interface FreeTierProbeShape {
+  unlocked: boolean
+  detail: string
+  endpoint?: string
+  egress?: ZenEgressInfo
+  cliOk?: boolean
+}
+
 export type DevicePollResult =
   | { status: 'pending'; message: string }
-  | { status: 'success'; session: OpenCodeOAuthSession; freeTier: { unlocked: boolean; detail: string; endpoint?: string } }
+  | { status: 'success'; session: OpenCodeOAuthSession; freeTier: FreeTierProbeShape }
   | { status: 'expired'; message: string }
   | { status: 'denied'; message: string }
   | { status: 'error'; message: string }
@@ -193,7 +210,7 @@ export interface OpenCodeOAuthStatus {
   needsRefresh?: boolean
   email?: string
   orgId?: string
-  freeTier?: { probedAt: number; unlocked: boolean; detail: string; endpoint?: string }
+  freeTier?: NonNullable<OpenCodeOAuthSession['freeTier']>
 }
 
 // ==================== STORE (file + memory, pattern r74b) ====================
@@ -527,18 +544,80 @@ export function peekSession(): OpenCodeOAuthSession | null {
 
 // ==================== FREE-TIER PROBE ====================
 
+// ==================== EGRESS LOOKUP (R6) ====================
+
+/** Thông tin egress của máy chạy app (best-effort qua ipinfo.io) — probe
+ *  free-tier dùng để nói THẬT môi trường thay vì hardcode kết luận sandbox-era.
+ *  R6 (user report 2026-10-31): chạy app trên máy cá nhân ở VN nhưng thông báo
+ *  vẫn nói "bị chặn vì app chạy trên datacenter Alibaba Cloud HK" — thông báo
+ *  cũ là KẾT LUẬN TĨNH từ điều tra Task 30 trên sandbox, không kiểm chứng lại
+ *  nơi app thực sự đang chạy. Giờ mỗi lần probe lấy IP/org thật để kết luận. */
+export interface ZenEgressInfo {
+  ip: string
+  org: string
+  country: string
+  city?: string
+  /** true khi org khớp cloud/datacenter đã biết — CHỈ trường hợp này message
+   *  "Zen chặn free-tier theo IP máy chủ (datacenter)" mới có căn cứ. */
+  isDatacenter: boolean
+}
+
+const EGRESS_DATACENTER_RE =
+  /alibaba|as45102|amazon|aws\b|microsoft|azure|google cloud|gcp\b|hetzner|ovh\b|digitalocean|vultr|linode|tencent|byteplus|oracle cloud|colocation|datacamp/i
+
+async function lookupEgressInfo(): Promise<ZenEgressInfo | null> {
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 5000)
+    try {
+      const res = await fetch(process.env.TMO_EGRESS_LOOKUP_URL?.trim() || 'https://ipinfo.io/json', {
+        signal: controller.signal,
+        headers: { Accept: 'application/json' },
+      })
+      if (!res.ok) return null
+      const d = await res.json() as { ip?: string; org?: string; country?: string; city?: string }
+      const org = (d.org || '').trim()
+      return {
+        ip: (d.ip || '').trim() || 'unknown',
+        org: org || 'unknown',
+        country: (d.country || '').trim(),
+        city: d.city,
+        isDatacenter: EGRESS_DATACENTER_RE.test(org),
+      }
+    } finally {
+      clearTimeout(timer)
+    }
+  } catch {
+    return null // best-effort — không chặn probe
+  }
+}
+
+/** R6 — dòng egress chuẩn (1 nguồn dùng chung cho mọi message kết luận). */
+function formatEgressLine(eg: ZenEgressInfo | null): string {
+  if (!eg) return 'Không tra cứu được egress máy chạy app (ipinfo.io không trả lời trong 5s)'
+  const place = [eg.city, eg.country].filter(Boolean).join(', ')
+  return `egress hiện tại của máy chạy app: ${eg.org} — ${eg.ip}${place ? ` (${place})` : ''}`
+}
+
 /**
  * Probe space-bunny-free với session token — trả lời câu hỏi "session tài
  * khoản có mở free tier không?" bằng KẾT QUẢ THẬT. Thử cả 2 endpoint Zen
  * (/zen/v1 cũ + /inference/v1 mới — docs 2026-10-14 đã chuyển sang inference).
+ *
+ * R6 — message kết luận giờ theo BẰNG CHỨNG + MÔI TRƯỜNG THẬT (egress IP/org
+ * live qua ipinfo): phân biệt 403 FreeTierError / lỗi mạng / lỗi tạm thời,
+ * và CHỈ đổ lỗi "IP datacenter" khi IP egress thật sự thuộc datacenter.
  */
-export async function probeFreeTier(accessToken?: string): Promise<{ unlocked: boolean; detail: string; endpoint?: string }> {
+export async function probeFreeTier(accessToken?: string): Promise<FreeTierProbeShape> {
   const token = accessToken ?? await getValidZenSessionToken()
   if (!token) return { unlocked: false, detail: 'Chưa có session OpenCode account' }
   const endpoints = [
     process.env.ZEN_BASE_URL?.trim() || 'https://opencode.ai/zen/v1',
     'https://opencode.ai/inference/v1',
   ]
+  // R6 — egress live tra cứu song song với probe (không chặn thêm thời gian);
+  // mọi nhánh return đều kèm egress để UI + log nói THẬT môi trường.
+  const egressPromise = lookupEgressInfo()
   // Task 30 — body kèm tools chuẩn opencode (gate kiểm tra mảng tools của
   // agent chính chủ — GitHub #50627/#54744: request thiếu tool chuẩn bị chặn;
   // capture thật có 24 tool, đây là tổ hợp tối giản các tool lõi).
@@ -553,6 +632,11 @@ export async function probeFreeTier(accessToken?: string): Promise<{ unlocked: b
     tool_choice: 'auto',
   }
   const seen = new Set<string>()
+  // R6 — đếm bằng chứng mỗi loại lỗi để kết luận cuối theo SỰ THẬT:
+  // FreeTierError 403 (chạm được Zen nhưng bị policy chặn) ≠ lỗi mạng
+  // (không gọi được opencode.ai — không kết luận gì về free-tier được).
+  let freeTierErrCount = 0
+  let lastNetErr: string | null = null
   for (const base of endpoints) {
     if (seen.has(base)) continue
     seen.add(base)
@@ -572,30 +656,63 @@ export async function probeFreeTier(accessToken?: string): Promise<{ unlocked: b
         })
         if (res.ok) {
           console.log(`[OC-OAUTH] ✅ Probe free-tier OK (${base}) — session OpenCode account MỞ free tier`)
-          return { unlocked: true, detail: 'Session OpenCode account đã mở khóa space-bunny-free (probe OK)', endpoint: base }
+          return { unlocked: true, detail: 'Session OpenCode account đã mở khóa space-bunny-free (probe OK)', endpoint: base, egress: (await egressPromise) ?? undefined }
         }
         const body = await res.text().catch(() => '')
         console.warn(`[OC-OAUTH] Probe free-tier ${base} HTTP ${res.status}: ${body.slice(0, 160)}`)
         if (res.status === 401 || (res.status === 403 && !/FreeTierError|free tier/i.test(body))) {
           noteSessionRejected(`HTTP ${res.status} khi probe: ${body.slice(0, 120)}`)
-          return { unlocked: false, detail: `Session bị từ chối (HTTP ${res.status}) — token không hợp lệ hoặc hết hạn`, endpoint: base }
+          return { unlocked: false, detail: `Session bị từ chối (HTTP ${res.status}) — token không hợp lệ hoặc hết hạn`, endpoint: base, egress: (await egressPromise) ?? undefined }
         }
         // FreeTierError → endpoint này không mở với session — thử endpoint kế
+        freeTierErrCount += 1 // R6 — bằng chứng: chạm được Zen, bị policy chặn
       } finally {
         clearTimeout(timer)
       }
     } catch (err) {
       console.warn(`[OC-OAUTH] Probe free-tier ${base} lỗi:`, err instanceof Error ? err.message : String(err))
+      lastNetErr = err instanceof Error ? err.message : String(err) // R6 — không nuốt bằng chứng mạng nữa
     }
   }
-  // Task 30 — KẾT LUẬN TRUNG THỰC SAU ĐIỀU TRA SÂU: replay 100% request của
-  // CLI chính chủ (fingerprint + tools + session token) từ sandbox này vẫn
-  // 403, trong khi user trên máy cá nhân chạy CLI keyless vẫn OK (GitHub
-  // #53885/#54338 tháng 10/2026) → Zen chặn free-tier theo NGUỒN IP
-  // (datacenter). Sandbox egress = Alibaba Cloud HK (AS45102) nên bị chặn.
+  // ===== R6 — KẾT LUẬN THEO BẰNG CHỨNG (thay hardcode sandbox-era Task 30) =====
+  // User report 2026-10-31: chạy app trên máy cá nhân ở Việt Nam, đã đăng nhập
+  // opencode, nhưng thông báo vẫn nói "bị chặn vì app chạy trên datacenter
+  // Alibaba Cloud HK" — vì đoạn return này hardcode kết luận từ điều tra Task 30
+  // TRÊN SANDBOX, không kiểm chứng nơi app đang chạy. Giờ kết luận theo egress
+  // live + số endpoint thực sự bị FreeTierError:
+  //   (1) 0 endpoint chạm được → lỗi mạng (không kết luận gì về free-tier);
+  //   (2) bị FreeTierError + egress là datacenter → đúng nghĩa "IP máy chủ";
+  //   (3) bị FreeTierError + egress KHÔNG phải datacenter → TUYỆT ĐỐI không
+  //       đổ lỗi "IP datacenter" — nói thẳng policy/tài khoản + hướng khác.
+  const egress = await egressPromise
+  const egLine = formatEgressLine(egress)
+  // Chuẩn hoá null → undefined cho field tùy chọn của shape (tsc strict).
+  const egressField: ZenEgressInfo | undefined = egress ?? undefined
+  if (freeTierErrCount === 0) {
+    return {
+      unlocked: false,
+      detail: `Không gọi được opencode.ai từ máy chạy app — cả ${endpoints.length} endpoint đều lỗi mạng${lastNetErr ? ` (${lastNetErr})` : ''}. ${egLine}. Đây là lỗi KẾT NỐI, chưa nói gì về free-tier — kiểm tra Internet/firewall của máy chạy app rồi bấm "Thử lại".`,
+      egress: egressField,
+    }
+  }
+  if (egress?.isDatacenter) {
+    return {
+      unlocked: false,
+      detail: `Zen chặn free-tier theo IP máy chủ: ${egLine} — org này là datacenter nên bị từ chối kể cả session hợp lệ (bằng chứng nền Task 30: replay nguyên vận request CLI chính chủ vẫn 403 từ datacenter; keyless chỉ mở cho IP cá nhân). Hướng khắc phục: chạy app trên máy cá nhân/IP nhà, hoặc nạp credit Zen dùng model trả phí.`,
+      egress: egressField,
+    }
+  }
+  if (egress) {
+    return {
+      unlocked: false,
+      detail: `Session hợp lệ nhưng Zen vẫn từ chối (FreeTierError 403 trên ${freeTierErrCount}/${endpoints.length} endpoint). ${egLine} — org này KHÔNG phải datacenter, nên KHÔNG phải lý do "IP máy chủ/datacenter" như thông báo cũ (đó là kết luận từ điều tra sandbox-era Task 30, hết căn cứ ở máy này). Nguyên nhân khả dĩ: policy Zen lật theo tài khoản/thời điểm (bấm "Thử lại" sau ít phút), hoặc model free vừa đổi danh sách (đồng bộ R5 sẽ cập nhật). Hướng khắc phục: thử lại sau, dùng model trả phí, hoặc probe từ máy/IP khác.`,
+      egress: egressField,
+    }
+  }
   return {
     unlocked: false,
-    detail: 'Zen đang chặn free-tier theo IP máy chủ: app chạy trên datacenter (Alibaba Cloud HK) nên bị từ chối kể cả với session hợp lệ (verify 2026-10-14: replay nguyên vận request CLI chính chủ vẫn 403; user chạy trên máy cá nhân thì dùng được keyless). Hướng khắc phục: chạy app trên máy cá nhân/IP nhà, hoặc nạp credit Zen dùng model trả phí.',
+    detail: `Session bị FreeTierError 403 (${freeTierErrCount}/${endpoints.length} endpoint) nhưng không tra cứu được egress máy chạy app — không đủ căn cứ kết luận "IP datacenter" như thông báo cũ. Thử lại sau ít phút.`,
+    egress: egressField,
   }
 }
 

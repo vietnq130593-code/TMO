@@ -11,7 +11,7 @@
 
 import { NextResponse } from 'next/server'
 import { getValidZenSession, probeFreeTier, updateSessionFreeTier, writeAuthJsonForCli } from '@/lib/opencode-oauth'
-import { clearZenFreeTierBlocks } from '@/lib/llm'
+import { clearZenFreeTierBlocks, probeZenFreeTierViaCli } from '@/lib/llm'
 import { PROVIDER_MODELS } from '@/lib/agent-constants'
 
 export const dynamic = 'force-dynamic'
@@ -23,13 +23,34 @@ export async function POST() {
       return NextResponse.json({ error: 'Chưa đăng nhập OpenCode account (hoặc session hết hạn + refresh fail) — POST /api/opencode/auth/login trước' }, { status: 400 })
     }
     const freeTier = await probeFreeTier(session.accessToken)
-    // Cập nhật kết quả probe mới nhất vào session store (status route đọc từ đó)
-    updateSessionFreeTier({ probedAt: Date.now(), ...freeTier })
+    const zenFreeModelIds = PROVIDER_MODELS.zen.map(m => m.id)
     if (freeTier.unlocked) {
-      const zenFreeModelIds = PROVIDER_MODELS.zen.map(m => m.id)
       clearZenFreeTierBlocks('http', zenFreeModelIds)
       writeAuthJsonForCli(session)
+    } else {
+      // R6 (user report 2026-10-31) — HTTP probe fail → đo thêm transport CLI
+      // trên MÁY CHẠY APP (cliOk): HTTP session có thể bị Zen từ chối nhưng lõi
+      // free vẫn chạy qua CLI native — llm.ts tự failover, message phải nói đúng
+      // "vẫn dùng được qua CLI" thay vì dead-end "bị chặn".
+      try {
+        writeAuthJsonForCli(session) // CLI probe dùng session hiện tại (như đã login opencode)
+        const cli = await probeZenFreeTierViaCli(30_000)
+        freeTier.cliOk = cli.ok
+        if (cli.ok) {
+          freeTier.detail += ' → transport CLI (opencode CLI) trên máy này probe OK — lõi free vẫn dùng được qua failover CLI tự động của llm.ts.'
+          clearZenFreeTierBlocks('cli', zenFreeModelIds) // CLI sống lại — dọn block cũ để failover thật sự chạy
+          console.log(`[OC-OAUTH] R6 cliOk=true — ${cli.reason}; đã xoá block-cache cli cho ${zenFreeModelIds.length} model free`)
+        } else {
+          freeTier.detail += ` Transport CLI cũng không chạy được (${cli.reason}).`
+          console.warn(`[OC-OAUTH] R6 cliOk=false — ${cli.reason}`)
+        }
+      } catch (cliErr) {
+        console.warn('[OC-OAUTH] R6 CLI probe lỗi (không chặn):', cliErr instanceof Error ? cliErr.message : String(cliErr))
+      }
     }
+    // Cập nhật kết quả probe mới nhất vào session store (status route đọc từ đó)
+    // — đặt SAU enrich cliOk để store giữ nguyên bản message + cliOk cuối cùng.
+    updateSessionFreeTier({ probedAt: Date.now(), ...freeTier })
     return NextResponse.json({ freeTier })
   } catch (err) {
     return NextResponse.json(

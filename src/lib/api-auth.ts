@@ -65,11 +65,63 @@ function doFetch(url: string, init: RequestInit, token: string | null): Promise<
   return fetch(url, { ...init, headers })
 }
 
+// ==================== R6 — NETWORK FAILURE DIAGNOSTICS ====================
+// User report 2026-10-31 (chạy local Windows E:/APP/TMO-main, Next 16.3.8
+// Turbopack): console TypeError "Failed to fetch" tại doFetch ← authedFetch ←
+// handleNativeFolderPick. "Failed to fetch" = lỗi MẠNG tầng browser (server
+// không nhận/không trả connection — ERR_CONNECTION_REFUSED/RESET/proxy chặn)
+// — KHÔNG phải lỗi HTTP 4xx/5xx (những lỗi đó vẫn là response hợp lệ). Trước
+// đây TypeError trần bay lên caller → toast chung chung không gợi ý sửa gì.
+// Giờ: nhận diện network failure → probe /api/health (public, không token)
+// để phân biệt "server chết hẳn" vs "request đứt giữa chừng (HMR/restart)"
+// → throw Error tiếng Việt chỉ đúng việc cần làm.
+
+function isNetworkFailure(err: unknown): boolean {
+  if (err instanceof TypeError) return true
+  const msg = err instanceof Error ? err.message : String(err)
+  return /Failed to fetch|NetworkError|Load failed|network error/i.test(msg)
+}
+
+/** Probe /api/health (public — không nằm sau proxy token) → message đúng nguyên nhân. */
+async function diagnoseNetworkFailure(url: string): Promise<never> {
+  let healthOk: boolean | null = null
+  try {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 3000)
+    try {
+      const res = await fetch('/api/health', { cache: 'no-store', signal: controller.signal })
+      healthOk = res.ok
+    } finally {
+      clearTimeout(timer)
+    }
+  } catch {
+    healthOk = false
+  }
+  const origin = typeof location !== 'undefined' ? location.origin : '(unknown origin)'
+  console.error(`[authedFetch] Network failure ${url} — /api/health=${healthOk ? 'OK' : 'FAIL'} (origin ${origin})`)
+  throw new Error(
+    healthOk
+      ? `Không gọi được ${url} (request bị đứt giữa chừng — server ${origin} vẫn sống, thường do dev server đang restart/HMR). Thử lại thao tác.`
+      : `Không kết nối được máy chủ app ${origin} (Failed to fetch ${url}). Kiểm tra: (1) dev server còn chạy không, (2) mở app đúng cổng server đang listen, (3) proxy/VPN có chặn localhost không.`,
+  )
+}
+
 export async function authedFetch(url: string, init: RequestInit = {}): Promise<Response> {
   // Cache-bust GET khi retry để không bao giờ ăn response 401 cũ từ HTTP cache
   // (trước đây browser cache 401 làm click file lỗi vĩnh viễn dù token đã tốt).
   let token = await ensureToken()
-  let res = await doFetch(url, init, token)
+  let res: Response
+  try {
+    res = await doFetch(url, init, token)
+  } catch (err) {
+    // R6 — network failure (Failed to fetch): chẩn đoán + throw message hướng
+    // hành động thay vì TypeError tràn bay lên caller (bắt buộc qua if — TS
+    // control-flow không hiểu Promise<never> là reject-đường).
+    if (isNetworkFailure(err)) {
+      return diagnoseNetworkFailure(url)
+    }
+    throw err
+  }
   if (res.status === 401) {
     // Cookie (nếu có) + token hiện tại đều bị từ chối — setup lại rồi retry 1 lần
     token = await fetchSetupToken()
@@ -78,7 +130,14 @@ export async function authedFetch(url: string, init: RequestInit = {}): Promise<
         !init.method || init.method.toUpperCase() === 'GET'
           ? `${url}${url.includes('?') ? '&' : '?'}_tmo_retry=${Date.now()}`
           : url
-      res = await doFetch(retryUrl, init, token)
+      try {
+        res = await doFetch(retryUrl, init, token)
+      } catch (err) {
+        if (isNetworkFailure(err)) {
+          return diagnoseNetworkFailure(url)
+        }
+        throw err
+      }
     }
   }
   return res

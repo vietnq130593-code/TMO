@@ -673,6 +673,38 @@ export function AgentRunSummaryBar({ summary }: { summary: AgentRunSummaryData }
 //   (3) Workflow chạy nền (user rời SSE): heartbeat delta kéo bubbles DB mới
 //       về và GỘP TIẾP vào panel (id 'tp_<firstId>' ổn định — không nhấp nháy).
 
+// ==================== R6 — FREE-TIER EGRESS HELPERS (module scope) ====================
+// User report 2026-10-31: chạy app trên máy cá nhân ở Việt Nam (đã đăng nhập
+// opencode) nhưng thông báo vẫn nói "bị chặn vì app chạy trên datacenter
+// Alibaba Cloud HK" — span hardcode kết luận Task 30 (sandbox-era) không kiểm
+// chứng nơi app THẬT SỰ chạy. Các panel giờ render egress động từ probe mới
+// (server kèm egress + cliOk trong session store). Helper tách khỏi JSX để
+// tránh template-literal lồng nhau (làm parser TS/esbuild derail — bug này
+// đã xảy ra khi viết inline trong JSX, lỗi cascade TS17008 cả file).
+type R6EgressInfo = { ip: string; org: string; country: string; city?: string; isDatacenter: boolean }
+
+function egressLineR6(eg?: R6EgressInfo | null): string {
+  if (!eg) return 'chưa có egress — bấm Thử lại probe để nói thật môi trường'
+  const place = [eg.city, eg.country].filter(Boolean).join(', ')
+  const head = `egress máy chạy app: ${eg.org} — ${eg.ip}${place ? ` (${place})` : ''}`
+  return eg.isDatacenter
+    ? `${head} — datacenter → Zen chặn theo IP máy chủ`
+    : `${head} — KHÔNG phải datacenter: thông báo cũ "IP máy chủ" hết căn cứ ở máy này`
+}
+
+function cliOkLineR6(cliOk?: boolean): string {
+  if (cliOk === true) return ' · CLI transport vẫn chạy được lõi free'
+  if (cliOk === false) return ' · CLI cũng bị chặn'
+  return ''
+}
+
+/** Dòng dropdown model khi đã đăng nhập nhưng free-tier vẫn bị chặn (kèm egress ngắn). */
+function dropdownBlockedLineR6(email?: string, eg?: Pick<R6EgressInfo, 'org' | 'isDatacenter'> | null): string {
+  const base = `⚠ Đã đăng nhập OpenCode${email ? ` (${email})` : ''} — nhưng free-tier vẫn bị chặn`
+  if (!eg) return base
+  return `${base} (egress: ${eg.org}${eg.isDatacenter ? ' · datacenter' : ' · không phải datacenter'})`
+}
+
 /** ROUND-42 — màu chữ theo agent (name ưu tiên, position fallback) */
 function teamAgentTextClass(agent?: string, position?: string): string {
   return AGENT_COLORS[agent || '']?.text
@@ -2106,7 +2138,15 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
     loggedIn: boolean
     email?: string
     needsRefresh?: boolean
-    freeTier?: { probedAt: number; unlocked: boolean; detail: string }
+    freeTier?: {
+      probedAt: number
+      unlocked: boolean
+      detail: string
+      /** R6 — egress THẬT lúc probe (nói thật môi trường thay vì hardcode kết luận sandbox-era Task 30). */
+      egress?: { ip: string; org: string; country: string; city?: string; isDatacenter: boolean }
+      /** R6 — true/false khi probe route đã đo transport CLI; undefined = chưa đo lần này. */
+      cliOk?: boolean
+    }
     sessionRejectedRecently?: boolean
   } | null>(null)
   const [ocLogin, setOcLogin] = useState<{
@@ -2135,7 +2175,13 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         loggedIn?: boolean
         email?: string
         needsRefresh?: boolean
-        freeTier?: { probedAt: number; unlocked: boolean; detail: string }
+        freeTier?: {
+          probedAt: number
+          unlocked: boolean
+          detail: string
+          egress?: { ip: string; org: string; country: string; city?: string; isDatacenter: boolean }
+          cliOk?: boolean
+        }
         sessionRejectedRecently?: boolean
       }) => {
         setOcAuth({
@@ -6460,7 +6506,7 @@ ${manifest}` : rawText
                               <span className={ocAuth.freeTier?.unlocked ? 'text-emerald-300' : 'text-amber-300'}>
                                 {ocAuth.freeTier?.unlocked
                                   ? `🔓 Đã đăng nhập OpenCode${ocAuth.email ? ` (${ocAuth.email})` : ''} — lõi free đã mở khóa`
-                                  : `⚠ Đã đăng nhập OpenCode${ocAuth.email ? ` (${ocAuth.email})` : ''} — nhưng free-tier vẫn bị chặn`}
+                                  : dropdownBlockedLineR6(ocAuth.email, ocAuth.freeTier?.egress)}
                               </span>
                               <span className="flex items-center gap-1 shrink-0">
                                 {!ocAuth.freeTier?.unlocked && (
@@ -6766,7 +6812,11 @@ ${manifest}` : rawText
                                 <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={() => void reprobeOc()}>
                                   Thử lại probe
                                 </Button>
-                                <span className="text-stone-500 text-[10px]">(Task 30: Zen chặn free-tier theo IP máy chủ — datacenter bị từ chối; probe lại sau khi chạy app trên máy cá nhân/IP nhà)</span>
+                                {/* R6 (user report 2026-10-31): thay span hardcode Task 30
+                                    ("bị chặn vì app chạy trên datacenter Alibaba HK") bằng
+                                    egress THẬT của máy đang chạy app — kết luận cũ hết căn cứ
+                                    khi user chạy app trên máy cá nhân ở VN. */}
+                                <span className="text-stone-500 text-[10px]">(R6: {egressLineR6(ocAuth?.freeTier?.egress)}{cliOkLineR6(ocAuth?.freeTier?.cliOk)})</span>
                               </div>
                             )}
                           </div>

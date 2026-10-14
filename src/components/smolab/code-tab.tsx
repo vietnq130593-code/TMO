@@ -594,13 +594,32 @@ export function CodeTabContent() {
   // thật trên máy chạy server → trả về absolute path → set workspace giống tree picker.
   // Sandbox/headless không có display → fallback về tree picker trong app.
   // (Đặt SAU loadFolderPicker/loadFileTree để tránh TDZ trong deps array.)
+  // R6 (user report 2026-10-31 — "Failed to fetch" khi chạy local Windows):
+  // (a) res.json() bọc .catch → route trả non-JSON (404/500 HTML) không còn
+  //     ném SyntaxError tràn bay lên console;
+  // (b) catch hiển thị THÔNG ĐIỆP chẩn đoán (authedFetch giờ phân biệt network
+  //     failure qua /api/health) thay vì toast chung chung;
+  // (c) mọi nhánh fallback tree picker dùng path rỗng → browse route lấy
+  //     homedir() (đúng Windows/macOS/Linux) thay vì hardcode '/home/z' sandbox.
   const handleNativeFolderPick = useCallback(async () => {
     if (nativeFolderLoading) return
     setNativeFolderLoading(true)
     try {
       const res = await authedFetch('/api/opencode/native-folder', { method: 'POST' })
-      const data = await res.json()
-      if (data.supported && data.path) {
+      const data = (await res.json().catch(() => null)) as
+        | { supported?: boolean; path?: string; canceled?: boolean; reason?: string }
+        | null
+      if (!data) {
+        toast({
+          title: 'Lỗi mở dialog hệ thống',
+          description: `API trả HTTP ${res.status} (không phải JSON) — kiểm tra route /api/opencode/native-folder trong bản code local còn nguyên vẹn.`,
+          variant: 'destructive',
+          duration: 7000,
+        })
+        setFolderPickerPath(workspaceRoot || '')
+        loadFolderPicker(workspaceRoot || '')
+        setShowFolderPicker(true)
+      } else if (data.supported && data.path) {
         await handleWorkspaceSelect(data.path)
         loadFileTree()
       } else if (data.canceled) {
@@ -611,14 +630,26 @@ export function CodeTabContent() {
           description: `${data.reason || 'Máy chủ không có giao diện đồ hoạ'} — mở trình duyệt thư mục trong app thay thế.`,
           duration: 5000,
         })
-        // Fallback: mở tree picker trong app
-        setFolderPickerPath(workspaceRoot || '/home/z')
-        loadFolderPicker(workspaceRoot || '/home/z')
+        // Fallback: mở tree picker trong app (path rỗng → homedir của máy — R6)
+        setFolderPickerPath(workspaceRoot || '')
+        loadFolderPicker(workspaceRoot || '')
         setShowFolderPicker(true)
       }
     } catch (err) {
       console.error('[NativeFolder] Exception:', err)
-      toast({ title: 'Lỗi mở dialog hệ thống', variant: 'destructive' })
+      const msg = err instanceof Error ? err.message : String(err)
+      toast({
+        title: 'Lỗi mở dialog hệ thống',
+        description: msg.slice(0, 300),
+        variant: 'destructive',
+        duration: 8000,
+      })
+      // R6 — không dead-end: mở tree picker trong app để user tiếp tục làm việc
+      // (path rỗng → browse route dùng homedir() — đúng trên Windows/macOS/Linux,
+      // thay vì hardcode '/home/z' chỉ đúng trên sandbox).
+      setFolderPickerPath(workspaceRoot || '')
+      loadFolderPicker(workspaceRoot || '')
+      setShowFolderPicker(true)
     } finally {
       setNativeFolderLoading(false)
     }

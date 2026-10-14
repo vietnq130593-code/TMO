@@ -5022,6 +5022,86 @@ const OPENCODE_CLI_TIMEOUT_MS = parseInt(process.env.OPENCODE_CLI_TIMEOUT_MS || 
 let ocCliBinCache: { bin: string | null; at: number } | null = null
 let lastCliMissingWarnAt = 0
 
+// ==================== R6 — CLI TRANSPORT PROBE (free-tier) ====================
+// User report 2026-10-31: HTTP session probe bị Zen từ chối (FreeTierError)
+// nhưng llm.ts vẫn có đường failover CLI native — UI cần biết "lõi free vẫn
+// dùng được trên MÁY CHẠY APP qua CLI hay không" (cliOk). Probe route gọi
+// hàm này khi HTTP probe fail; kết quả enrich message + xoá block-cache cli.
+// Compact có chủ ý: KHÔNG đụng block-cache của transport thật (llm.ts tự
+// khám phá per-model khi call thật) — đây chỉ là 1 phép đo side-effect thấp.
+export async function probeZenFreeTierViaCli(
+  timeoutMs = 45_000,
+): Promise<{ ok: boolean; reason: string; bin: string | null }> {
+  if (!OPENCODE_CLI_ENABLED) return { ok: false, reason: 'OPENCODE_CLI_ENABLED=false', bin: null }
+  const bin = resolveOpenCodeCliBin()
+  if (!bin) return { ok: false, reason: 'opencode CLI chưa cài trên máy chạy app (resolver không thấy binary)', bin: null }
+  ensureOpenCodeAuth() // best-effort — chỉ ghi auth.json khi chưa có credential nào
+  const { spawn } = await import('child_process')
+  // Prompt nhỏ qua stdin (pattern Task 34 — Windows cmdline ~32K; .cmd/.bat
+  // shim npm Windows bắt buộc shell:true — copy nguyên pattern spawn chính).
+  const isCmdShim = /\.(cmd|bat)$/i.test(bin)
+  const args = ['run', '--model', 'opencode/space-bunny-free', '--format', 'json']
+  const PROMPT = 'Reply with exactly: OK'
+  return new Promise((resolve) => {
+    let settled = false
+    let stdout = ''
+    let stderr = ''
+    let child: ReturnType<typeof spawn>
+    const finish = (ok: boolean, reason: string) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve({ ok, reason, bin })
+    }
+    const timer = setTimeout(() => {
+      try { child?.kill('SIGKILL') } catch { /* đã chết */ }
+      finish(false, `CLI probe timeout ${timeoutMs}ms`)
+    }, timeoutMs)
+    try {
+      child = isCmdShim
+        ? spawn(bin, args, {
+            cwd: process.env.OPENCODE_WORKSPACE || process.cwd(),
+            stdio: ['pipe', 'pipe', 'pipe'],
+            env: { ...process.env, NO_COLOR: '1', TERM: 'dumb' },
+            windowsHide: true,
+            shell: true, // .cmd/.bat shim chỉ chạy được qua shell (Node spawn chặn trực tiếp)
+          })
+        : spawn(bin, args, {
+            cwd: process.env.OPENCODE_WORKSPACE || process.cwd(),
+            stdio: ['pipe', 'pipe', 'pipe'],
+            env: { ...process.env, NO_COLOR: '1', TERM: 'dumb' },
+            windowsHide: true,
+          })
+    } catch (err) {
+      finish(false, `spawn lỗi: ${err instanceof Error ? err.message : String(err)}`)
+      return
+    }
+    child.on('error', (err: Error) => finish(false, `spawn error: ${err.message}`))
+    child.stdout?.on('data', (d: Buffer) => { stdout += d.toString() })
+    child.stderr?.on('data', (d: Buffer) => { stderr += d.toString() })
+    child.on('close', (code: number | null) => {
+      const out = (stdout + '\n' + stderr).trim()
+      if (code === 0 && stdout.trim()) {
+        finish(true, `CLI trả lời (exit 0, ${stdout.trim().length}B output)`)
+      } else {
+        const blob = out.replace(/\s+/g, ' ').slice(0, 200)
+        finish(
+          false,
+          /FreeTierError|free tier/i.test(out)
+            ? `CLI cũng bị FreeTierError 403 (exit ${code})`
+            : `CLI exit ${code}${blob ? `: ${blob}` : ' (không output)'}`,
+        )
+      }
+    })
+    // TASK 34 — stdin non-interactive + đóng ngay sau write (EPIPE đã được ignore)
+    child.stdin?.on('error', () => { /* ignore EPIPE if child exits early */ })
+    try {
+      child.stdin?.write(PROMPT + '\n')
+      child.stdin?.end()
+    } catch { /* stdin đóng sớm — CLI có thể vẫn chạy */ }
+  })
+}
+
 /** Tìm binary opencode CLI đa nền tảng (Linux/macOS/Windows). null = không thấy. */
 function resolveOpenCodeCliBin(): string | null {
   const now = Date.now()
