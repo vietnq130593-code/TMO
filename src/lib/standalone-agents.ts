@@ -351,7 +351,7 @@ PHÂN CÔNG THEO CHỨC TRÁCH — NGUYÊN TẮC SẮT
 
 - Việc THI CÔNG chuyên môn — code/implement (RAMPAGE), review/bug/security (SENTINEL), tối ưu/refactor (CATALYST), thiết kế kiến trúc/DB/API (SHOCWAVE), phân tích + verify tổng thể (MEGATRON), research sâu, viết/sửa file lớn, đụng nhiều file → GIAO AGENT, KHÔNG tự làm thay.
 - Việc cần NHIỀU vai tuần tự (thiết kế → code → review → tối ưu → verify) hoặc khối lượng lớn → request_code_team (nguyên đội theo SOP).
-- Nhiều việc ĐỘC LẬP → dispatch_agents_parallel (chạy song song tối đa 3 sub-agent — mỗi sub-agent tự động ghim 1 API key riêng, hợp nhất kết quả).
+- Nhiều việc ĐỘC LẬP → dispatch_agents_parallel (chạy TUẦN TỰ: mỗi lượt 1 sub-agent hoàn tất mới tới kế tiếp — user directive R14; mỗi sub-agent tự ghim 1 API key riêng, hợp nhất kết quả).
 - Hệ thống THIẾU agent có kỹ năng phù hợp (đã kiểm tra Agent Roster) → create_agent rồi giao việc.
 - Việc QUẢN TRỊ VẬN HÀNH → CHÍNH BẠN làm: tra cứu trạng thái hệ thống (db_query, get_app_runtime_status, file_list, grep), kiểm định nhanh kết quả (file_read, lint, type_check, lệnh đếm/đối chiếu; tác vụ UI: start_preview + browser_screenshot chụp màn hình để nghiệm thu), tạo/cấu hình agents, quản lý tool-access (manage_tools), quản lý automation (manage_automation), git commit/push/pull theo yêu cầu, viết tool hệ thống còn thiếu (create_custom_tool).
 - Câu hỏi/thảo luận TRỰC TIẾP với bạn (hỏi kiến thức, hỏi ý kiến quản trị, trao đổi phương án, brainstorm cấp độ quản trị) → trả lời trực tiếp bằng vốn hiểu biết của bạn — KHÔNG cần delegate.
@@ -544,8 +544,8 @@ LEARNING & MEMORY + ĐỊNH DẠNG BÁO CÁO
       'escalate_problem',
       'create_agent',
       'dispatch_agent',
-      // FAN-OUT/FAN-IN (user report 2026-09-14 #1): dispatch 2-4 sub-agent
-      // SONG SONG + hợp nhất kết quả (xung đột liệt kê, không throw).
+      // FAN-OUT/FAN-IN (user report 2026-09-14 #1; R14): dispatch 2-4 sub-agent
+      // TUẦN TỰ (mỗi lượt 1) + hợp nhất kết quả (xung đột liệt kê, không throw).
       'dispatch_agents_parallel',
       // 21-c: OMEGA TOOLS MANAGER — Omega tự quản lý tool-access của agents khi
       // user yêu cầu ("hãy bật tool X cho agent Y") + đọc/sửa SKILL.md filesystem.

@@ -85,12 +85,21 @@ export function fingerprintDebtIssue(raw: string): string {
   s = s.replace(/(?:\/|\\)[\w.\-]+(?:\/|\\)[\w.\-/\\]*/g, ' path ')
   // Timestamp ISO + số đếm độc lập (giữ số trong từ ghép như "410", "e500")
   s = s.replace(/\d{4}-\d{2}-\d{2}[t ]\d{2}:\d{2}(:\d{2})?/g, 'ts')
-  // Số đếm nhỏ (1-2 chữ số: lần thử, index, version) → 'n' (run 1 ≡ run 99);
-  // GIỮ số ≥3 chữ số (HTTP 410/403/500, exit code) — chúng là đặc trưng lỗi.
-  s = s.replace(/\b\d{1,2}\b/g, 'n')
+  // FB-R13DEBT-R1-07: số đếm nhỏ (1-2 chữ số: lần thử, index, version, exit
+  // code 1-2 chữ số) → 'n' (run 1 ≡ run 99); GIỮ nguyên run ≥3 chữ số (HTTP
+  // 410/403/500, exit code 3+ chữ số) — đặc trưng lỗi. Match theo RUN chữ số
+  // (\d+) rồi chấm độ dài — thay cho \b\d{1,2}\b cũ: \b ASCII không bắt
+  // được số dính chữ unicode ("lỗi12lần" giữ "12" trong khi "lỗi 12 lần" → 'n'
+  // — 2 văn phong khác nhau của cùng lỗi bị tách oan). Run-approach bắt cả 2.
+  // ' n ' có space padding 2 bên: "lỗi12lần" → "lỗi n lần" ≡ "lỗi 12 lần"
+  // (nếu thay bằng 'n' không space: "lỗinlần" ≠ "lỗi n lần" — lệch spacing).
+  s = s.replace(/\d+/g, (run) => (run.length >= 3 ? run : ' n '))
   // Whitespace
   s = s.replace(/\s+/g, ' ').trim()
-  return s.slice(0, 160)
+  // FB-R13DEBT-R1-07: KHÔNG cắt 160 ký tự — 2 issue chỉ khác nhau SAU ký tự
+  // 160 sẽ trùng fingerprint → false-dedupe (recurrence đếm nhầm sang nợ khác).
+  // Full-length: SQLite TEXT không giới hạn, unique constraint vẫn hoạt động.
+  return s
 }
 
 /** Tách title hiển thị từ nội dung Follow-up (bỏ prefix, giữ condSuffix). */
@@ -157,7 +166,7 @@ export async function recordDebtIssue(params: RecordDebtParams): Promise<void> {
         data: {
           status: 'open',
           attempts: 0,
-          recurrenceCount: existing.recurrenceCount + 1,
+          recurrenceCount: { increment: 1 },
           lastSeenAt: now,
           resolvedAt: null,
           resolvedByRunId: null,
@@ -169,9 +178,11 @@ export async function recordDebtIssue(params: RecordDebtParams): Promise<void> {
       return
     }
     // open / in_progress / parked → bump recurrence + lastSeenAt
+    // FB-R13DEBT-R1-05: increment phía DB (2 run song song ghi cùng debt —
+    // read-then-write cũ mất update: 0→1 thay vì 0→2).
     await db.debtLedger.update({
       where: { id: existing.id },
-      data: { lastSeenAt: now, recurrenceCount: existing.recurrenceCount + 1 },
+      data: { lastSeenAt: now, recurrenceCount: { increment: 1 } },
     })
   } catch (err) {
     // Fail-open — sổ nợ không được phép làm hỏng flow ghi nợ gốc
@@ -220,7 +231,39 @@ export async function pickupDebtForRun(params: {
   agentName?: string
 }): Promise<DebtPickupResult> {
   const empty: DebtPickupResult = { directiveBlock: '', picked: [], openCountBefore: 0 }
-  if (!DEBT_LEDGER_ENABLED || !params.sessionId) return empty
+  if (!params.sessionId) return empty
+  // FB-R13DEBT-R1-03: kill-switch DEBT_LEDGER=0 chỉ tắt SỔ CÁI (DebtLedger) —
+  // KHÔNG được tát same-session pickup (chức năng user directive 2026-10-27 có
+  // từ TRƯỚC R13; comment module này hứa "goal-loop vẫn chạy same-session như
+  // cũ" nhưng thực tế đã âm thầm mất). Fallback: dựng block legacy INLINE
+  // (query + format hệt buildPendingDebtBlock — không import ngược vào
+  // agent-goal-loop để tránh chu trình tĩnh mới cho check:imports).
+  if (!DEBT_LEDGER_ENABLED) {
+    try {
+      const { db } = await import('@/lib/db')
+      const pending = await db.todo.findMany({
+        where: {
+          sessionId: params.sessionId,
+          status: { in: ['pending', 'in_progress', 'blocked'] },
+          content: { startsWith: '🔁 Follow-up' },
+        },
+        orderBy: { createdAt: 'asc' },
+        take: 10,
+      })
+      const debt = pending.filter(t => t.runId !== params.currentRunId)
+      if (debt.length === 0) return empty
+      const lines = debt.map(t => `- [id ${t.id}] ${t.content.replace(/^🔁 Follow-up \([^)]*\):\s*/, '')}`)
+      return {
+        directiveBlock: `\n[📋 NỢ KỸ THUẬT CÒN TREO — ƯU TIÊN XỬ LÝ TRƯỚC VIỆC MỚI (user directive 2026-10-27; sổ cái DebtLedger OFF — chế độ legacy)]
+Các run trước trong phiên này còn ${debt.length} nợ kỹ thuật chưa xử lý (trọng tài đã ghi Todo follow-up). Thứ tự ưu tiên SẮT của run này:
+1. XỬ LÝ TOÀN BỘ nợ dưới đây TRƯỚC TIÊN (đưa từng mục vào todo_write kế hoạch, đặt TRƯỚC các việc mới).
+2. Xử lý xong mục nào → gọi todo_write với ĐÚNG "id" của mục đó + status "completed" (đóng row cũ — KHÔNG tạo row trùng nội dung).
+${lines.join('\n')}`,
+        picked: [],
+        openCountBefore: 0,
+      }
+    } catch { return empty }
+  }
   try {
     const { db } = await import('@/lib/db')
     const now = new Date()
@@ -242,31 +285,48 @@ export async function pickupDebtForRun(params: {
     const sameSession = pending.filter(t => t.runId !== params.currentRunId)
     if (sameSession.length > 0) {
       console.log(`[DebtLedger] NHẶT NỢ same-session: ${sameSession.length} mục từ các run trước trong session ${params.sessionId}`)
-      // Đánh dấu DebtLedger tương ứng (nếu có row) — attempts++ mỗi lần nhặt
+      // Đánh dấu DebtLedger tương ứng (nếu có row) — attempts++ mỗi lần nhặt.
+      // FB-R13DEBT-R1-02b: nợ parked/resolved KHÔNG còn được đưa vào khối
+      // "ƯU TIÊN XỬ LÝ TRƯỚC VIỆC MỚI" — hệ thống đã dừng thử (park) hoặc đã
+      // xong (resolved); đốt chu kỳ cho chúng là lặp "giải quyết nhưng không
+      // giải quyết được" mà R13 ra đời để chữa. Chuyển sang ghi-chú thông tin.
+      const parkedNotes: string[] = []
+      const actionable: typeof sameSession = []
       for (const t of sameSession) {
         const fp = fingerprintDebtIssue(t.content)
         try {
           const row = await db.debtLedger.findUnique({ where: { fingerprint: fp } })
           if (row && row.status !== 'resolved' && row.status !== 'parked') {
-            await db.debtLedger.update({
-              where: { id: row.id },
-              data: { status: 'in_progress', attempts: row.attempts + 1, lastAttemptRunId: params.currentRunId, lastAttemptAt: now },
-            })
+            // FB-R13DEBT-R1-05: claim có điều kiện cạnh tranh — updateMany đúng
+            // trạng thái đang thấy; thua đua (run khác đã claim) → bỏ qua mục này.
+            const claimed = await db.debtLedger.updateMany({
+              where: { id: row.id, status: row.status },
+              data: { status: 'in_progress', attempts: { increment: 1 }, lastAttemptRunId: params.currentRunId, lastAttemptAt: now },
+            }).catch(() => null)
+            if (!claimed || claimed.count !== 1) continue
             picked.push({ debtLedgerId: row.id, fingerprint: fp, title: row.title, mirrorTodoId: t.id, origin: 'session' })
+            actionable.push(t)
           } else if (row) {
-            // Debt parked/resolved nhưng Todo same-session vẫn mở — vẫn đưa cho
-            // agent (format cũ) nhưng KHÔNG đếm attempt (parked đã hết lượt thử).
-            picked.push({ debtLedgerId: row.id, fingerprint: fp, title: row.title, mirrorTodoId: t.id, origin: 'session' })
+            parkedNotes.push(`- [id ${t.id}] ${debtTitleFrom(t.content)} — ${row.status === 'parked' ? 'ĐÃ PARK (hết lượt thử, chờ điều kiện/thầy reopen)' : 'ĐÃ RESOLVED'} — KHÔNG thử lại trong run này (xem /api/debt/status).`)
+          } else {
+            // Chưa có row DebtLedger (nợ tiền-R13) → xử lý như cũ
+            actionable.push(t)
           }
         } catch { /* từng item fail-open */ }
       }
-      const lines = sameSession.map(t => `- [id ${t.id}] ${t.content.replace(/^🔁 Follow-up \([^)]*\):\s*/, '')}`)
-      blocks.push(`[📋 NỢ KỸ THUẬT CÒN TREO TRONG PHIÊN NÀY — ƯU TIÊN XỬ LÝ TRƯỚC VIỆC MỚI (user directive 2026-10-27)
-Các run trước trong phiên còn ${sameSession.length} nợ chưa xử lý. Thứ tự:
+      if (actionable.length > 0) {
+        const lines = actionable.map(t => `- [id ${t.id}] ${t.content.replace(/^🔁 Follow-up \([^)]*\):\s*/, '')}`)
+        blocks.push(`[📋 NỢ KỸ THUẬT CÒN TREO TRONG PHIÊN NÀY — ƯU TIÊN XỬ LÝ TRƯỚC VIỆC MỚI (user directive 2026-10-27)
+Các run trước trong phiên còn ${actionable.length} nợ chưa xử lý. Thứ tự:
 1. XỬ LÝ nợ dưới đây TRƯỚC TIÊN (đưa vào todo_write kế hoạch, đặt TRƯỚC việc mới).
 2. Xử lý xong mục nào → todo_write với ĐÚNG "id" + status "completed" (kèm bằng chứng verify) — KHÔNG tạo row trùng.
 3. Mục ngoài quyền sửa → đã thử đủ đường tự phục vụ (manage_packages, sửa schema + db:push, create_custom_tool, dispatch_agent, escalate_problem) chưa? Thử hết rồi mới nêu "chờ phê duyệt" + ĐIỀU KIỆN CẦN.
 ${lines.join('\n')}`)
+      }
+      if (parkedNotes.length > 0) {
+        blocks.push(`[ℹ️ NỢ PHIÊN NÀY ĐÃ DỪNG THEO DÕI (DebtLedger R14) — KHÔNG đưa vào kế hoạch:
+${parkedNotes.join('\n')}`)
+      }
     }
 
     // ---- (b) Global cross-session pickup (N1 — vòng đời khép kín xuyên session) ----
@@ -314,10 +374,15 @@ ${lines.join('\n')}`)
             },
           }).catch(() => null)
           if (!mirror) continue
-          await db.debtLedger.update({
-            where: { id: d.id },
-            data: { status: 'in_progress', attempts: d.attempts + 1, lastAttemptRunId: params.currentRunId, lastAttemptAt: now },
-          }).catch(() => { /* item fail-open */ })
+          // FB-R13DEBT-R1-05: claim có điều kiện cạnh tranh — 2 run song song
+          // cùng đón 1 debt phải chỉ 1 bên thắng (count===1); thua → bỏ mirror
+          // vừa tạo khỏi picked (mirror pending vô chủ sẽ bị same-session
+          // pickup lần sau hoặc sweeper dọn).
+          const claimed = await db.debtLedger.updateMany({
+            where: { id: d.id, status: d.status },
+            data: { status: 'in_progress', attempts: { increment: 1 }, lastAttemptRunId: params.currentRunId, lastAttemptAt: now },
+          }).catch(() => null)
+          if (!claimed || claimed.count !== 1) continue
           picked.push({ debtLedgerId: d.id, fingerprint: d.fingerprint, title: d.title, mirrorTodoId: mirror.id, origin: 'global' })
           gLines.push(`- [id ${mirror.id}] ${d.title}`)
         }
@@ -409,10 +474,22 @@ export async function finalizeDebtAfterRun(params: {
     const summary: DebtFinalizeSummary = { ...empty }
     for (const d of mine) {
       if (d.status === 'resolved' || d.status === 'parked') continue // đã xong ở bước khác
-      // Tìm mirror Todo (session hiện tại, taskMeta debtLedgerId) hoặc Todo gốc
+      // Tìm mirror Todo (session hiện tại, taskMeta debtLedgerId) hoặc Todo GỐC
+      // FB-R13DEBT-R1-01 (P1): lookup cũ chỉ match taskMetaJson contains d.id —
+      // chỉ Todo mirror GLOBAL có debtLedgerId trong taskMeta; Todo GỐC
+      // (same-session — 3 đường ghi agent-goal-loop 5446/5491/5973 không set)
+      // KHÔNG BAO GIỜ match → nợ same-session không bao giờ resolved (kẹt open
+      // → park oan dù agent đã hoàn thành + trọng tài không re-list). Fix:
+      // OR thêm d.todoId (schema lưu id Todo gốc lúc recordDebtIssue).
       let mirrorStatus: string | null = null
       const mirror = await db.todo.findFirst({
-        where: { sessionId: params.sessionId ?? undefined, taskMetaJson: { contains: d.id } },
+        where: {
+          sessionId: params.sessionId ?? undefined,
+          OR: [
+            { taskMetaJson: { contains: d.id } },
+            ...(d.todoId ? [{ id: d.todoId }] : []),
+          ],
+        },
         orderBy: { createdAt: 'desc' },
       }).catch(() => null)
       if (mirror) mirrorStatus = mirror.status
@@ -443,6 +520,16 @@ export async function finalizeDebtAfterRun(params: {
         // status failed không nằm trong pending/in_progress/blocked)
         if (mirror && ['pending', 'in_progress', 'blocked'].includes(mirror.status)) {
           await db.todo.update({ where: { id: mirror.id }, data: { status: 'failed' } }).catch(() => { /* fail-open */ })
+        }
+        // FB-R13DEBT-R1-02a: Todo GỐC (d.todoId — đường same-session) cũng đánh
+        // 'failed' khi park — nếu không, same-session pickup vẫn re-list nợ đã
+        // park trong directive "ƯU TIÊN XỬ LÝ" (agent đốt chu kỳ cho nợ mà hệ
+        // thống đã công nhận không giải quyết được).
+        if (d.todoId) {
+          const orig = await db.todo.findUnique({ where: { id: d.todoId } }).catch(() => null)
+          if (orig && ['pending', 'in_progress', 'blocked'].includes(orig.status)) {
+            await db.todo.update({ where: { id: d.todoId }, data: { status: 'failed' } }).catch(() => { /* fail-open */ })
+          }
         }
         summary.parked++
         summary.parkedTitles.push(d.title.slice(0, 90))
@@ -508,4 +595,10 @@ if (DEBT_LEDGER_ENABLED) {
       console.log(`[DebtLedger] Hiện trạng sổ nợ: open=${c.open ?? 0} in_progress=${c.in_progress ?? 0} resolved=${c.resolved ?? 0} parked=${c.parked ?? 0}`)
     }
   }).catch(() => { /* im lặng */ })
+  // FB-R13DEBT-R1-08: sweeper có đồng hồ riêng — trước đây chỉ chạy bên trong
+  // pickupDebtForRun (hệ thống chỉ còn fast-path chat thì zombie không bao giờ
+  // được dọn). Hẹn 5s sau module-load (tránh đơ boot / đụng next build),
+  // fail-open im lặng; rate-limit 1h nội bộ vẫn áp.
+  const sweepTimer = setTimeout(() => { void maybeSweepStaleTodos().catch(() => {}) }, 5_000)
+  sweepTimer.unref?.()
 }

@@ -96,7 +96,7 @@ Quy tắc:
 1. Khi cần tool → emit tool_calls (model sẽ handle). KHÔNG viết "tool_call: name({...})" text.
 2. Khi KHÔNG cần tool → trả text bình thường.
 3. Args phải match JSON schema chính xác — không thêm trường không có trong schema.
-4. Tool calls có thể song song — emit nhiều tool_calls trong 1 response khi độc lập.`
+4. Tool calls trong 1 response được thực thi LẦN LƯỢT theo thứ tự (R14 — tuần tự) — vẫn cứ emit nhiều tool_calls khi độc lập; kết quả về đủ đúng vị trí cho LLM.`
 }
 
 // ===== ROUND-45 — KỶ LUẬT THỰC THI (block dùng chung, harness ÉP thật) =====

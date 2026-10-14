@@ -75,8 +75,10 @@ export function formatUncommittedBlock(status: WorkspaceGitStatus, title: string
 /**
  * DELTA 2 ảnh chụp git status (trước/sau một khoảng thời gian — vd thời gian
  * sub-agent chạy): trả MỚI/XỬA dòng (dòng có ở sau mà không có ở trước).
- * 2 sub-agent chạy song song chia sẻ working tree → delta có thể lẫn thay
- * đổi của agent kia — caller ghi rõ ngữ cảnh "trong khoảng thời gian chạy".
+ * Từ R14 sub-agent chạy tuần tự (pool 1-slot) nhưng delta vẫn có thể lẫn thay
+ * đổi của tiến trình khác (goal-loop job song song, automation) — caller ghi rõ
+ * ngữ cảnh "trong khoảng thời gian chạy" (trước R14: 2 sub-agent chạy song song
+ * chia sẻ working tree — guard giữ nguyên làm defense in depth).
  */
 export function diffGitStatusSnapshots(before: WorkspaceGitStatus, after: WorkspaceGitStatus): string[] {
   if (!after.ok) return []

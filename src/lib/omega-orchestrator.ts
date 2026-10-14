@@ -868,19 +868,24 @@ async function runDispatchTask(
   }
 }
 
-// ==================== FAN-OUT / FAN-IN (user report 2026-09-14 #1) ====================
+// ==================== FAN-OUT / FAN-IN (user report 2026-09-14 #1; R14 tuần tự hóa) ====================
 
 /**
- * DISPATCH SONG SONG + HỢP NHẤT — dispatch N sub-agent chạy ĐỒNG THỜI
- * (Promise.allSettled) rồi merge kết quả:
- *   - Mỗi sub-agent độc lập: 1 fail KHÔNG kéo sập cả batch (no-throwError
- *     — lỗi của agent nào báo riêng kết quả của agent đó).
+ * DISPATCH TUẦN TỰ + HỢP NHẤT — dispatch N sub-agent MỖI LƯỢT 1 (user
+ * directive R14 bản 3, ghi đè 2026-10-29b "chạy đồng thời"):
+ *   - Mỗi lượt chỉ 1 sub-agent chạy; sub-agent đó HOÀN THÀT (kết quả +
+ *     evaluation về đủ) thì mới dispatch sub-agent kế tiếp — đúng semantics
+ *     "lần lượt agent này xử lý xong mới tới agent khác để khỏi vấn đề lỗi"
+ *     (nguồn lỗi đồng thời đã đo được R11: OOM kill khi nhiều opencode spawn
+ *     cùng lúc ~600MB/cái, SQLite contention, recompile chồng nhau).
+ *   - Mỗi sub-agent độc lập về kết quả: 1 fail KHÔNG kéo sập cả batch
+ *     (no-throwError — lỗi của agent nào báo riêng kết quả của agent đó).
  *   - Xung đột kết quả (2+ agent đụng cùng file / kết luận trái ngược)
  *     KHÔNG throw — liệt kê vào `conflicts` để agent cha tự phân xử.
  *   - Merged summary đếm succeeded/failed + tổng token — parent đọc 1 chỗ.
  *
- * Cap bảo vệ: tối đa 4 task/lần (nhất quán DELEGATE_PRE-FLIGHT của goal-loop —
- * sub-agent có budget riêng 40k token/lần; 4 song song ≈ trần hợp lý).
+ * Cap bảo vệ: tối đa 4 task/lần call (giữ nguyên cap batch của bản 2 —
+ * giờ là cap ĐỘ DÀI hàng đợi tuần tự, không phải concurrency).
  */
 export async function dispatchAgentsParallel(params: {
   tasks: Array<{ agent: string; task: string; context?: string }>
@@ -910,7 +915,7 @@ export async function dispatchAgentsParallel(params: {
   merged: string
 }> {
   const { tasks, parentAgentName = 'Omega', sessionId = null, parentRunId = null } = params
-  const MAX_PARALLEL = 4
+  const MAX_PARALLEL = 4 // cap số task/lần call — giờ là cap chiều DÀI hàng đợi tuần tự (R14), không phải concurrency
   const valid = (Array.isArray(tasks) ? tasks : [])
     .filter(t => t && typeof t.agent === 'string' && t.agent.trim() && typeof t.task === 'string' && t.task.trim())
     .slice(0, MAX_PARALLEL)
@@ -923,29 +928,16 @@ export async function dispatchAgentsParallel(params: {
     }
   }
 
-  console.log(`[OmegaOrchestrator] FAN-OUT: ${valid.length} sub-agent chạy song song — slot pool điều tiết tối đa 3 (mỗi sub-agent 1 API key riêng, user directive 2026-10-29b) (${valid.map(t => t.agent).join(', ')}) theo yêu cầu của ${parentAgentName}`)
+  console.log(`[OmegaOrchestrator] FAN-OUT: ${valid.length} sub-agent — TUẦN TỰ: mỗi lượt 1 sub-agent, hoàn tất (kết quả + evaluation) mới tới kế tiếp (user directive R14, ghi đè 2026-10-29b) (${valid.map(t => t.agent).join(', ')}) theo yêu cầu của ${parentAgentName}`)
 
-  // USER DIRECTIVE 2026-10-29b — chạy ĐỒNG THỜI (trở lại fan-out thật): slot
-  // pool trong subagent-delegate (3 permit FIFO, mỗi permit ghim 1 key Zen)
-  // tự điều tiết ≤3 sub-agent cùng lúc — task thừa xếp hàng nhận slot khi nhả.
-  // allSettled đảm bảo không delegation nào throw ra ngoài (reject → đổi
-  // thành outcome fail của chính nó — lỗi agent nào báo riêng agent đó).
+  // USER DIRECTIVE R14 (bản 3 — ghi đè bản 2 2026-10-29b "chạy đồng thời"):
+  // dispatch TUẦN TỰ bằng vòng for-await — mỗi lượt chỉ 1 sub-agent; agent này
+  // xử lý xong (dispatchAgentByOmega trả đủ kết quả) mới dispatch kế tiếp.
+  // Đi qua runSubAgentForProfile (điểm đi qua duy nhất — pool 1 slot) nên mọi
+  // đường gọi khác cũng tự tuần tự theo. Mỗi dispatch fail-open như cũ:
+  // lỗi agent nào báo riêng agent đó — KHÔNG kéo sập batch.
   // (Token KHÔNG đếm qua callback — tổng tokensUsed trả về trong result để
   // caller đếm đúng 1 lần, tránh double-count ở goal-loop processToolResult.)
-  const settled = await Promise.allSettled(
-    valid.map(t =>
-      dispatchAgentByOmega({
-        agent: t.agent,
-        task: t.task,
-        context: t.context,
-        duration: 'task',
-        parentAgentName,
-        sessionId,
-        parentRunId,
-      }).then(r => ({ agent: t.agent, r })),
-    ),
-  )
-
   // FAN-IN — hợp nhất kết quả, KHÔNG throwError xung đột:
   let tokensUsed = 0
   let succeeded = 0
@@ -961,19 +953,30 @@ export async function dispatchAgentsParallel(params: {
   }> = []
   const fileTouch = new Map<string, string[]>() // filePath → [agentName...]
 
-  for (const s of settled) {
-    if (s.status === 'rejected') {
+  for (const [fanIdx, t] of valid.entries()) {
+    console.log(`[OmegaOrchestrator] FAN-OUT tuần tự ${fanIdx + 1}/${valid.length}: dispatch ${t.agent} (các sub-agent còn lại chờ tới lượt)`)
+    let r: Awaited<ReturnType<typeof dispatchAgentByOmega>>
+    try {
+      r = await dispatchAgentByOmega({
+        agent: t.agent,
+        task: t.task,
+        context: t.context,
+        duration: 'task',
+        parentAgentName,
+        sessionId,
+        parentRunId,
+      })
+    } catch (err) {
       // Exception văng từ dispatch (đã hiếm — dispatchAgentByOmega fail-open)
       // → coi là 1 kết quả fail của agent đó, KHÔNG sập batch.
-      const msg = s.reason instanceof Error ? s.reason.message : String(s.reason)
-      results.push({ agent: '?', success: false, report: '', tokensUsed: 0, toolCalls: 0, endedBy: 'error', error: msg })
+      const msg = err instanceof Error ? err.message : String(err)
+      results.push({ agent: t.agent, success: false, report: '', tokensUsed: 0, toolCalls: 0, endedBy: 'error', error: msg })
       continue
     }
-    const { agent, r } = s.value
     tokensUsed += r.tokensUsed ?? 0
     if (r.success) succeeded++
     results.push({
-      agent: r.agent || agent,
+      agent: r.agent || t.agent,
       success: r.success,
       report: r.report ?? '',
       tokensUsed: r.tokensUsed ?? 0,
@@ -987,7 +990,7 @@ export async function dispatchAgentsParallel(params: {
     const paths = (r.report ?? '').match(/[\w./-]+\.(?:ts|tsx|js|jsx|json|md|prisma|css)/g) ?? []
     for (const p of new Set(paths.slice(0, 40))) {
       const list = fileTouch.get(p) ?? []
-      if (!list.includes(r.agent || agent)) list.push(r.agent || agent)
+      if (!list.includes(r.agent || t.agent)) list.push(r.agent || t.agent)
       fileTouch.set(p, list)
     }
   }
@@ -1001,7 +1004,7 @@ export async function dispatchAgentsParallel(params: {
 
   const failed = results.length - succeeded
   const summaryLines = [
-    `FAN-OUT ${results.length} sub-agent song song — ${succeeded} đạt / ${failed} chưa đạt · ${tokensUsed} tokens${conflicts.length > 0 ? ` · ⚠️ ${conflicts.length} xung đột tiềm năng` : ''}`,
+    `FAN-OUT ${results.length} sub-agent tuần tự (mỗi lượt 1) — ${succeeded} đạt / ${failed} chưa đạt · ${tokensUsed} tokens${conflicts.length > 0 ? ` · ⚠️ ${conflicts.length} xung đột tiềm năng` : ''}`,
     ...results.map(r =>
       `${r.success ? '✅' : '❌'} ${r.agent}: ${(r.error && !r.report ? r.error : (r.report || r.error || '(không có báo cáo)')).slice(0, 600)}${r.report && r.error ? `\n   ⚠️ ${r.error.slice(0, 200)}` : ''}`,
     ),

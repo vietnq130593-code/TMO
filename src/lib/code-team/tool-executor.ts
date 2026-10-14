@@ -2026,18 +2026,19 @@ const ALL_TOOL_DEFINITIONS: Record<string, ToolDefinition> = {
     },
   },
 
-  // ===== FAN-OUT / FAN-IN (user report 2026-09-14 #1) =====
-  // Dispatch NHIỀU sub-agent ĐỒNG THỜI + hợp nhất kết quả. Xung đột kết quả
-  // KHÔNG throw — liệt kê conflicts để agent cha tự phân xử.
+  // ===== FAN-OUT / FAN-IN (user report 2026-09-14 #1; R14 tuần tự hóa) =====
+  // Dispatch NHIỀU sub-agent TUẦN TỰ (mỗi lượt 1 — user directive R14) + hợp
+  // nhất kết quả. Xung đột kết quả KHÔNG throw — liệt kê conflicts để agent
+  // cha tự phân xử.
   dispatch_agents_parallel: {
     type: 'function',
     function: {
       name: 'dispatch_agents_parallel',
       description:
-        'FAN-OUT: dispatch 2-4 sub-agent chạy ĐỒNG THỜI (slot pool điều tiết tối đa 3 sub-agent — mỗi sub-agent tự động ghim 1 API key riêng, user directive 2026-10-29b) rồi HỢP NHẤT (fan-in) kết quả về 1 báo cáo. ' +
-        'Mỗi sub-agent độc lập — 1 agent fail KHÔNG kéo sập cả lô; xung đột (2+ agent cùng đụng 1 file) được LIỆT KÊ trong "conflicts" thay vì báo lỗi. ' +
-        'Dùng khi tác vụ tách được thành các nhánh ĐỘC LẬP (vd: review 3 module khác nhau, phân tích song song nhiều phần). ' +
-        'Tác vụ có phụ thuộc tuần tự (B cần kết quả A) thì dùng dispatch_agent từng cái.',
+        'FAN-OUT: dispatch 2-4 sub-agent — TUẦN TỰ: mỗi lượt 1 sub-agent chạy xong (kết quả + evaluation) mới tới kế tiếp (user directive R14, thay chế độ đồng thời 2026-10-29b để tránh lỗi đồng thời), rồi HỢP NHẤT (fan-in) kết quả về 1 báo cáo. ' +
+        'Mỗi sub-agent độc lập về kết quả — 1 agent fail KHÔNG kéo sập cả lô; xung đột (2+ agent cùng đụng 1 file) được LIỆT KÊ trong "conflicts" thay vì báo lỗi. ' +
+        'Dùng khi cần giao nhiều nhánh việc cho các agent khác nhau (vd: review 3 module khác nhau) — hệ thống tự chạy lần lượt từng agent, bạn không cần tự gọi dispatch_agent từng cái. ' +
+        'Tên giữ "parallel" cho tương thích call-site; hành vi hiện tại là hàng đợi tuần tự.',
       parameters: {
         type: 'object',
         properties: {
@@ -3929,7 +3930,16 @@ export async function executeTool(
           // đang giữ slot toàn cục của runSubAgentForProfile → dispatch lồng
           // sẽ xếp hàng chờ CHÍNH NÓ → deadlock. Advisory vẫn trả đủ; sub-agent
           // làm theo tư vấn hoặc báo parent dispatch giúp ở vòng sau.
-          const calledFromSubAgent = Boolean(context?.delegationRunId)
+          // FB-SERIAL-R1-01 (R14): guard cũ chỉ dựa context.delegationRunId —
+          // NULL khi sub-agent chạy không sessionId (eval harness) hoặc tracker
+          // throw fail-open → tưởng là parent → auto-apply dispatch lồng → với
+          // pool=1 sub-agent tự-chờ chính nó. Bổ sung detect AsyncLocalStorage
+          // (isInsideSubAgentRun — phủ mọi đường, không phụ thuộc runId).
+          let calledFromSubAgent = Boolean(context?.delegationRunId)
+          try {
+            const { isInsideSubAgentRun } = await import('@/lib/subagent-delegate')
+            if (isInsideSubAgentRun()) calledFromSubAgent = true
+          } catch { /* fail-open: giữ guard cũ */ }
           const autoApply = args.auto_apply !== false && args.auto_apply !== 'false' && !calledFromSubAgent
           const suggestedAgent = consult.advisory?.dispatchAgent?.trim()
           if (autoApply && suggestedAgent && isFlagEnabled('ENABLE_SUBAGENT_DELEGATE')) {
@@ -4054,8 +4064,8 @@ export async function executeTool(
         }
         break
       }
-      // ===== FAN-OUT / FAN-IN (user report 2026-09-14 #1) =====
-      // Dispatch nhiều sub-agent SONG SONG + hợp nhất — xung đột KHÔNG throw.
+      // ===== FAN-OUT / FAN-IN (user report 2026-09-14 #1; R14 tuần tự) =====
+      // Dispatch nhiều sub-agent TUẦN TỰ (mỗi lượt 1) + hợp nhất — xung đột KHÔNG throw.
       case 'dispatch_agents_parallel': {
         if (!isFlagEnabled('ENABLE_SUBAGENT_DELEGATE')) {
           return {

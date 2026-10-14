@@ -46,7 +46,7 @@ export const RESEARCH_ROSTER: readonly AgentRosterEntry[] = [
   {
     id: 'SIVIL',
     position: 'G1',
-    jd: 'Biến 1 task thành N hướng explore song song (5–300 sub-agents)',
+    jd: 'Biến 1 task thành N hướng explore theo lượt — tuần tự, mỗi lượt 1 sub-agent (5–300 sub-agents; R14)',
     escalateTo: 'NEMESIS',
     directKbWrite: true,
   },

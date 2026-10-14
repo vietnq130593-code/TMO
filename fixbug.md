@@ -364,3 +364,37 @@
 - LIVE verify (pm2 restart + agent-browser 1440×900): tab Quan sát mở · full UI khi ui_observation on (region + filter 16 kind + "3 sự kiện" + cảnh báo obs_ledger off trung thực + 3 row audit thật flag.flip/tuning.change từ Task 23 + Mở tab BRAIN) · **R1-12 behavioral**: network route abort `**/api/observation/timeline*` → reload → data null → spinner hiển thị LỖI (innerText "Mất kết nối…— thử lại") thay vì treo "Đang tải…" vô hạn như code cũ; R3 xác nhận hết lặp từ sau LIVE-01 fix · 0 page error · 0 console error.
 - Không việc hoãn nào trong scope (BUG2-224 commit-message "65 test" là bất biến lịch sử git đã push — ghi nhận hiệu đính tại Bug_v2, không phải hoãn sửa).
 - **Vòng R3: 0 phát hiện mới còn lại (LIVE-01 đã fix + xác minh) · đủ 3 tiêu chí dừng §2 — ĐỢT KHÉP.**
+
+### ĐỢT FB-SERIAL — scope R14 tuần tự hóa agent invocation (user directive bản 3 ghi đè 2026-10-29b: subagent-delegate slot pool default 3→1 + boot log + getSubAgentSlotPoolInfo + ALS re-entrancy; omega-orchestrator dispatchAgentsParallel for-await; g1/sub-agents dispatchPlan for-await; king/engine blind scorers tuần tự; tool-executor desc + guard; goal-loop 4 chỗ văn bản + JD strings 5 nguồn + .env.example + TB-03 note R14; tests r101 15 test) — 2026-10-15 — KHÉP KẾT SAU 3 VÒNG (R1 2-auditor + coordinator chấm chéo · R2 16-c mắt tươi · R3 mini coordinator)
+
+| Vòng | Phát hiện mới | Xác minh |
+|---|---|---|
+| R1 | **9** (1 B·P2 + 2 D·P3 + 1 C·P3 + 5 P4) — auditor 2-a mắt tươi (đọc code path độc lập, không tin comment; probe live dev.log boot R14 + slot 1/1 + "CATALYST xếp hàng" làm bằng chứng bổ sung) | Fix 9/9 + r101 10→14 test → gate tsc/eslint/imports PASS + full 1708/1708 + build exit 137 (OOM môi trường — chứng minh BUILD_EXIT=0 khi pm2 dev-server dừng: BUILD_EXIT=0) |
+| R2 | **7** (0 P0-P2 · 1 D·P3 + 6 P4 — do chính fix R1 sinh ra đúng cảnh báo §1 + 1 pre-existing bóc ra: goal-loop:859 protocol dạy "SONG SONG", thoughts 📤/📥, comment stale ×3, prompts.ts:99 tool-calls, r102 pin yếu ×4, sweeper timer trong next build) | Fix 7/7 + r101 +B9 (15) + r102 sửa 4 điểm → gate 4 tầng PASS + full **1726/1726** |
+| R3 mini | **0** (rà lại vùng fix R2: quét toàn-file absence "song song sai sự thật" giờ bị pin B9 chặn; fallback debt 4 mục đối chiếu bản gốc :1159 đủ; sweeper guard NEXT_PHASE nghiệm qua build riêng BUILD_EXIT=0) | ĐỢT KHÉP — đủ 3 tiêu chí dừng §2 |
+
+- Phát hiện: FB-SERIAL-R1-01..09 + R2-01..04 → **BUG2-231..243** (13 entry — chi tiết đầy đủ tại Bug_v2.md). Nhóm logic: 1 P2 deadlock tự-chờ (ALS re-entrancy) · 2 P3 prompt sống (OMEGA standalone + SIVIL identity) · 1 P3 test/citation S1 · 9 P4 (doc/comment/test-pin/observability).
+- LIVE verify (E2E thật qua POST /api/openclaw/chat): boot `[SubAgentSlot] Phanh hiệu dụng (R14): maxConcurrent=1 — TUẦN TỰ... [nguồn: default=1, zenKeys=3]` đúng 1 lần (dev.log:17192); SENTINEL nhận slot **1/1** (trước đây 1/3); các dispatch thừa của LLM xếp hàng FIFO "+6 đang chờ trước"; **`CATALYST chờ 484s → nhận slot` CHỈ SAU khi SENTINEL hoàn tất (485s, concluded 1 vòng)** — đúng nguyên văn directive "lần lượt agent này xử lý xong mới tới agent khác"; không còn slot 1/3 hay 2/3.
+- Gate: **1708 → 1726** (+18: r101 15 + r102 13 − 10 gốc r101@10 nhầm đếm lúc đầu); tsc + eslint + check:imports PASS mọi vòng; build stage exit 137 = OOM tranh chấp RAM với pm2 dev-server (bằng chứng dmesg OOM-kill next-build rss 2.1GB; BUILD_EXIT=0 khi dừng pm2 — environmental, không phải lỗi code).
+- Điểm chờ user (không tự quyết): observability pool (getSubAgentSlotPoolInfo) chưa có consumer production — wire panel API/UI bàn đợt sau (BUG2-239 ghi nhận).
+- Ngoài phạm vi bàn đợt sau: orchestration/agent-delegator.ts doc legacy (ENABLE_REAL_DELEGATE=false) · đo phân phối waitedMs hàng đợi chéo · TB-03 Hybrid/Waves dead-spec quyết định dài hạn · P-NEW-2 SelfDirection song song + P-NEW-1 Prisma pool (nợ cũ).
+
+### ĐỢT FB-R13DEBT — scope toàn bộ fix R13 DebtLedger ("những fix từ lượt quan sát gần nhất" — 5 hạng mục F-R13-1..5: model DebtLedger + debt-ledger.ts ~450 dòng + wiring agent-goal-loop + /api/debt/status + .env; docs/QUAN-SAT-LUOT-6-R13.md) — 2026-10-15 — KHÉP KẾT SAU 3 VÒNG (R1 2-b auditor tái lập E2E DB cô lập · R2 16-c · R3 mini coordinator)
+
+| Vòng | Phát hiện mới | Xác minh |
+|---|---|---|
+| R1 | **8** (1 C·P1 + 2 C·P2 + 2 P3 + 3 P4) — auditor 2-b: probe fingerprint thuần 8 case + **tái lập E2E vòng đời trên DB cô lập** (script /home/z/.audit-r1/repro.mjs giữ cho chấm chéo) + grep toàn repo; đỉnh: **P1 finalize không bao giờ resolve nợ same-session** (mirror-lookup trượt Todo gốc — chính chẩn đoán user "nợ chỉ tăng không giảm" còn sống) | Fix 8/8 (r102 13 test mới — lấp C5 cho cả đợt R13) → gate PASS |
+| R2 | **3** (0 P0-P2 · 3 C·P4: fallback thiếu mục 3-4 legacy; r102 4 điểm pin yếu/cleanup hở; sweeper timer nổ trong next build ghi DB thật) | Fix 3/3 (fallback đủ 4 mục nguyên văn :1159; A4 pin thật + B5 khớp fp + cleanup SESS_C; guard NEXT_PHASE) → gate **1726/1726** |
+| R3 mini | **0** (rà lại vùng fix R2: đối chiếu fallback 4 mục vs bản gốc — đủ; parkReason "vẫn bị re-list" giờ được exercise B5; build riêng BUILD_EXIT=0 chứng minh sweeper guard) | ĐỢT KHÉP |
+
+- Phát hiện: FB-R13DEBT-R1-01..08 + R2-01..03 → **BUG2-244..254** (11 entry — chi tiết đầy đủ tại Bug_v2.md). Nhóm logic: 1 P1 (same-session resolve — lookup OR d.todoId) · 2 P2 (park không dừng same-session; kill-switch giết nhầm pickup legacy) · 1 P3 race claim · 7 P4 (PATCH validate, fingerprint edge, sweeper, test-pin, fallback đủ, evidence label).
+- Nghiệm thu behavioral (r102 trên DB gate-cô lập): hoàn thành Todo GỐC → nợ RESOLVED (trước fix: kẹt open vĩnh viễn) · park sau 3 lần → Todo gốc failed + nợ ra khỏi "ƯU TIÊN XỬ LÝ" sang ghi-chú "ĐÃ PARK — KHÔNG thử lại" · PATCH bảng chuyển đủ nhánh 400/200 · global cap ≤2 · fingerprint "lỗi12lần" ≡ "lỗi 12 lần" + 160-collision hết false-dedupe.
+- Hiệu đính lịch sử (append-only, không sửa nội dung cũ): worklog/docs R13 ghi "sweeper archived 63 ngay boot" — cơ chế thật là "chạy tại pickup đầu tiên sau boot"; từ R14 sweeper có đồng hồ riêng 5s sau module-load (BUG2-251).
+- Ngoài phạm vi bàn đợt sau: PATCH id sai-format cuid → Prisma P2023 500 (pre-existing R13) · migration re-fingerprint cho DB có row pre-R14 (production hiện 0 rows) · UI panel sổ nợ (P-R13-2) · severity cột chết (ghi nhận R13).
+
+### TỔNG KẾT LŨY KẾ (cập nhật sau FB-SERIAL + FB-R13DEBT)
+
+- **Phát hiện lũy kế qua giao thức: 83 + 24 = 107** (FB-SERIAL 13 + FB-R13DEBT 11) — 100% có entry Bug_v2.md (BUG2-231..254); 0 P0 · 1 P1 · 4 P2 · 5 P3 · 14 P4.
+- Sai-kỳ-vọng phía người-rà: +8 (R1-A 4 + R2 4 — ghi BUG2-231..254 mục ghi chú); chuỗi tiếp tục xác nhận giá trị chấm chéo 3 phía (C2).
+- Gate kiểm thử: **1726/1726** (từ 1698 của R13; +28: r101 15 + r102 13).
+- Bài học mới truyền lại: (1) **fix xong phải quét TOÀN FILE, không chỉ vùng fix** — R1 sửa :354/:118 nhưng :547/:112/:859 cùng file/prompts liền kề còn sót (R2 bắt được); pin theo vùng (region slice) phải mở rộng thành quét toàn-file absence; (2) **assert tự-satisfied** (`a || b` luôn true với chuỗi non-empty) là pin giả — R3 bắt trong chính test do người viết fix sinh ra; (3) sweeper/timer đặt tại module-load phải nghĩ đến next build EVAL module (NEXT_PHASE guard); (4) auditor tái lập E2E DB cô lập là công cụ mạnh nhất vòng R1 (P1 same-session không bao giờ hiện trên code-reading thuần — phải chạy vòng đời).

@@ -1884,21 +1884,22 @@ async function llmScoreHypothesisBlind(
   ].join('\n')
   // 2 SA blind scorers (TB-14 §1.3 AC5 — KHÔNG do SIVIL tự chấm)
   // Task 4 — blind judge → NEMESIS brain (TL chấm điểm default — fail-open → NIM).
+  // R14 — TUẦN TỰ: SA1 chấm xong mới tới SA2 (user directive bản 3 "nếu gọi
+  // team thì lần lượt từng thành viên" — thay Promise.all cũ; kết quả 2 judge
+  // vẫn độc lập như trước, chỉ không chạy đồng thời).
   const blindBrain = await resolveResearchBrain('NEMESIS')
-  const [r1, r2] = await Promise.all([
-    callLLMForAgent(prompt, blindBrain, BLIND_SCORE_SYSTEM_PROMPT, {
-      temperature: 0.2,
-      maxTokens: 200,
-      agentId: AGENT_ID.NEMESIS,
-      agentName: 'NEMESIS (Blind SA1)',
-    }),
-    callLLMForAgent(prompt, blindBrain, BLIND_SCORE_SYSTEM_PROMPT, {
-      temperature: 0.2,
-      maxTokens: 200,
-      agentId: AGENT_ID.NEMESIS,
-      agentName: 'NEMESIS (Blind SA2)',
-    }),
-  ])
+  const r1 = await callLLMForAgent(prompt, blindBrain, BLIND_SCORE_SYSTEM_PROMPT, {
+    temperature: 0.2,
+    maxTokens: 200,
+    agentId: AGENT_ID.NEMESIS,
+    agentName: 'NEMESIS (Blind SA1)',
+  })
+  const r2 = await callLLMForAgent(prompt, blindBrain, BLIND_SCORE_SYSTEM_PROMPT, {
+    temperature: 0.2,
+    maxTokens: 200,
+    agentId: AGENT_ID.NEMESIS,
+    agentName: 'NEMESIS (Blind SA2)',
+  })
   const parseScore = (r: LLMResult): number => {
     if (r.error || !r.content) return 0
     const m = r.content.match(/"score"\s*:\s*(\d+(?:\.\d+)?)/)

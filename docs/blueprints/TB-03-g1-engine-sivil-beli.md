@@ -281,6 +281,8 @@ Sub-agent plan → Synthesis report → Specs cho BELI (K specs)
 | **2. Parallel Waves** | Wave 1: tất cả N SAs chạy cùng lúc → SIVIL tổng hợp → điều chỉnh → Wave 2 | Nhanh nhất | Branch sau không tận dụng kết quả Branch trước | Branch độc lập hoàn toàn |
 | **3. Hybrid (recommended)** | Batch 1: A+B song song → Batch 2: C (dùng features của B + insights của A) → Batch 3: D (ensemble từ C) | Tối ưu tốc độ × chất lượng | Cần vẽ đúng dependency | Mặc định cho task COMPLEX+ |
 
+> **📝 NOTE R14 (2026-10-15 — user directive bản 3, ghi đè trạng thái trên):** "agents khi gọi agent khác tham gia xử lý tác vụ thì mỗi lượt chỉ gọi thêm 1, lần lượt agent này xử lý xong mới tới agent khác để khỏi vấn đề lỗi; nếu gọi team thì lần lượt từng thành viên". Từ R14, runtime **mặc định Sequential Batches (chiến lược 1) với 1 SA/lượt** — "Parallel Waves"/"Hybrid" và khuyến nghị "Hybrid cho COMPLEX+" ở bảng trên **tạm ngưng** (là trạng thái spec lịch sử tại v1.3, không phải hành vi hiện hành). Kill-switch quay lại: `SUBAGENT_MAX_CONCURRENT>=2` (env) + code default tại `subagent-delegate.ts`. Bằng chứng lý do: R11 — nhiều opencode process spawn đồng thời ~600MB/cái → OOM kill + PM2 restart 9 lần/2.5h. Xem Bug_v2.md FB-SERIAL.
+
 - **Ví dụ kết quả sau dispatch (M1):**
   ```
   Sub-agent 1: "Missing value: 19 features có NaN, PoolQC 99% → drop"
@@ -489,7 +491,7 @@ Nguồn không định nghĩa ngưỡng dừng — phần này là thiết kế 
 
 | # | Stop condition | Hành động |
 |---|---|---|
-| S1 | **Batch đầy SA lỗi** — ≥ 50% SA trong batch fail/timeout 2 lần retry | Dừng batch → kiểm tra nguyên nhân hạ tầng (model stack? tool lỗi?) → ESCALATE nếu ngoài tầm SIVIL |
+| S1 | **Batch đầy SA lỗi** — ≥ 50% SA trong batch fail/timeout 2 lần retry | Dừng batch → kiểm tra nguyên nhân hạ tầng (model stack? tool lỗi?) → ESCALATE nếu ngoài tầm SIVIL. ⚠️ **R14: S1 CHƯA triển khai trong runtime** (code chỉ warn + continue — fail-open; xem FB-SERIAL-R1-07/Bug_v2) |
 | S2 | **Bão hòa insight** — 2 batch liên tiếp không cho claim mới so với tổng hiện có | Dừng dispatch, sang SYNTHESIZE (đã đủ coverage) |
 | S3 | **Trần N chạm** — tổng SA đã spawn = trần theo bảng §5.1 mà coverage còn hở | Dừng → SYNTHESIZE với khiếm khuyết được ghi rõ trong report → council ② quyết định tiếp |
 | S4 | **Deadline nội bộ** — hết thời gian budgets của G1 trong tier plan (TB-02) | Dừng → tổng hợp phần có → handoff kèm note "coverage còn hở ở branch X" |
@@ -876,7 +878,7 @@ Template hợp nhất: giữ các trường của ví dụ nguồn (Priority / A
 
 | # | Câu hỏi | Phạm vi ảnh hưởng | ✅ QUYẾT ĐỊNH (chốt v1.3) |
 |---|---|---|---|
-| Q1 | Số SA tối đa chạy đồng thời (§5.4 đặt 10–25) — hạ tầng agent framework thật giữ được bao nhiêu SA concurrent? | Perf + chi phí | **20 mặc định** (round-robin 4 NIM keys → 5 SA/key), **burst 25** cho Grand Competition; hard-cap 25 (giữ khoảng §5.4 nguồn 10–25). Thêm key sau này → ceiling tự tính 5 SA/key, vẫn ≤ 25 tới khi user nâng. Mọi điều chỉnh ghi worklog + Decision Log. |
+| Q1 | Số SA tối đa chạy đồng thời (§5.4 đặt 10–25) — hạ tầng agent framework thật giữ được bao nhiêu SA concurrent? | Perf + chi phí | **20 mặc định** (round-robin 4 NIM keys → 5 SA/key), **burst 25** cho Grand Competition; hard-cap 25 (giữ khoảng §5.4 nguồn 10–25). Thêm key sau này → ceiling tự tính 5 SA/key, vẫn ≤ 25 tới khi user nâng. Mọi điều chỉnh ghi worklog + Decision Log. ⚠️ **R14: giá trị runtime hiện hành = 1 SA/lượt** (tuần tự — user directive bản 3; 10–25 đồng thời tạm ngưng, kill-switch `SUBAGENT_MAX_CONCURRENT`; xem note R14 §5.2). |
 | Q2 | Timeout chuẩn cho 1 SA là bao lâu (theo loại task EDA vs Grand vs System Audit)? | Stop condition S5 | Theo loại task: **EDA 30 phút · Grand/Competition 60 phút · System Audit 30 phút**; soft-checkpoint 50%/70% (SA bắt buộc báo tiến độ); hard-kill tại timeout → **retry 1 lần (scope thu hẹp 50%)**; fail → findings rỗng + error entry (per §10). |
 | Q3 | Council ②: NEMESIS "xác nhận specs" bằng hành vi cụ thể nào (reply message? ack trong worklog? gate tự động trong runtime)? | Cổng COUNCIL_DONE | **NEMESIS CÓ quyền VETO** — checklist spec-by-spec trong worklog (mỗi spec 1 dòng `ack` / `veto: lý do`); veto → spec quay lại SIVIL revise; **≥ 2 vòng veto cùng spec → escalate council ③** (khớp §8). |
 | Q4 | Trong IMPLEMENT M2, BELI có được chạy thử POC trên dữ liệu thật của Live System (read-only query vào Qdrant/Neo4j) hay chỉ dữ liệu clone trong Workspace? | Ranh giới Live/Workspace (§2.3) | **READ-ONLY được phép** (query Qdrant/Neo4j, GET API — evidence phong phú hơn); MỌI query ghi **evidence log** (query + timestamp + số dòng trả về) trong worklog BELI; **WRITE cấm tuyệt đối** — mọi thao tác ghi chỉ trên Workspace clone. |

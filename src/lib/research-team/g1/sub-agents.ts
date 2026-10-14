@@ -11,8 +11,9 @@
  *
  * Fail-open policy (TB-13 §4 — NIM keys placeholder trong sandbox):
  *  - dispatchSubAgent lỗi LLM → status FAILED + error field; KHÔNG throw.
- *  - dispatchPlan không bao giờ reject toàn plan vì 1 SA fail — Promise.allSettled
- *    thu tất cả kết quả; SA FAILED đánh dấu ❌ trong registry, batch tiếp tục.
+ *  - dispatchPlan không bao giờ reject toàn plan vì 1 SA fail — vòng tuần tự
+ *    R14 gộp kết quả từng SA (try/catch mỗi SA); SA FAILED đánh dấu ❌ trong
+ *    registry, SA sau vẫn chạy tiếp (fail-open như Promise.allSettled cũ).
  *
  * NOTE: Sub-agent là instance model stack chung (AGENT_PRIMARY_MODEL + fallback
  * chain — TB-01 §2). SA dùng callLLM (agent core + fallback chain) vì là agent
@@ -210,19 +211,25 @@ function extractEvidenceLines(text: string): string[] {
 }
 
 // ============================================================
-// §4. DISPATCH PLAN (TB-03 §4.2 — Parallel Waves mặc định)
-// ============================================================
+// §4. DISPATCH PLAN (TB-03 §4.2 — TUẦN TỰ mặc định, user directive R14)
 
 /**
- * Dispatch TẤT cả SA trong plan song song (Promise.allSettled).
+ * Dispatch TẤT cả SA trong plan TUẦN TỰ — mỗi lượt 1 SA (R14, ghi đè chiến
+ * lược "Parallel Waves" cũ theo user directive bản 3: "nếu gọi team thì lần
+ * lượt từng thành viên". Sequential là 1 trong 3 chiến lược TB-03 §5.2 thiết
+ * kế — nhưng đây là GHI ĐÈ mặc định spec (spec recommend Hybrid cho COMPLEX+
+ * §5.2 + burst 10-25 đồng thời §5.4 — tạm ngưng theo user directive; xem note
+ * "R14" ở TB-03 §5.2). SA-01 chạy xong
+ * (DONE/FAILED) mới tới SA-02 — tránh nguồn lỗi đồng thời (R11: OOM khi nhiều
+ * LLM call cùng lúc, SQLite contention). Fail-open giữ nguyên: SA lỗi →
+ * status FAILED + error, KHÔNG throw — SA sau vẫn chạy tiếp.
  *
  * TB-03 §5.4 + constants.ts: perG1Round cap = 25. Nếu plan.saCount > 25 → chia
- * batches (Sequential theo phase) — mỗi batch ≤ 25, tổng hợp giữa chừng.
- * Hiện tại perPart cap = 20 → 1 part luôn ≤ 20 SA; perG1Round=25 là trần cho
- * multi-part cùng round. Caller (engine.ts) chịu trách nhiệm không vượt 25/round
- * khi gọi nhiều part cùng lúc.
+ * batches tuần tự (từng batch giờ cũng tuần tự bên trong). Hiện tại perPart
+ * cap = 20 → 1 part luôn ≤ 20 SA; perG1Round=25 là trần cho multi-part cùng
+ * round (các part tuần tự theo for-of của engine.ts).
  *
- * Trả về plan mới với tasks đã update status/result.
+ * Trả về plan mới với tasks đã update status/result (giữ nguyên thứ tự).
  */
 export async function dispatchPlan(plan: DispatchPlan): Promise<DispatchPlan> {
   if (plan.tasks.length === 0) {
@@ -234,35 +241,41 @@ export async function dispatchPlan(plan: DispatchPlan): Promise<DispatchPlan> {
     return dispatchPlanInBatches(plan, SUB_AGENT_LIMITS.perG1Round)
   }
 
-  // Default: 1 wave parallel (TB-03 §5.2 Parallel Waves)
-  const results = await Promise.allSettled(
-    plan.tasks.map((sa) =>
-      dispatchSubAgent(
-        sa,
-        buildSAPrompt(sa),
-        SA_SYSTEM_PROMPT,
-      ),
-    ),
-  )
-
-  const updatedTasks = plan.tasks.map((sa, idx) => {
-    const r = results[idx]
-    if (r.status === 'fulfilled') return r.value
-    // Promise rejected (lỗi hạ tầng ngoài LLM) → FAILED
-    return {
-      ...sa,
-      status: 'FAILED' as SubAgentStatus,
-      error: `Promise rejected: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`,
-      finishedAt: new Date().toISOString(),
+  // R14 — TUẦN TỰ: mỗi lượt 1 SA (thay "1 wave parallel" cũ)
+  const updatedTasks: SubAgent[] = []
+  for (const [saIdx, sa] of plan.tasks.entries()) {
+    console.log(`[ResearchTeam/g1] SA dispatch tuần tự ${saIdx + 1}/${plan.tasks.length}: ${sa.id} "${sa.label}"`)
+    let done: SubAgent
+    try {
+      done = await dispatchSubAgent(sa, buildSAPrompt(sa), SA_SYSTEM_PROMPT)
+    } catch (err) {
+      // Exception ngoài LLM error path (hiếm) → FAILED fail-open, plan tiếp tục
+      done = {
+        ...sa,
+        status: 'FAILED' as SubAgentStatus,
+        error: `Dispatch threw: ${err instanceof Error ? err.message : String(err)}`,
+        finishedAt: new Date().toISOString(),
+      }
     }
-  })
+    updatedTasks.push(done)
+  }
+  // ≥ 50% SA FAILED → log warning. LƯU Ý: TB-03 §5.4 S1 (spec) quy định "Dừng
+  // batch + ESCALATE" — CHƯA triển khai ở đây; fail-open theo policy module
+  // (nhân bản pattern dispatchPlanInBatches trước R14): không dừng, không
+  // escalate, chỉ cảnh báo. Ghi nhận tại Bug_v2 (FB-SERIAL-R1-07).
+  const failCount = updatedTasks.filter((t) => t.status === 'FAILED').length
+  if (failCount > 0 && failCount / updatedTasks.length >= 0.5) {
+    console.warn(
+      `[ResearchTeam/g1] Plan ${plan.partId}: ≥ 50% SA FAILED — TB-03 §5.4 S1 (dừng batch + escalate) CHƯA triển khai; fail-open tiếp tục (xem FB-SERIAL-R1-07)`,
+    )
+  }
 
   return { ...plan, tasks: updatedTasks }
 }
 
 /**
- * Dispatch plan theo batches sequential (khi saCount > perG1Round cap).
- * Mỗi batch ≤ batchSize; tổng hợp kết quả giữa chừng (TB-03 §5.4 — Sequential).
+ * Dispatch plan theo batches tuần tự (khi saCount > perG1Round cap) — bản thân
+ * từng batch giờ cũng tuần tự bên trong (R14). Mỗi batch ≤ batchSize.
  */
 async function dispatchPlanInBatches(
   plan: DispatchPlan,

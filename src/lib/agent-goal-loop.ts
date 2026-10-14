@@ -856,7 +856,7 @@ function buildDelegationProtocol(): string {
 - Cú pháp: tool_call: delegate_task({"agent": "RAMPAGE", "task": "Nhiệm vụ cụ thể...", "context": "file liên quan, ràng buộc...", "acceptance_criteria": "điều kiện hoàn thành kiểm định được"})
 - NÊN delegate khi: task cần đọc/sửa NHIỀU file (làm trực tiếp sẽ phình context của bạn), cần chuyên môn sâu, hoặc task giao trọn được cho 1 agent.
 - NÊN delegate khi việc ≥3 bước hoặc đụng ≥2 file; chỉ tự làm việc 1 bước trivial.
-- 🔄 FAN-OUT: nhiều delegation ĐỘC LẬP trong 1 message → hệ thống tự chạy SONG SONG + hợp nhất kết quả (không cần đợi tuần tự).
+- 🔄 FAN-OUT: nhiều delegation ĐỘC LẬP trong 1 message → hệ thống tự XẾP HÀNG TUẦN TỰ (pool 1-slot — mỗi delegation hoàn tất mới tới kế tiếp, R14) + hợp nhất kết quả. Vẫn cứ emit nhiều tool_calls cùng lúc — hệ thống lo thứ tự.
 - ⚖️ TRỌNG TÀI ĐỘC LẬP chấm từng delegation (field "evaluation" trong kết quả): pass=false + gaps[] = sub-agent CHƯA đạt theo tiêu chí — đọc gaps và khắc phục phần còn thiếu (tự làm hoặc delegate lại), KHÔNG tin report tự chấm của sub-agent.
 - Báo cáo sub-agent quay về dạng NÉN (đã làm · bằng chứng · còn thiếu) — ĐỌC kỹ "còn thiếu". Với kết quả QUAN TRỌNG, tự KIỂM ĐỊNH LẠI bằng tool của bạn (file_read/lint/type_check) trước khi kết luận.
 ${tokenNote}`
@@ -896,7 +896,7 @@ function buildOrchestrationProtocol(hasDispatch: boolean, hasCreate: boolean): s
   lines.push('- Escalate xong: LÀM THEO tư vấn của Omega (đổi cách tiếp cận / điều agent khác / dùng tool theo hướng dẫn mới) — không lặp lại cách cũ đã fail.')
   if (hasDispatch) {
     lines.push('- Điều động agent BẤT KỲ trong Agent Roster: tool_call: dispatch_agent({"agent": "TÊN", "task": "nhiệm vụ cụ thể", "context": "..."}) — agent chạy tự chủ, trả báo cáo nén (context của bạn không phình). Điều LÂU DÀI vào team: thêm {"duration": "long_term", "team": "code", "position": "G4"}.')
-    lines.push('- NHIỀU việc ĐỘC LẬP: tool_call: dispatch_agents_parallel({"tasks": [{"agent": "MEGATRON", "task": "..."}, {"agent": "SENTINEL", "task": "..."}]}) — tối đa 4 task/lần, chạy song song tối đa 3 sub-agent cùng lúc (mỗi sub-agent tự động ghim 1 API key riêng — user directive 2026-10-29b), kết quả hợp nhất về 1 báo cáo; xung đột (cùng đụng 1 file) được liệt kê trong "conflicts" — tự phân xử.')
+    lines.push('- NHIỀU việc ĐỘC LẬP: tool_call: dispatch_agents_parallel({"tasks": [{"agent": "MEGATRON", "task": "..."}, {"agent": "SENTINEL", "task": "..."}]}) — tối đa 4 task/lần, chạy TUẦN TỰ: mỗi lượt 1 sub-agent hoàn tất mới tới kế tiếp (user directive R14, thay chế độ 3-đồng-thời 2026-10-29b để tránh lỗi đồng thời), kết quả hợp nhất về 1 báo cáo; xung đột (cùng đụng 1 file) được liệt kê trong "conflicts" — tự phân xử.')
   }
   if (hasCreate) {
     lines.push('- Hệ thống THIẾU agent có kỹ năng phù hợp (đã kiểm tra Agent Roster): tool_call: create_agent({"name": "...", "description": "mô tả vai trò", "instruction": "system prompt chi tiết", "model": "space-bunny-free", "avatar": "🤖", "temperature": 0.7, "maxTokens": 4096, "tools": ["file_read", "..."]}) — agent mới hiện trong module Agents, giao việc NGAY qua dispatch_agent.')
@@ -1380,7 +1380,7 @@ function buildDelegationDispatchThought(cycle: number, parentAgent: string, tc: 
       .filter(Boolean)
       .slice(0, 4)
     if (lines.length === 0) return null
-    return `📤 Chu kỳ ${cycle} — PHÂN CÔNG SONG SONG: ${parentAgent} gửi ${tasks.length} agent cùng lúc — ${lines.join(' · ')}`
+    return `📤 Chu kỳ ${cycle} — PHÂN CÔNG THEO LƯỢT (tuần tự — pool 1-slot R14): ${parentAgent} gửi ${tasks.length} agent, chạy lần lượt — ${lines.join(' · ')}`
   }
   if (tc.name === 'request_code_team') {
     const task = dlClip(tc.args?.task)
@@ -1437,7 +1437,7 @@ export function buildDelegationOutcomeThought(cycle: number, tc: { name: string;
       const s = x.success === true
       return `[${String(x.agent ?? '?')}] ${s ? 'HOÀN THÀNH' : 'CHƯA ĐẠT'} · ${typeof x.iterations === 'number' ? x.iterations : 0} vòng · ${typeof x.toolCalls === 'number' ? x.toolCalls : 0} tools${dlClip(x.report, 90) ? ` — ${dlClip(x.report, 90)}` : ''}`
     })
-    return `📥 Chu kỳ ${cycle} — KẾT QUẢ PHÂN CÔNG SONG SONG: ${ok}/${total} agent hoàn thành · tổng ${fmtTokens(r.tokensUsed)} tokens${lines.length > 0 ? `\n${lines.map(l => `  - ${l}`).join('\n')}` : ''}`
+    return `📥 Chu kỳ ${cycle} — KẾT QUẢ PHÂN CÔNG THEO LƯỢT (tuần tự — R14): ${ok}/${total} agent hoàn thành · tổng ${fmtTokens(r.tokensUsed)} tokens${lines.length > 0 ? `\n${lines.map(l => `  - ${l}`).join('\n')}` : ''}`
   }
 
   // request_code_team — pipeline cả team theo SOP
@@ -4526,8 +4526,8 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
 
         // 2026-10-27 (user directive phiên 3) — DELEGATION LOG 📥: sub-agent
         // đã triển khai tác vụ như thế nào (kết quả đầy đủ: vòng ReAct · tool
-        // calls · tokens · tóm tắt báo cáo). Cả 2 đường (fan-in song song +
-        // tuần tự) đều đi qua processToolResult → 1 chỗ ghi dùng chung.
+        // calls · tokens · tóm tắt báo cáo). Cả 2 đường (fan-out qua hàng đợi
+        // pool + nhánh tuần tự) đều đi qua processToolResult → 1 chỗ ghi dùng chung.
         // escalate_problem có auto-dispatch của Omega cũng ghi (autoApplied).
         if (agentSessionId && (DELEGATION_LOG_TOOLS.has(tc.name) || tc.name === 'escalate_problem')) {
           try {
@@ -4578,11 +4578,13 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         pushToolMessage(messages, { tool: tc.name, success: toolResult.success, result: toolResult.result })
       }
 
-      // ===== DELEGATION FAN-OUT (sửa 2026-10-29b — USER DIRECTIVE "tối đa 3
-      // sub-agent, mỗi sub-agent 1 API key riêng"): batch chứa ≥2 delegation
-      // (delegate_task/dispatch_agent) → launch ĐỒNG THỜI; slot pool trong
-      // subagent-delegate (3 permit FIFO, mỗi permit ghim 1 key Zen) tự điều
-      // tiết ≤3 chạy cùng lúc — delegation thừa xếp hàng nhận slot khi nhả.
+      // ===== DELEGATION FAN-OUT (R14 — TUẦN TỰ, ghi đè 2026-10-29b "tối đa 3
+      // đồng thời"): batch chứa ≥2 delegation (delegate_task/dispatch_agent)
+      // → các promise vẫn launch cùng lúc trong batch này, nhưng slot pool trong
+      // subagent-delegate giờ pool=1 permit FIFO (user directive bản 3: mỗi lượt
+      // 1 sub-agent) → thực thi TUẦN TỰ: delegation trước hoàn tất (release slot)
+      // delegation sau mới thật sự chạy — đúng "lần lượt agent này xử lý xong
+      // mới tới agent khác để khỏi vấn đề lỗi".
       // Wrapper tự check pre-flight + permission + executeTool; kết quả
       // consumer ở đúng vị trí tcIdx trong vòng lặp tuần tự bên dưới (thứ tự
       // message giữ nguyên cho LLM). Lỗi của sub-agent nào báo riêng kết quả
@@ -4607,7 +4609,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           const maxLaunch = budgetForDelegation <= 0
             ? 0
             : Math.floor(budgetForDelegation / SUBAGENT_TOKEN_ESTIMATE) + 1
-          console.log(`[GoalLoop] ${agentName} DELEGATION FAN-OUT: ${delegationIdxs.length} delegation trong 1 batch → launch đồng thời, slot pool điều tiết tối đa 3 sub-agent (mỗi sub-agent 1 API key riêng — user directive 2026-10-29b), cap ${maxLaunch} theo budget`)
+          console.log(`[GoalLoop] ${agentName} DELEGATION FAN-OUT: ${delegationIdxs.length} delegation trong 1 batch → hàng đợi FIFO pool 1-slot, thực thi TUẦN TỰ (sub-agent trước hoàn tất mới tới kế tiếp — user directive R14), cap ${maxLaunch} theo budget`)
           for (const [delegationRank, { tc, i }] of delegationIdxs.entries()) {
             if (delegationRank >= maxLaunch) {
               // Vượt cap budget → pre-flight fail cho delegation này (kết quả
@@ -4686,7 +4688,8 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           break
         }
 
-        // ===== FAN-IN consumer — delegation đã chạy song song ở trên: await kết
+        // ===== FAN-IN consumer — delegation đã chạy tuần tự ở trên (pool 1-slot
+        // R14): await kết
         // quả (thường đã resolve) + xử lý ĐÚNG như nhánh tuần tự (giữ thứ tự
         // message cho LLM). ĐÃ TRẢ TIỀN cho sub-agent → không bị budget-guard
         // vứt stub (kết quả đã trả phải về tay agent). =====
@@ -4833,8 +4836,8 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
 
       // FAN-IN log — ghi dấu hợp nhất cho ops theo dõi
       if (delegationPromises.size >= 2) {
-        evidence.push({ cycle, kind: 'directive', text: `FAN-OUT/FAN-IN: ${delegationPromises.size} delegation đã chạy song song (slot pool điều tiết ≤3, mỗi sub-agent 1 key riêng) và hợp nhất kết quả về 1 batch` })
-        recordAgentThought(agentSessionId, `🔀 FAN-OUT/FAN-IN: ${delegationPromises.size} sub-agent trong batch này chạy song song (tối đa 3 cùng lúc — mỗi sub-agent 1 API key riêng, user directive 2026-10-29b) — kết quả đã hợp nhất`, totalIterations)
+        evidence.push({ cycle, kind: 'directive', text: `FAN-OUT/FAN-IN: ${delegationPromises.size} delegation đã chạy TUẦN TỰ qua hàng đợi pool 1-slot (mỗi lượt 1 sub-agent hoàn tất mới tới kế tiếp — user directive R14) và hợp nhất kết quả về 1 batch` })
+        recordAgentThought(agentSessionId, `🔀 FAN-OUT/FAN-IN: ${delegationPromises.size} sub-agent trong batch này chạy TUẦN TỰ qua hàng đợi pool 1-slot (mỗi lượt 1 — hoàn tất mới tới kế tiếp, user directive R14) — kết quả đã hợp nhất`, totalIterations)
       }
       } finally {
         clearInterval(batchHeartbeatTimer)

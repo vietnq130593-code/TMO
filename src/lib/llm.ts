@@ -4050,9 +4050,11 @@ let zenKeyIndex = 0
 // Per-key 429 cooldown timestamp (0 = not rate-limited)
 const zenKey429Until: number[] = ZEN_API_KEYS.map(() => 0)
 
-// ==================== ZEN KEY BINDING — SUB-AGENT 1 KEY/AGENT (user 2026-10-29b) ====================
-// USER DIRECTIVE: "tối đa 3 subagents, nếu gọi subagents thì KHÔNG được sử
-// dụng cùng API [key]". Mỗi sub-agent chạy bên trong runWithZenKeyBinding(i)
+// ==================== ZEN KEY BINDING — SUB-AGENT 1 KEY/AGENT (giữ từ 2026-10-29b) ====================
+// USER DIRECTIVE (key-isolation, còn hiệu lực): "nếu gọi subagents thì KHÔNG
+// được sử dụng cùng API [key]" — quy tắc key-riêng GIỮ NGUYÊN qua R14 (pool giờ
+// 1 slot tuần tự: sub-agent vẫn ghim key riêng, không dùng chung với parent).
+// Mỗi sub-agent chạy bên trong runWithZenKeyBinding(i)
 // → MỌI LLM call trong cây async của nó (loop ReAct + wrap-up + trọng tài
 // đánh giá độc lập + consult Omega...) đều GHIM key #i qua AsyncLocalStorage
 // (không cần xuyên mảng options qua từng tầng call). Key đang bị ghim bởi

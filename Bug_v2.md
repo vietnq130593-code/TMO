@@ -1386,3 +1386,118 @@
 - **Kết luận cho user (câu hỏi "đã đăng nhập mà vẫn bị chặn"):** đăng nhập OAuth đúng nhưng TMO cũ gọi HTTP bằng oc_sk key / CLI từ app dir — 2 transport đều bị gate bắt vì session "không thuần OpenCode". Sau fix: model free chạy QUA CLI từ ws sạch — KHÔNG cần đăng nhập, không phụ thuộc IP.
 - **Kiểm chứng E2E:** boot-sweep + chat Omega "Chỉ trả lời đúng 1 từ: OK" → log `[LLM] Agent dùng OpenCode CLI space-bunny-free ✓ (16479 tokens)` + ChatMessage assistant "OK" — KHÔNG rơi NIM rescue; probe Zen HTTP vẫn 403 (oc_sk HTTP bị chặn — đúng, tier HTTP chết, tier CLI sống).
 - **Còn treo (không fix phiên này):** mini-services/opencode-server (Code tab sandbox) có opencode.json riêng — đường CLI của nó (nếu có) cần cùng xử lý PWD/ws khi đụng model free; native write/edit/bash chỉ chặn MỀM bằng prompt (mọi cơ chế chặn cứng đều bị gate bắt) — chấp nhận rủi ro, xem xét quay lại khi Zen đổi policy.
+
+---
+
+## ĐỢT FB-SERIAL + FB-R13DEBT (R14 — 2026-10-15) — BUG2-231..254
+
+> 2 đợt chạy song song theo user directive: (1) FB-SERIAL = tuần tự hóa agent invocation (user directive bản 3, ghi đè 2026-10-29b); (2) FB-R13DEBT = rà lại toàn bộ fix R13 DebtLedger ("những fix từ lượt quan sát gần nhất"). Auditor độc lập R1 (2 subagent) + R2 mắt tươi (1 subagent) + R3 mini coordinator; gate 4 tầng PASS 1726/1726 (build exit 137 = OOM môi trường — chứng minh BUILD_EXIT=0 khi pm2 dev-server dừng; không phải lỗi code).
+
+### BUG2-231 · B·P2 — Deadlock tự-chờ (bounded/unbounded theo config) qua escalate_problem auto-apply khi delegationRunId=null — FB-SERIAL-R1-01
+- **Hiện tượng:** Guard duy nhất chống dispatch lồng là `calledFromSubAgent = Boolean(context?.delegationRunId)` (tool-executor.ts escalate case). Nhưng `registerDelegationRun` trả null khi sub-agent chạy không sessionId (eval harness default; agent-run-tracker.ts:1035) hoặc tracker throw (fail-open). Guard tưởng là parent → auto-apply `dispatchAgentByOmega` → `runSubAgentForProfile` → `acquireSubAgentSlot` xếp hàng chờ CHÍNH NÓ (pool=1: sub-agent đang giữ slot duy nhất, await tool chờ nested dispatch — chờ slot nó giữ). Thoát chỉ khi SUBAGENT_LOOP_BOUND_MS cắt loop; cả TIMEOUT_MS=0 + WALL_CLOCK=0 → `await loopPromise` không withTimeout → treo vô hạn thật.
+- **Fix (R14):** (a) AsyncLocalStorage `subAgentRunALS` (mirror pattern runWithZenKeyBinding) — `runSubAgentForProfile` wrap `subAgentRunALS.run({holding:true})` quanh toàn bộ run + export `isInsideSubAgentRun()`; nested-check ĐẦU hàm → trả outcome fail NESTED_DELEGATION_BLOCKED (fail-open, run cha không sập); (b) tool-executor guard bổ sung `isInsideSubAgentRun() || delegationRunId` (đóng lỗ null).
+- **Kiểm chứng:** r101 B5 (pin export + ALS + NESTED_DELEGATION_BLOCKED + wrap + guard dynamic import); tsc 0; gate 1726/1726.
+
+### BUG2-232 · D·P3 — Prompt sống OMEGA standalone còn dạy "chạy song song tối đa 3 sub-agent" — FB-SERIAL-R1-02
+- **Hiện tượng:** standalone-agents.ts:354 (instruction OMEGA — "PHÂN CÔNG THEO CHỨC TRÁCH"): "dispatch_agents_parallel (chạy song song tối đa 3 sub-agent...)" — R14 chỉ sửa goal-loop hint (agent-goal-loop.ts:899), bỏ sót prompt standalone. Omega được dạy sai semantics sau khi pool=1.
+- **Fix:** :354 → "chạy TUẦN TỰ: mỗi lượt 1 sub-agent hoàn tất mới tới kế tiếp — user directive R14".
+- **Kiểm chứng:** r101 B6 (absence 'chạy song song tối đa 3 sub-agent' + presence TUẦN TỰ).
+
+### BUG2-233 · D·P3 — Prompt SIVIL IDENTITY còn "EXPLORE SONG SONG" mâu thuẫn chính nó trong cùng prompt — FB-SERIAL-R1-03
+- **Hiện tượng:** research-team/agents.ts:112 (IDENTITY & PURPOSE SIVIL): "BIẾN 1 TASK THÀN N HƯỚNG EXPLORE SONG SONG (5-300 sub-agents)" — trong khi :118 cùng prompt đã sửa "dispatch THEO LƯỢT". Dòng KÊU GỌI nhất prompt lại sai.
+- **Fix:** :112 → "EXPLORE THEO LƯỢT — TUẦN TỰ, mỗi lượt 1 sub-agent (5-300 sub-agents; user directive R14)".
+- **Kiểm chứng:** r101 B6 (absence 'EXPLORE SONG SONG' + presence THEO LƯỢT).
+
+### BUG2-234 · D·P4 — Comment stale "Dispatch NHIỀU sub-agent ĐỒNG THỜI" ngay trên tool đã đổi — FB-SERIAL-R1-04
+- **Fix:** tool-executor.ts:2029-2031 → "TUẦN TỰ (mỗi lượt 1 — user directive R14)". Kiểm chứng: r101 B7 (region mở rộng −260 ký tự — R2 mini: toàn file quét thêm B9).
+
+### BUG2-235 · D·P4 — sivil.ts 3 JSDoc mô tả "parallel waves / Parallel-Hybrid" cũ — FB-SERIAL-R1-05
+- **Fix:** sivil.ts:5/:7/:119 đồng bộ "R14: tuần tự, mỗi lượt 1 SA". Kiểm chứng: r101 B6.
+
+### BUG2-236 · C/D·P4 — TB-03 blueprint chưa chú thích R14; claim "không phá spec" chỉ đúng nửa — FB-SERIAL-R1-06
+- **Hiện tượng:** TB-03 §5.2 recommend "Hybrid cho COMPLEX+", §5.4 "10–25 SA chạy đồng thời", §12 Q1 "20 mặc định burst 25" — code giờ Sequential=1 mọi lúc. Comment sub-agents.ts claim "không phá spec" sai nghĩa (đây là GHI ĐÈ mặc định spec).
+- **Fix:** TB-03 thêm NOTE R14 tại 3 chỗ (§5.2 sau bảng + S1 row + Q1 row) nói rõ "tạm ngưng theo user directive; kill-switch SUBAGENT_MAX_CONCURRENT"; comment sub-agents.ts §4 đổi "ghi đè mặc định spec theo user directive".
+- **Kiểm chứng:** r101 B7 (pin 'NOTE R14 (2026-10-15' + 'tạm ngưng').
+
+### BUG2-237 · C·P3 — dispatchPlan: block mới (≥50% fail) không pin + citation "stop S1" lệch spec — FB-SERIAL-R1-07
+- **Hiện tượng:** R14 thêm block warn ≥50% SA FAILED nhưng cite "TB-03 §5.4 stop S1" — spec S1 thật là "Dừng batch → kiểm tra hạ tầng → ESCALATE"; code chỉ warn+continue (nhân bản pattern pre-existing của dispatchPlanInBatches).
+- **Fix:** citation trung thực "TB-03 §5.4 S1 (dừng batch + escalate) CHƯA triển khai; fail-open tiếp tục (xem FB-SERIAL-R1-07)" — hành vi giữ fail-open (documented deviation, không lặng lẽ).
+- **Kiểm chứng:** r101 B7.
+
+### BUG2-238 · C·P4 — r101 thiếu pin 3 nhóm fix (JD strings / dispatchPlanInBatches / goal-loop evidence) + B4 region heuristic yếu — FB-SERIAL-R1-08
+- **Fix:** bổ 3 nhóm pin + B4 chuyển extractFn('llmScoreHypothesisBlind', 'async function') — pin mạnh hơn region heuristic. Kiểm chứng: r101 B6/B8/B4 pass.
+
+### BUG2-239 · G·P4 — getSubAgentSlotPoolInfo JSDoc hứa "đài quan sát" nhưng 0 consumer production — FB-SERIAL-R1-09
+- **Fix:** giữ export (đã dùng cho test A1-A3) — claim "đài quan sát" sẽ wire sau (ngoài phạm vi đợt này, ghi fixbug.md); không sửa JSDoc vì việc wire panel là việc của đợt sau — ghi nhận trung thực ở đây. Kiểm chứng: việc này được ghi "Ngoài phạm vi" trong biên bản FB-SERIAL.
+
+### BUG2-240 · D·P3 — Protocol delegation (goal-loop:859) còn dạy "hệ thống tự chạy SONG SONG (không cần đợi tuần tự)" — FB-SERIAL-R2-01
+- **Hiện tượng:** buildDelegationProtocol nối vào system prompt mọi agent có delegate_task — dạy ngược với hint :899 đã sửa và với log :4612 của chính fix R14.
+- **Fix:** :859 → "hệ thống tự XẾP HÀNG TUẦN TỰ (pool 1-slot — mỗi delegation hoàn tất mới tới kế tiếp, R14) + hợp nhất kết quả. Vẫn cứ emit nhiều tool_calls cùng lúc — hệ thống lo thứ tự."
+- **Kiểm chứng:** r101 B9 (absence 'hệ thống tự chạy SONG SONG').
+
+### BUG2-241 · D·P4 — Thought quan sát 📤/📥 báo "PHÂN CÔNG SONG SONG / agent cùng lúc" — FB-SERIAL-R2-02
+- **Fix:** goal-loop:1383/:1440 → "PHÂN CÔNG THEO LƯỢT (tuần tự — pool 1-slot R14)". Kiểm chứng: r101 B9.
+
+### BUG2-242 · D·P4 (gộp 3) — Comment stale vùng liền kề fix: tool-executor:4068 "Dispatch NHIỀU sub-agent SONG SONG" + standalone-agents:547 tool list "SONG SONG + hợp nhất" + workspace-git:78 "2 sub-agent chạy song song chia sẻ working tree" — FB-SERIAL-R2-03
+- **Fix:** 3 chỗ diễn đạt lại R14 (workspace-git giữ guard làm defense in depth). Kiểm chứng: r101 B9 (quét TOÀN FILE absence).
+
+### BUG2-243 · D·P4 (pre-existing, bóc ra ở R2) — code-team prompt "Tool calls có thể song song" — FB-SERIAL-R2-04
+- **Hiện tượng:** prompts.ts:99 dạy agent emit song song — thực tế workflow-engine + goal-loop batch + delegation fan-out đều thực thi tuần tự.
+- **Fix:** :99 → "Tool calls trong 1 response được thực thi LẦN LƯỢT theo thứ tự (R14 — tuần tự) — vẫn cứ emit nhiều tool_calls khi độc lập; kết quả về đủ đúng vị trí cho LLM."
+- **Kiểm chứng:** r101 B9 (absence 'Tool calls có thể song song').
+
+### BUG2-244 · C·P1 — finalizeDebtAfterRun KHÔNG BAO GIỜ resolve nợ same-session: mirror-lookup trượt Todo gốc — FB-R13DEBT-R1-01
+- **Hiện tượng:** finalize tìm mirror bằng `taskMetaJson contains d.id` — chỉ Todo mirror GLOBAL có debtLedgerId trong taskMeta (duy nhất 1 nơi ghi :313); 3 đường ghi Todo GỐC (agent-goal-loop 5446/5491/5973) không set → mirrorStatus=null → resolvedNow luôn false → nợ same-session kẹt open vĩnh viễn → park oan sau 3 lần dù agent đã hoàn thành + trọng tài KHÔNG re-list. CHÍNH LÀ chẩn đoán user "tìm ra vấn đề và giải quyết nhưng không giải quyết được" còn sống ở đường same-session.
+- **Bằng chứng:** auditor tái lập E2E DB cô lập (STEP2-4: hoàn thành thật + không re-list → resolved=0, vẫn open); DebtLedger.todoId (schema lưu id Todo gốc) tồn tại nhưng finalize không dùng.
+- **Fix (R14):** lookup `OR: [{ taskMetaJson contains d.id }, ...(d.todoId ? [{ id: d.todoId }] : [])]` — Todo gốc (same-session) trở thành bằng chứng resolve được; JSDoc :412 "hoặc Todo gốc" giờ THẬT.
+- **Kiểm chứng:** r102 B3 (behavioral trên DB gate-cô lập: hoàn thành Todo GỐC → finalize → status=resolved + resolvedByRunId đúng); gate 1726/1726.
+
+### BUG2-245 · C·P2 — PARK không dừng ở session gốc: Todo gốc không đánh failed + same-session pickup vẫn re-list nợ parked trong "ƯU TIÊN XỬ LÝ" — FB-R13DEBT-R1-02
+- **Hiện tượng:** (a) park chỉ đánh mirror (taskMeta match) failed — Todo gốc (d.todoId) vẫn pending → same-session pickup tiếp tục re-list; (b) nhánh "else if (row)" đẩy debt parked vào directive "XỬ LÝ TRƯỚC TIÊN" — agent đốt chu kỳ cho nợ hệ thống đã công nhận không giải quyết được (đúng nghĩa "dừng" bị phá).
+- **Fix (R14):** (a) park đánh failed cả Todo gốc; (b) tách `actionable` vs `parkedNotes` — nợ parked/resolved chuyển sang ghi-chú "ℹ️ ĐÃ PARK/ĐÃ RESOLVED — KHÔNG thử lại trong run này (xem /api/debt/status)"; directive ưu tiên chỉ chứa actionable.
+- **Kiểm chứng:** r102 B5 (Todo gốc failed sau park) + B6 (PATCH-park đường user: 'ĐÃ PARK' có mặt, 'ƯU TIÊN XỬ LÝ' vắng, attempts không tăng, picked không chứa parked).
+
+### BUG2-246 · C·P2 — Kill-switch DEBT_LEDGER=0 hứa "hành vi y hệt trước R13" nhưng tắt luôn same-session pickup — FB-R13DEBT-R1-03
+- **Hiện tượng:** wiring R13 đã thay buildPendingDebtBlock bằng pickupDebtForRun; hàm early-return toàn bộ khi cờ off → khối "NỢ KỸ THUẬT CÒN TREO" biến mất âm thầm (chức năng user-directive 2026-10-27 có từ trước R13); comment module :37 hứa ngược.
+- **Fix (R14):** pickupDebtForRun dựng block legacy INLINE khi cờ off — ĐỦ 4 mục như buildPendingDebtBlock gốc (R2-01 bổ mục 3 checklist tự phục vụ + mục 4 "hết nợ mới làm việc mới"); không import ngược agent-goal-loop (tránh chu trình tĩnh cho check:imports).
+- **Kiểm chứng:** r102 F1 (source pin + absence import ngược); check:imports PASS 0 chu trình mới.
+
+### BUG2-247 · H·P3 — THIẾU SÓT C5: cả 5 fix R13 KHÔNG test regression vĩnh viễn; "E2E 12/12" là script dùng-xong-vứt — FB-R13DEBT-R1-04
+- **Hiện tượng:** grep toàn repo 0 test nhắc debt-ledger; full suite giữ nguyên 1698 (0 test mới); DB production DebtLedger=0 rows → vòng đời chưa từng chạy production.
+- **Fix (R14):** tests/r102-debt-ledger.test.ts — 13 test (A1-A6 fingerprint thuần; B1-B7 vòng đời same-session trên DB gate-cô lập incl. pin P1 BUG2-244 + P2 BUG2-245; C1 global cap; D1-F2 source pins race/PATCH/kill-switch/sweeper).
+- **Kiểm chứng:** r102 13/13; full suite 1698 → 1726.
+
+### BUG2-248 · C·P3 — Race 2 run song song cùng debt: read-then-write mất update (attempts 0→1 thay vì 0→2) + double-mirror — FB-R13DEBT-R1-05
+- **Hiện tượng:** pickup claim `update attempts: row.attempts+1` không điều kiện cạnh tranh; global claim tương tự; recordDebtIssue recurrence tương tự (được unique constraint fingerprint cứu khỏi row đôi nhưng lần ghi thua không được đếm).
+- **Fix (R14):** claim chuyển `updateMany({where: {id, status: <đang thấy>}, data: {attempts: {increment:1}, ...}})` + `if (claimed.count !== 1) continue` (thua đua bỏ qua, mirror không vào picked); recurrence chuyển `{increment: 1}`.
+- **Kiểm chứng:** r102 D1 (source pin — race thật không pin deterministic được, precedent BUG2-210); hành vi single-run phủ bởi B2 (attempts=1 đúng).
+
+### BUG2-249 · C·P4 (gộp) — PATCH /api/debt/status validate đầu vào hở — FB-R13DEBT-R1-06
+- **Hiện tượng:** (a) `body?.id?.trim()` id non-string → TypeError → 500; (b) không bảng chuyển trạng thái (resolve từ resolved lặp resolvedAt; park resolved mâu thuẫn; reopen khi open/in_progress reset lastAttemptRunId của run đang chạy → lost-attempt).
+- **Fix (R14):** typeof checks → 400; bảng chuyển: resolve (từ open/in_progress/parked, clear parkReason; từ resolved → 400); reopen (chỉ từ parked/resolved); park (từ open/in_progress; từ resolved/parked → 400 kèm lý do).
+- **Kiểm chứng:** r102 E1 (behavioral qua route thật: non-string 400 / reopen-open 400 / resolve 200 / park-resolved 400 / reopen-resolved 200 attempts=0).
+
+### BUG2-250 · C·P4 (gộp) — fingerprint edge: slice 160 false-dedupe + \b ASCII bỏ sót số-dính-chữ-unicode — FB-R13DEBT-R1-07
+- **Hiện tượng:** (a) 2 issue khác sau ký tự 160 → trùng fingerprint → recurrence đếm nhầm sang nợ khác; (b) `\b\d{1,2}\b` không match "lỗi12lần" (\b ASCII không thấy boundary giữa unicode-word và digit) — cùng lỗi 2 văn phong bị tách oan; (c) comment liệt "exit code" làm ví dụ số được GIỮ trong khi exit code 1-2 chữ số bị 'n' hóa.
+- **Fix (R14):** match THEO RUN `\d+` rồi chấm độ dài (≥3 giữ, <3 → ' n ' có padding — "lỗi12lần" ≡ "lỗi 12 lần"); BỎ slice(0,160) full-length; comment hiệu đính (exit code 1-2 chữ số → 'n' theo thiết kế, ≥3 chữ số giữ).
+- **Kiểm chứng:** r102 A1-A5 (run1≡run99, 410≠403, lỗi12lần≡'lỗi 12 lần', 160-collision khác nhau, 410≠41, exit code n).
+
+### BUG2-251 · C·P4 — Sweeper không có đồng hồ riêng (chỉ chạy trong pickupDebtForRun) — FB-R13DEBT-R1-08
+- **Hiện tượng:** hệ thống chỉ còn fast-path chat (không goal-loop run) → zombie todo không bao giờ được dọn; worklog/doc gán sai cơ chế "sweeper archived ngay boot" (thật ra chạy tại pickup đầu tiên).
+- **Fix (R14):** hẹn 5s sau module-load `setTimeout(...).unref()` + guard `NEXT_PHASE !== 'phase-production-build'` (R2-03: không lên lịch trong next build — route import tĩnh debt-ledger → build eval module, timer nổ sẽ GHI DB thật từ process build).
+- **Kiểm chứng:** r102 F2 (source pin timer + unref); build riêng với pm2 dừng BUILD_EXIT=0 (eval module không ghi DB — guard có hiệu lực).
+
+### BUG2-252 · C·P4 — r102 bản đầu 4 điểm pin yếu — FB-R13DEBT-R2-02
+- **Hiện tượng:** (a) A4 assert tự-satisfied (`fp[0]==='e' || fp.length>0` luôn true); (b) B5 unresolvedDebtTexts không khớp fingerprint debt → nhánh parkReason "vẫn bị re-list" không được exercise; (c) cleanup bỏ sót session C (mirror todo global leak 2 row/lần chạy); (d) header hứa pin 410≠41 nhưng không có test.
+- **Fix (R14 vòng R3):** A4 pin 'exit code n' + bổ 410≠41; B5 dùng nguyên văn content todo làm unresolved + assert parkReason chứa 'vẫn bị re-list'; cleanup thêm SESS_C.
+- **Kiểm chứng:** r102 13/13 lại pass sau sửa (chính fixbug vòng lặp bắt pin yếu của pin — đúng cảnh báo §1).
+
+### BUG2-253 · C·P4 — Fallback kill-switch bản đầu thiếu mục 3-4 của legacy block — FB-R13DEBT-R2-01
+- **Hiện tượng:** fallback inline chỉ có mục 1-2; so từng dòng với buildPendingDebtBlock gốc (agent-goal-loop.ts:1159) mất mục 3 (checklist tự phục vụ + vùng bảo vệ + ĐIỀU KIỆN CẦN) + mục 4 (hết nợ mới làm việc mới); comment claim "hệt" sai.
+- **Fix (R14 vòng R3):** copy đủ 4 mục nguyên văn; comment đổi "ĐỦ 4 mục như bản gốc (FB-R13DEBT-R2-01: bản đầu chỉ có mục 1-2...)".
+- **Kiểm chứng:** r102 F1 pin giữ + đọc trực tiếp; tsc 0.
+
+### BUG2-254 · D·P4 — resolutionEvidence nhãn "todo mirror" khi match là Todo GỐC — FB-R13DEBT-R2 (ghi nhận D6 nâng mini)
+- **Fix:** evidence đổi `todo ${id} (mirror/gốc — FB-R13DEBT-R1-01) completed` — nhãn đúng cho cả 2 đường match. Kiểm chứng: đọc code debt-ledger.ts finalize; tsc 0.
+
+> **Sai-kỳ-vọng phía người-rà (không cấp ID — dữ liệu chống tự tin sai):** 4 nghi vấn auditor R2 tự bác bằng probe (padding ' n ' KHÔNG phá dính-chữ nhờ collapse \s; waiter không rò ALS context; production DB 0 rows nên không row-đôi pre-R14; PATCH resolve-từ-resolved đã có guard). Auditor R1-A tự bác 4 (pool=1 không giết batch bởi timeout per-LLM-call + heartbeat; Promise.all còn lại là Prisma/lint không phải agent; .env không đè (đã có boot log đối chiếu); thứ tự acquire fan-out có thể đảo nhưng semantics "mỗi lượt 1" vẫn thỏa + thứ tự message cho LLM giữ nguyên).

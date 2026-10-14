@@ -109,13 +109,13 @@ const SIVIL_INSTRUCTION = `Bạn là SIVIL (G1 — Research Team TMO). Position:
 IDENTITY & PURPOSE
 ═══════════════════════════════════════════
 
-Bạn là G1 — Sub-Agent Orchestrator. Vai trò: BIẾN 1 TASK THÀN N HƯỚNG EXPLORE SONG SONG (5-300 sub-agents). Bạn dispatch + synthesize + flag conflicts.
+Bạn là G1 — Sub-Agent Orchestrator. Vai trò: BIẾN 1 TASK THÀN N HƯỚNG EXPLORE THEO LƯỢT — TUẦN TỰ, mỗi lượt 1 sub-agent (5-300 sub-agents; user directive R14). Bạn dispatch + synthesize + flag conflicts.
 
 ═══════════════════════════════════════════
 NHIỆM VỤ (TB-03 §4 + §5)
 ═══════════════════════════════════════════
 
-1. DECOMPOSE task từ NEMESIS thành N hướng explore song song.
+1. DECOMPOSE task từ NEMESIS thành N hướng explore — dispatch THEO LƯỢT, mỗi lượt 1 sub-agent (R14, tuần tự).
 2. DISPATCH sub-agents (≤ 20 SA/part, ≤ 25 SA/G1 round — SUB_AGENT_LIMITS).
 3. SYNTHESIZE kết quả từ các SA → 1 chốt synthesis.
 4. Flag CONFLICTS giữa các SA (TC-03 dual-interpretation escalation).
@@ -302,7 +302,7 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
   {
     name: 'SIVIL',
     description:
-      'G1 — Biến 1 task thành N hướng explore song song (5–300 sub-agents). Dispatch + synthesize + flag conflicts.',
+      'G1 — Biến 1 task thành N hướng explore theo lượt — tuần tự, mỗi lượt 1 sub-agent (5–300 sub-agents; R14). Dispatch + synthesize + flag conflicts.',
     instruction: SIVIL_INSTRUCTION,
     domain: 'mixed',
     capable:

@@ -2,9 +2,9 @@
  * RESEARCH TEAM — G1 SIVIL ENGINE (TB-03 §1 JD + §4 workflow + §6 Module Map M2)
  * ==================================================================================
  * Spec:
- *  - TB-03 §1.1 JD SIVIL — "Biến 1 task thành N hướng explore song song (5–300)".
+ *  - TB-03 §1.1 JD SIVIL — "Biến 1 task thành N hướng explore (5–300)"; R14: dispatch tuần tự, mỗi lượt 1 SA (xem note R14 ở TB-03 §5.2).
  *  - TB-03 §4.1 DECOMPOSE  — task → N sub-problems → SA specs.
- *  - TB-03 §4.2 DISPATCH  — Parallel/Hybrid → spawn SAs theo batches (≤25/round).
+ *  - TB-03 §4.2 DISPATCH — R14: spawn SAs TUẦN TỰ (mỗi lượt 1); batches ≤25/round giữ nguyên (spec cũ Parallel/Hybrid tạm ngưng theo user directive — note R14 ở TB-03).
  *  - TB-03 §4.3 SYNTHESIZE — rank top-K + K specs cho BELI.
  *  - TB-03 §5.3 conflict  — detectConflicts → flag (engine.ts ESCALATE).
  *  - TB-03 §6   Module Map M2 — decompose theo module thay vì approach.
@@ -63,7 +63,7 @@ export interface SivilExploreResult {
 
 const SIVIL_DECOMPOSE_SYSTEM_PROMPT = [
   'Bạn là SIVIL (G1 Sub-Orchestrator — research team TMO).',
-  `JD: ${RESEARCH_ROSTER.find((r) => r.id === AGENT_ID.SIVIL)?.jd ?? 'Biến 1 task thành N hướng explore song song'}.`,
+  `JD: ${RESEARCH_ROSTER.find((r) => r.id === AGENT_ID.SIVIL)?.jd ?? 'Biến 1 task thành N hướng explore theo lượt — tuần tự (R14)'}.`,
   '',
   'NHIỆM VỤ BƯỚC NÀY — DECOMPOSE (TB-03 §4.1):',
   '- Phân tích task → chia thành N hướng explore ĐỘC LẬP (mỗi hướng = 1 SA spec).',
@@ -116,7 +116,7 @@ const SIVIL_SYNTHESIZE_SYSTEM_PROMPT = [
 /**
  * Run SIVIL explore round (TB-03 §4.1→§4.3):
  *  1. DECOMPOSE  — callLLM sinh N explore directions (N ≤ 20).
- *  2. DISPATCH   — planSubAgents + dispatchPlan (parallel waves).
+ *  2. DISPATCH   — planSubAgents + dispatchPlan (R14: tuần tự, mỗi lượt 1 SA).
  *  3. CONFLICT   — detectConflicts (TB-03 §5.3) → flag cho engine.ts ESCALATE.
  *  4. SYNTHESIZE — callLLM tổng hợp SA results → synthesis report.
  *  5. Worklog + ArtifactMap.

@@ -55,6 +55,7 @@
  */
 
 import { callLLMForAgent, getZenKeyCount, runWithZenKeyBinding } from '@/lib/llm'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import { executeTool, buildCompactToolSchemasSection, getToolDefinitions } from '@/lib/code-team/tool-executor'
 // ROUND-27 FIX V1 — envelope JSON hợp lệ cho tool message của sub-agent (dùng
 // chung với goal-loop + workflow-engine; context-compression không import lại
@@ -451,34 +452,48 @@ export function mergeTodoSnapshot(
   return [...kept, ...merged]
 }
 
-// ==================== SUB-AGENT SLOT POOL — TỐI ĐA 3, MỖI SLOT 1 KEY (user 2026-10-29b) ====================
-// USER DIRECTIVE (bản 2, ghi đè bản 1 "tối đa 1"): "có 3 API key Opencode
-// Zen → thiết lập 3 là số subagents tối đa, và nếu gọi subagents thì KHÔNG
-// được sử dụng cùng API [key]". Thiết kế:
-//   · SUBAGENT_MAX_CONCURRENT slot (mặc định = min(3, số key Zen cấu hình;
-//     env SUBAGENT_MAX_CONCURRENT override) — mọi đường delegate đều đi qua
-//     đây (delegate_task / dispatch_agent / dispatch_agents_parallel /
-//     eval harness...), kể cả 2 goal-loop job song song của worker.
+// ==================== SUB-AGENT SLOT POOL — TUẦN TỰ: MỖI LƯỢT 1 (user R14, bản 3) ====================
+// USER DIRECTIVE lịch sử (3 bản — bản sau ghi đè bản trước):
+//   · Bản 1: "tối đa 1" (đúng ý tuần tự từ đầu).
+//   · Bản 2 (2026-10-29b, ĐÃ BỎ theo bản 3): "3 là số subagents tối đa, mỗi
+//     sub-agent KHÔNG dùng chung API key" → pool 3 slot, mỗi slot ghim 1 key.
+//   · Bản 3 (R14, phiên này — QUAY LẠI TUẦN TỰ): "agents khi gọi agent khác
+//     tham gia xử lý tác vụ thì mỗi lượt chỉ gọi thêm 1, lần lượt agent này
+//     xử lý xong mới tới agent khác để khỏi vấn đề lỗi; nếu gọi team thì lần
+//     lượt từng thành viên". Rationale từ bằng chứng quan sát R11: sub-agent
+//     spawn ĐỒNG THỜI là nguồn lỗi thực đo được (2 opencode process ~600MB/cái
+//     cùng lúc → MemAvailable 364MB < 450MB → OOM kill + PM2 restart 9 lần/
+//     2.5h; SQLite contention; recompile chồng nhau).
+// Thiết kế (giữ nguyên khung, chỉ đổi mặc định):
+//   · SUBAGENT_MAX_CONCURRENT slot (mặc định = 1 TUẦN TỰ; env
+//     SUBAGENT_MAX_CONCURRENT override — kill-switch đặt 3 để quay lại bản 2)
+//     — mọi đường delegate đều đi qua đây (delegate_task / dispatch_agent /
+//     dispatch_agents_parallel / eval harness...), kể cả 2 goal-loop job
+//     song song của worker: với pool=1, FIFO đảm bảo sub-agent trước HOÀN
+//     THÀT (release slot) rồi sub-agent sau mới bắt đầu — đúng semantics
+//     "mỗi lượt chỉ gọi thêm 1".
 //   · Slot i GHIM key Zen #i (runWithZenKeyBinding — AsyncLocalStorage trong
 //     llm.ts): MỌI LLM call của run (ReAct + wrap-up + trọng tài độc lập)
-//     dùng đúng key đó → 3 sub-agent song song KHÔNG BAO GIỜ dùng chung key.
-//     Caller thường (parent goal-loop / utility) bị getZenKey() tự NÉ key
-//     đang ghim (xem llm.ts).
+//     dùng đúng key đó → sub-agent KHÔNG BAO GIỜ dùng chung key với sub-agent
+//     khác / caller thường (parent goal-loop / utility) — getZenKey() tự NÉ
+//     key đang ghim (xem llm.ts). Với pool=1 chỉ dùng key #1 cho sub-agent;
+//     key #2/#3 (nếu có) tự do cho parent — không đổi chính sách key-isolation
+//     của bản 2 (vẫn đúng với 1 sub-agent).
 //   · Thời gian chờ hàng đợi KHÔNG đếm vào SUBAGENT_TIMEOUT_MS (acquire trước
 //     startedAt — timeout tính từ khi sub-agent THỰC SỰ chạy).
 //
 // Chống deadlock (giữ nguyên từ bản 1):
 //   - Sub-agent KHÔNG có tool điều phối (DEPTH_GUARD) → 1 run giữ tối đa 1
-//     slot, không acquire lồng.
+//     slot, không acquire lồng (pool=1 an toàn: người giữ slot duy nhất không
+//     thể tự chờ chính nó).
 //   - escalate_problem auto-apply bị TẮT khi gọi từ sub-agent (tool-executor)
-//     → không xảy ra kịch bản 3 sub-agent đồng thời giữ hết 3 slot rồi mỗi
-//     cái lại chờ slot thứ 4 qua auto-dispatch.
+//     → không xảy ra kịch bản giữ slot rồi chờ slot mới qua auto-dispatch.
 const SUBAGENT_SLOT_QUEUE_LOG_MS = 1_000
 const zenKeyCountForSlots = getZenKeyCount()
 const rawSubagentMaxConcurrent = Number(process.env.SUBAGENT_MAX_CONCURRENT)
 const SUBAGENT_MAX_CONCURRENT = Number.isFinite(rawSubagentMaxConcurrent) && rawSubagentMaxConcurrent >= 1
   ? Math.floor(rawSubagentMaxConcurrent)
-  : Math.min(3, Math.max(1, zenKeyCountForSlots))
+  : 1
 
 interface SubAgentSlot {
   id: number
@@ -491,6 +506,37 @@ const subAgentSlots: SubAgentSlot[] = Array.from(
 )
 /** Chuỗi hiển thị agent đang giữ từng slot (rỗng = slot tự do) */
 const subAgentSlotHolders: string[] = subAgentSlots.map(() => '')
+
+// Boot log phanh (R12 lesson: "mọi fix phanh phải kèm boot log đối chiếu
+// được" — .env đè default là lỗi đã xảy ra thật với GOAL_LOOP_MAX_DEBT_CYCLES).
+// 1 dòng, hiện đúng 1 lần lúc module load — kèm giá trị hiệu dụng + nguồn
+// (env hay default) để đối chiếu dev.log sau mỗi restart.
+console.log(
+  `[SubAgentSlot] Phanh hiệu dụng (R14): maxConcurrent=${SUBAGENT_MAX_CONCURRENT} — TUẦN TỰ, mỗi lượt 1 sub-agent, hoàn tất mới tới kế tiếp (user directive bản 3; ` +
+  `kill-switch env SUBAGENT_MAX_CONCURRENT>=2 để quay lại bản 2 song song) [ nguồn: ${
+    Number.isFinite(rawSubagentMaxConcurrent) && rawSubagentMaxConcurrent >= 1 ? `env=${rawSubagentMaxConcurrent}` : 'default=1'
+  }, zenKeys=${zenKeyCountForSlots} ]`,
+)
+
+/**
+ * Trạng thái pool cho quan sát/test (R14) — observability: đài quan sát + test
+ * đọc giá trị hiệu dụng mà không phải parse log. Fail-open: luôn trả object.
+ */
+export function getSubAgentSlotPoolInfo(): {
+  maxConcurrent: number
+  source: 'env' | 'default'
+  zenKeys: number
+  busySlots: number
+  waiting: number
+} {
+  return {
+    maxConcurrent: SUBAGENT_MAX_CONCURRENT,
+    source: Number.isFinite(rawSubagentMaxConcurrent) && rawSubagentMaxConcurrent >= 1 ? 'env' : 'default',
+    zenKeys: zenKeyCountForSlots,
+    busySlots: subAgentSlotHolders.filter(Boolean).length,
+    waiting: subAgentSlotWaiters.length,
+  }
+}
 interface SubAgentSlotWaiter {
   holder: string
   startedAt: number
@@ -539,11 +585,30 @@ function releaseSubAgentSlot(slot: SubAgentSlot): void {
   }
 }
 
+// ==================== RE-ENTRANCY FLAG (FB-SERIAL-R1-01 — R14) ====================
+// AsyncLocalStorage đánh dấu "async context này đang giữ slot sub-agent" —
+// mirror pattern runWithZenKeyBinding (llm.ts). Vì sao cần: guard duy nhất cũ
+// là calledFromSubAgent = Boolean(context?.delegationRunId) (tool-executor
+// escalate case) — nhưng registerDelegationRun trả NULL khi sub-agent chạy
+// không sessionId (eval harness default / tracker throw fail-open) → guard
+// tưởng là parent → auto-apply dispatch → runSubAgentForProfile → acquire
+// xếp hàng chờ CHÍNH NÓ (pool=1) → tự-chờ deadlock (bounded bởi loop-bound,
+// = 0 → vô hạn thật). Flag này phủ MỌI đường dispatch lồng từ trong sub-agent
+// (không phụ thuộc context có delegationRunId hay không).
+const subAgentRunALS = new AsyncLocalStorage<{ holding: true }>()
+
+/** true nếu async context hiện tại đang chạy bên trong runSubAgentForProfile
+ *  (đang giữ slot pool). Dùng cho guard tool-executor + fail-fast nested. */
+export function isInsideSubAgentRun(): boolean {
+  return subAgentRunALS.getStore()?.holding === true
+}
+
 // ==================== GENERIC SUB-AGENT RUNNER ====================
 
 /**
- * USER DIRECTIVE 2026-10-29b — ĐIỂM ĐI QUA DUY NHẤT cho quy tắc concurrency:
- * "tối đa 3 sub-agent cùng lúc, mỗi sub-agent 1 API key Zen riêng". Wrapper
+ * ĐIỂM ĐI QUA DUY NHẤT cho quy tắc concurrency (R14, bản 3 — ghi đè
+ * 2026-10-29b): "mỗi lượt 1 sub-agent, hoàn tất mới tới kế tiếp; sub-agent
+ * vẫn 1 API key Zen riêng, không dùng chung key". Wrapper
  * này acquire 1 slot trong pool (FIFO) rồi GHIM key của slot đó vào toàn bộ
  * run qua runWithZenKeyBinding (AsyncLocalStorage — mọi LLM call con: ReAct
  * loop, wrap-up, trọng tài độc lập... tự kế thừa đúng key). Mọi đường gọi
@@ -566,14 +631,37 @@ export async function runSubAgentForProfile(params: {
 }): Promise<SubAgentOutcome> {
   const profileName = params.profile?.name || 'unknown-agent'
   const parentName = params.parentAgentName || 'parent-agent'
+  // FB-SERIAL-R1-01 (P2 — R14): context này ĐANG giữ slot (chạy bên trong
+  // sub-agent) mà tiếp tục dispatch lồng → acquire sẽ xếp hàng chờ CHÍNH NÓ
+  // (pool=1) → tự-chờ deadlock. Fail-open: trả outcome fail rõ lý do —
+  // caller (escalate auto-apply / fan-out / eval) thấy lỗi riêng của dispatch
+  // này, run cha KHÔNG sập.
+  if (isInsideSubAgentRun()) {
+    console.warn(`[SubAgentSlot] ⛔ NESTED_DELEGATION_BLOCKED (R14): ${profileName} (từ ${parentName}) — context đang giữ slot, không dispatch lồng (chống tự-chờ)`)
+    return {
+      success: false,
+      agent: profileName,
+      position: '',
+      report: '',
+      tokensUsed: 0,
+      iterations: 0,
+      toolCalls: 0,
+      endedBy: 'error',
+      evidence: [],
+      error: 'NESTED_DELEGATION_BLOCKED (R14): context hiện đang giữ slot pool sub-agent — dispatch lồng sẽ tự-chờ chính nó. Dùng advisory (escalate_problem) hoặc báo parent dispatch giúp ở vòng sau.',
+    }
+  }
   const slot = await acquireSubAgentSlot(profileName, parentName)
   if (slot.keyIndex >= 0) {
     console.log(`[SubAgentSlot] ${profileName} nhận slot ${slot.id}/${SUBAGENT_MAX_CONCURRENT} — ghim Zen key #${slot.keyIndex + 1} riêng cho toàn bộ run (user directive: sub-agent không dùng chung key)`)
   }
   try {
-    return slot.keyIndex >= 0
-      ? await runWithZenKeyBinding(slot.keyIndex, () => runSubAgentForProfileInner(params))
-      : await runSubAgentForProfileInner(params)
+    // FB-SERIAL-R1-01: đánh dấu toàn bộ run (kể cả ReAct + tool calls + trọng
+    // tài) đang giữ slot — mọi dispatch lồng từ trong đây bị chặn ở trên.
+    return subAgentRunALS.run({ holding: true }, () =>
+      slot.keyIndex >= 0
+        ? runWithZenKeyBinding(slot.keyIndex, () => runSubAgentForProfileInner(params))
+        : runSubAgentForProfileInner(params))
   } finally {
     releaseSubAgentSlot(slot)
   }
@@ -1703,7 +1791,9 @@ async function runSubAgentForProfileInner(params: {
         }
         // r69 (BUG-009/025): working-tree delta trong khoảng thời gian sub-agent
         // chạy — rác tmp/, file mồ côi, thay đổi chưa commit đều hiện hình. Lưu
-        // ý đọc số: sub-agent chạy song song có thể lẫn delta của agent khác.
+        // ý đọc số: trước R14 sub-agent chạy song song có thể lăn delta của
+        // agent khác vào đây; R14 đã tuần tự hóa nhưng guard giữ nguyên (phòng
+        // vùng gọi ngoài pool — defense in depth).
         try {
           const { getWorkspaceGitStatus, diffGitStatusSnapshots, formatUncommittedBlock } = await import('@/lib/workspace-git')
           const after = await getWorkspaceGitStatus()

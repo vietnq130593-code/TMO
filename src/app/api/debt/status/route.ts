@@ -45,24 +45,37 @@ export async function GET() {
 
 export async function PATCH(req: NextRequest) {
   try {
+    // FB-R13DEBT-R1-06: typeof check — id/action non-string (vd {"id":123})
+    // cũ → TypeError → 500; giờ → 400 rõ ràng.
     const body = (await req.json().catch(() => null)) as { id?: string; action?: string; reason?: string } | null
-    const id = body?.id?.trim()
-    const action = body?.action?.trim()
+    const id = typeof body?.id === 'string' ? body.id.trim() : ''
+    const action = typeof body?.action === 'string' ? body.action.trim() : ''
+    const reason = typeof body?.reason === 'string' ? body.reason.slice(0, 200) : ''
     if (!id || !action || !['resolve', 'reopen', 'park'].includes(action)) {
-      return NextResponse.json({ ok: false, error: 'Cần { id, action: "resolve"|"reopen"|"park" } (tùy chọn reason)' }, { status: 400 })
+      return NextResponse.json({ ok: false, error: 'Cần { id: string, action: "resolve"|"reopen"|"park" } (tùy chọn reason: string)' }, { status: 400 })
     }
     const { db } = await import('@/lib/db')
     const row = await db.debtLedger.findUnique({ where: { id } })
     if (!row) return NextResponse.json({ ok: false, error: `Không tìm thấy DebtLedger ${id}` }, { status: 404 })
     const now = new Date()
+    // FB-R13DEBT-R1-06: bảng chuyển trạng thái hợp lệ — tránh (a) resolve
+    // parked để resolvedAt stale (giờ được phép nhưng CLEAR parkReason đối
+    // xứng), (b) park debt đã resolved (mâu thuẫn — 400), (c) reopen khi đang
+    // open/in_progress (reset lastAttemptRunId làm finalize run đang chạy mất
+    // attempt — 400).
     if (action === 'resolve') {
+      if (row.status === 'resolved') return NextResponse.json({ ok: false, error: `Debt đã resolved từ trước (lúc ${row.resolvedAt?.toISOString().slice(0, 16) ?? '?'})` }, { status: 400 })
       const updated = await db.debtLedger.update({
         where: { id },
-        data: { status: 'resolved', resolvedAt: now, resolvedByRunId: 'user', resolutionEvidence: `User/thầy đóng thủ công qua PATCH /api/debt/status${body?.reason ? ` — ${body.reason.slice(0, 200)}` : ''}` },
+        // resolve từ parked → xóa parkReason (đối xứng clear-field)
+        data: { status: 'resolved', resolvedAt: now, resolvedByRunId: 'user', parkReason: null, resolutionEvidence: `User/thầy đóng thủ công qua PATCH /api/debt/status${reason ? ` — ${reason}` : ''}` },
       })
       return NextResponse.json({ ok: true, debt: updated })
     }
     if (action === 'reopen') {
+      if (row.status === 'open' || row.status === 'in_progress') {
+        return NextResponse.json({ ok: false, error: `Debt đang ${row.status} — reopen chỉ dành cho parked/resolved (tránh mất attempt của run đang chạy)` }, { status: 400 })
+      }
       const updated = await db.debtLedger.update({
         where: { id },
         data: { status: 'open', attempts: 0, lastAttemptRunId: null, lastAttemptAt: null, resolvedAt: null, resolvedByRunId: null, parkReason: null, lastSeenAt: now },
@@ -70,9 +83,15 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ ok: true, debt: updated })
     }
     // park
+    if (row.status === 'resolved') {
+      return NextResponse.json({ ok: false, error: 'Không park debt đã resolved — dùng reopen trước nếu muốn thử lại' }, { status: 400 })
+    }
+    if (row.status === 'parked') {
+      return NextResponse.json({ ok: false, error: `Debt đã parked từ trước: ${row.parkReason ?? '?'}` }, { status: 400 })
+    }
     const updated = await db.debtLedger.update({
       where: { id },
-      data: { status: 'parked', parkReason: `User/thầy park thủ công${body?.reason ? ` — ${body.reason.slice(0, 200)}` : ' — dừng thử'}` },
+      data: { status: 'parked', parkReason: `User/thầy park thủ công${reason ? ` — ${reason}` : ' — dừng thử'}` },
     })
     return NextResponse.json({ ok: true, debt: updated })
   } catch (err) {
