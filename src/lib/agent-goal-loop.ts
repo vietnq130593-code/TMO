@@ -62,6 +62,19 @@ import { parseToolCallsFromOutput, formatMessagesForLLM, detectBrokenToolCallHin
 // nợ infra ghi Todo follow-up, debt cycle chỉ chạy cho nợ agent TỰ gây ra
 // (Giáo thức Thầy #4 — "nợ infra không giao cho agent trả trong phiên chat").
 import { splitSideIssuesByInfra, INFRA_DEBT_DEMOTE_ENABLED } from '@/lib/execution/debt-demote'
+// R13 (2026-10-31 — user chẩn đoán "nợ chỉ có thêm mà không giảm"): SỔ NỢ
+// KỸ THUẬT THỐNG NHẤT DebtLedger — vòng đời khép kín XUYÊN SESSION: ghi nợ
+// dedupe theo fingerprint → pickup global (session mới thừa kế nợ cũ) →
+// đóng nợ có bằng chứng (todo mirror completed + trọng tài không re-list)
+// → park sau N lần thử vô ích (dừng đốt chu kỳ) → summary đo hiệu quả.
+import {
+  recordDebtIssue,
+  pickupDebtForRun,
+  finalizeDebtAfterRun,
+  DEBT_MAX_PICKUP_ATTEMPTS,
+  type PickedDebt,
+  type DebtFinalizeSummary,
+} from '@/lib/execution/debt-ledger'
 // TASK 43 — Agent Event Bus: emit sự kiện vòng đời run lên bus hợp nhất
 // (GET /api/agent-events) — fail-open tuyệt đối bên trong emit (try/catch).
 import { emitAgentEvent } from '@/lib/agent-event-bus'
@@ -2917,7 +2930,18 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
   // các run trước → khối ưu tiên đặt TRƯỚC user message → agent xử lý nợ
   // TRƯỚC việc mới (chi tiết buildPendingDebtBlock). RESUME: không inject lại
   // (nợ đã nằm trong transcript snapshot nếu run trước thấy).
-  const pendingDebtBlock = resumeState ? '' : await buildPendingDebtBlock(agentSessionId, runId)
+  // R13 — MỞ RỘNG XUYÊN SESSION: pickupDebtForRun = same-session (như cũ) +
+  // NỢ GLOBAL từ DebtLedger (session khác / run chết) tạo mirror Todo trong
+  // session hiện tại → nợ cũ có cơ hội ĐƯỢC GIẢI QUYẾT thay vì ngủ vĩnh viễn.
+  // pickedDebt + openCountBefore dùng cho finalize cuối run (đo nợ giảm).
+  let pickedDebt: PickedDebt[] = []
+  let debtOpenCountBefore = 0
+  const debtPickup = resumeState ? null : await pickupDebtForRun({ sessionId: agentSessionId, currentRunId: runId, agentName })
+  const pendingDebtBlock = debtPickup?.directiveBlock ?? ''
+  if (debtPickup) {
+    pickedDebt = debtPickup.picked
+    debtOpenCountBefore = debtPickup.openCountBefore
+  }
 
   // P-E (2026-10-06 user duyệt) — HÀNG HỒI QUY: các phần việc dở từ các run
   // trước trong phiên (snapshot TaskContextArchive kind='regression' ghi lúc
@@ -5409,7 +5433,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
               try {
                 const { db } = await import('@/lib/db')
                 for (const issue of newInfraIssues) {
-                  await db.todo.create({
+                  const infraTodo = await db.todo.create({
                     data: {
                       sessionId: agentSessionId,
                       content: `🔁 Follow-up INFRA (R12 demotion — run ${runId?.slice(0, 18) ?? '-'}): ${issue}`.slice(0, 480),
@@ -5418,7 +5442,11 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
                       ...(runId ? { runId } : {}),
                       taskMetaJson: JSON.stringify({ source: 'arbiter_side_issue', cycle, debtDecision: verdict.debtDecision, infraDemoted: true }),
                     },
-                  }).catch(() => { /* fail-open từng item */ })
+                  }).catch(() => null)
+                  // R13 — ghi sổ DebtLedger (dedupe fingerprint xuyên run): cùng
+                  // lỗi infra tái xuất hiện ở run khác chỉ tăng recurrenceCount,
+                  // không tạo row mới → nợ NGỪNG tăng trưởng ảo.
+                  if (infraTodo) await recordDebtIssue({ issue, kind: 'infra', sessionId: agentSessionId, runId, todoId: infraTodo.id })
                 }
                 unresolvedDebt = unresolvedDebt.length > 0
                   ? [...new Set([...unresolvedDebt, ...newInfraIssues])]
@@ -5450,7 +5478,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
               const condSuffix = verdict.debtReadiness === 'blocked' && verdict.debtBlockedReason
                 ? ` — điều kiện xử lý: ${verdict.debtBlockedReason.slice(0, 120)}`
                 : ''
-              await db.todo.create({
+              const debtTodo = await db.todo.create({
                 data: {
                   sessionId: agentSessionId,
                   content: `🔁 Follow-up (nợ kỹ thuật từ run ${runId?.slice(0, 18) ?? '-'}): ${issue}${condSuffix}`.slice(0, 480),
@@ -5459,7 +5487,10 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
                   ...(runId ? { runId } : {}),
                   taskMetaJson: JSON.stringify({ source: 'arbiter_side_issue', cycle, debtDecision: verdict.debtDecision, debtReadiness: verdict.debtReadiness }),
                 },
-              }).catch(() => { /* fail-open từng item */ })
+              }).catch(() => null)
+              // R13 — ghi sổ DebtLedger (dedupe fingerprint; resolved mà tái
+              // phát → reopen). Nợ từ nay có vòng đời đo được.
+              if (debtTodo) await recordDebtIssue({ issue, kind: 'agent', sessionId: agentSessionId, runId, todoId: debtTodo.id })
             }
             const whyNoDebt = verdict.debtReadiness === 'blocked'
               ? `NỢ CHƯA THỂ xử lý ở chu kỳ kế — trọng tài xác định còn thiếu điều kiện: ${verdict.debtBlockedReason.slice(0, 160) || '(không nêu lý do)'} → ghi follow-up kèm điều kiện, KHÔNG quay GĐ0 vô ích`
@@ -5929,7 +5960,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       try {
         const { db } = await import('@/lib/db')
         for (const issue of pendingDebtIssues) {
-          await db.todo.create({
+          const failTodo = await db.todo.create({
             data: {
               sessionId: agentSessionId,
               content: `🔁 Follow-up (debt cycle chưa xử lý xong — run ${runId?.slice(0, 18) ?? '-'} dừng vì ${stopReason}): ${issue}`.slice(0, 480),
@@ -5938,11 +5969,30 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
               ...(runId ? { runId } : {}),
               taskMetaJson: JSON.stringify({ source: 'arbiter_side_issue', cycle: cyclesAttempted, debtDecision: 'continue' }),
             },
-          }).catch(() => { /* fail-open từng item */ })
+          }).catch(() => null)
+          // R13 — ghi sổ DebtLedger (dedupe fingerprint xuyên run)
+          if (failTodo) await recordDebtIssue({ issue, kind: 'agent', sessionId: agentSessionId, runId, todoId: failTodo.id })
         }
         recordAgentThought(agentSessionId, `📋 Debt cycle chưa xử lý xong (${stopReason}) — ${pendingDebtIssues.length} lỗi phát sinh được GHI NỢ kỹ thuật (Todo follow-up)`, totalIterations)
       } catch { /* fail-open — ghi nợ không được làm hỏng response cuối */ }
     }
+  }
+
+  // R13 — ĐÓNG VÒNG NỢ CUỐI RUN (DebtLedger): với từng nợ run này đã nhặt
+  // (lastAttemptRunId = runId): (a) todo mirror completed + trọng tài KHÔNG
+  // re-list → RESOLVED (nợ GIẢM — điều chưa từng có trước R13); (b) vẫn
+  // unresolved + attempts ≥ ngưỡng → PARKED (dừng thử vô ích — trả lời
+  // chẩn đoán user "tìm ra vấn đề và giải quyết nhưng không giải quyết
+  // được"); (c) còn lại giữ open cho run sau. Fail-open tuyệt đối.
+  const debtFinalize: DebtFinalizeSummary = await finalizeDebtAfterRun({
+    runId,
+    sessionId: agentSessionId,
+    unresolvedDebtTexts: unresolvedDebt,
+    agentName,
+    cyclesAttempted,
+  })
+  if (debtFinalize.resolved > 0) {
+    recordAgentThought(agentSessionId, `📊 DebtLedger R13: run này ĐÓNG được ${debtFinalize.resolved} nợ (todo mirror completed + trọng tài không re-list)${debtFinalize.parked > 0 ? `, park ${debtFinalize.parked} nợ vượt ngưỡng thử` : ''} — tổng nợ mở: ${debtFinalize.openCountAfter}`, totalIterations)
   }
 
   // ================== FINAL REPORT ==================
@@ -6058,6 +6108,20 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       ? 'trọng tài quyết định hoàn thành + ghi nhận, KHÔNG chạy thêm chu kỳ'
       : `debt cycle chưa xử lý xong — vòng lặp dừng vì ${stopReason}`
     content += `\n\n---\n📋 **NỢ KỸ THUẬT (${unresolvedDebt.length} lỗi phát sinh trong quá trình xử lý — ${debtNote}):**\n${unresolvedDebt.map(d => `- ${d}`).join('\n')}\n\n→ Đã tạo Todo follow-up tương ứng — bạn có thể yêu cầu xử lý các mục này bất cứ lúc nào.`
+  }
+
+  // R13 — SỔ NỢ KỸ THUẬT THỐNG NHẤT (DebtLedger): hiển thị vòng đời nợ xuyên
+  // session cho user thấy nợ GIẢM (resolved) / DỪNG THỬ (parked) — đo hiệu
+  // quả goal-loop theo yêu cầu user R13 ("cái gl cần bây giờ là hiệu quả").
+  // Chỉ hiển thị khi có hoạt động nợ trong run (không spam run thường).
+  if (debtFinalize.resolved > 0 || debtFinalize.parked > 0 || pickedDebt.length > 0) {
+    const delta = debtOpenCountBefore - debtFinalize.openCountAfter
+    const parts: string[] = []
+    if (debtFinalize.resolved > 0) parts.push(`✅ đã giải quyết ${debtFinalize.resolved}: ${debtFinalize.resolvedTitles.slice(0, 3).map(t => t.slice(0, 60)).join(' · ')}`)
+    if (debtFinalize.parked > 0) parts.push(`🅿️ park ${debtFinalize.parked} nợ đã thử ${DEBT_MAX_PICKUP_ATTEMPTS}+ lần không giải quyết được (dừng thử, chờ điều kiện): ${debtFinalize.parkedTitles.slice(0, 2).map(t => t.slice(0, 60)).join(' · ')}`)
+    if (debtFinalize.stillOpen > 0) parts.push(`⏳ ${debtFinalize.stillOpen} nợ vẫn mở (chờ run sau)`)
+    parts.push(`tổng nợ mở toàn hệ thống: ${debtOpenCountBefore} → ${debtFinalize.openCountAfter} (${delta >= 0 ? `−${delta}` : `+${-delta}`})`)
+    content += `\n\n---\n📊 **SỔ NỢ KỸ THUẬT (DebtLedger R13 — vòng đời khép kín xuyên session):** ${parts.join(' | ')}`
   }
 
   // ━━━ r69 (BUG-025 — quan sát r68): BÀN GIAO WORKING TREE ━━━

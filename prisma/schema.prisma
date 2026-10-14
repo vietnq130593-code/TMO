@@ -2114,6 +2114,52 @@ model IssueLedger {
   @@index([severity])
 }
 
+/// R13 (2026-10-31 — user chẩn đoán "nợ chỉ có thêm mà không giảm"): SỔ NỢ KỸ
+/// THUẬT THỐNG NHẤT cho goal-loop — vòng đời khép kín XUYÊN SESSION:
+/// open → (pickup đầu run: in_progress, attempts++) → resolved (todo mirror
+/// completed + trọng tài KHÔNG re-list) | parked (attempts ≥ 3 mà vẫn chưa
+/// giải quyết — dừng thử, chờ điều kiện/thầy quyết định wont_fix/reopen).
+/// fingerprint unique = dedupe xuyên run: cùng lỗi gốc tái xuất hiện ở run
+/// khác chỉ tăng recurrenceCount, KHÔNG tạo row mới (chống tăng trưởng ảo).
+/// Nợ resolved mà tái phát → reopen (attempts=0, recurrenceCount++).
+model DebtLedger {
+  id                String    @id @default(cuid())
+  /// Chuẩn hóa nội dung lỗi (bỏ runId/path/số) — unique key dedupe xuyên run
+  fingerprint       String    @unique
+  /// Nội dung lỗi gốc (đã strip prefix Follow-up) — hiển thị cho agent/user
+  title             String
+  /// agent (nợ do agent gây ra — được debt cycle xử lý) | infra (R12 demotion)
+  kind              String    @default("agent")
+  /// open | in_progress | resolved | parked
+  status            String    @default("open")
+  severity          String    @default("medium")
+  originSessionId   String?
+  originRunId       String?
+  /// Run gần nhất NHẶT nợ này để xử lý (đối chiếu ở finalize cuối run)
+  lastAttemptRunId  String?
+  /// Số lần nợ được pickup — ngưỡng park khi vẫn unresolved
+  attempts          Int       @default(0)
+  /// Số lần lỗi gốc TÁI XUẤT HIỆN ở run khác (recurrence — báo hiệu hệ thống)
+  recurrenceCount   Int       @default(0)
+  /// Bằng chứng gốc khi ghi nợ (tool output / error message)
+  evidence          String?
+  /// Lý do park (đã thử N lần không giải quyết — cần điều kiện gì)
+  parkReason        String?
+  /// Todo follow-up row đầu tiên ghi nợ (truy vết về nguồn)
+  todoId            String?
+  openedAt          DateTime  @default(now())
+  lastSeenAt        DateTime  @default(now())
+  lastAttemptAt     DateTime?
+  resolvedAt        DateTime?
+  resolvedByRunId   String?
+  /// Bằng chứng giải quyết (verdict không re-list + todo mirror completed)
+  resolutionEvidence String?
+
+  @@index([status, lastSeenAt])
+  @@index([kind])
+  @@index([lastAttemptRunId])
+}
+
 /// OPUS — cài đặt toàn hệ thống (singleton). Kill switch là PHANH DUY NHẤT còn
 /// lại khi auto mode chạy không giới hạn vòng/budget (user decision #2) —
 /// được đọc ở MỖI vòng trước khi Opus tự hành động tiếp.
