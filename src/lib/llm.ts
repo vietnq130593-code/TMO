@@ -269,6 +269,11 @@ export interface LLMCallOptions {
    *  thực nghiệm 28/09: prompt 120k chars + max_effort + mt700 → content '';
    *  cùng prompt + effort low → reasoning chỉ 88 tokens, digest đủ dùng). */
   reasoningEffort?: string
+  /** R15-R1-03b (auditor): đánh dấu call này phát từ sub-agent đang giữ slot —
+   *  OC-CLI spawn env TMO_INSIDE_SUBAGENT_RUN → bridge tmo_* forward qua HTTP
+   *  context → guard escalate phía app chặn auto-dispatch lồng cross-process
+   *  (ALS không xuyên được qua process CLI). Chỉ subagent-delegate set true. */
+  insideSubAgentRun?: boolean
 }
 
 // ==================== CONSTANTS ====================
@@ -5620,6 +5625,10 @@ async function callOpenCodeCLIProvider(
             // 2026-09-26 FIX: truyền sessionId thật (trước đây '' → bridge ghi
             // ToolMetric session 'unknown', tách khỏi run — Tool health khó truy vết)
             TMO_SESSION_ID: options?.sessionId || '',
+            // R15-R1-03b: cờ cross-process cho guard escalate — bridge tmo_*
+            // đọc env này và forward vào context HTTP → tool-executor chặn
+            // auto-dispatch lồng từ sub-agent chạy qua CLI transport.
+            TMO_INSIDE_SUBAGENT_RUN: options?.insideSubAgentRun ? '1' : '',
             // 2026-10-20 TASK 20: truyền runId thật — todo_write từ inner loop CLI
             // (tmo_todo bridge) gắn đúng run → TODO block + auto-complete hoạt động
             // trên đường CLI (trước đây todos CLI luôn runId=null → kế hoạch MẤT
@@ -5648,6 +5657,10 @@ async function callOpenCodeCLIProvider(
             // 2026-09-26 FIX: truyền sessionId thật (trước đây '' → bridge ghi
             // ToolMetric session 'unknown', tách khỏi run — Tool health khó truy vết)
             TMO_SESSION_ID: options?.sessionId || '',
+            // R15-R1-03b: cờ cross-process cho guard escalate — bridge tmo_*
+            // đọc env này và forward vào context HTTP → tool-executor chặn
+            // auto-dispatch lồng từ sub-agent chạy qua CLI transport.
+            TMO_INSIDE_SUBAGENT_RUN: options?.insideSubAgentRun ? '1' : '',
             // 2026-10-20 TASK 20: truyền runId thật — todo_write từ inner loop CLI
             // (tmo_todo bridge) gắn đúng run → TODO block + auto-complete hoạt động
             // trên đường CLI (trước đây todos CLI luôn runId=null → kế hoạch MẤT

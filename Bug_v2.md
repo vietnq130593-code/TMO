@@ -1501,3 +1501,36 @@
 - **Fix:** evidence đổi `todo ${id} (mirror/gốc — FB-R13DEBT-R1-01) completed` — nhãn đúng cho cả 2 đường match. Kiểm chứng: đọc code debt-ledger.ts finalize; tsc 0.
 
 > **Sai-kỳ-vọng phía người-rà (không cấp ID — dữ liệu chống tự tin sai):** 4 nghi vấn auditor R2 tự bác bằng probe (padding ' n ' KHÔNG phá dính-chữ nhờ collapse \s; waiter không rò ALS context; production DB 0 rows nên không row-đôi pre-R14; PATCH resolve-từ-resolved đã có guard). Auditor R1-A tự bác 4 (pool=1 không giết batch bởi timeout per-LLM-call + heartbeat; Promise.all còn lại là Prisma/lint không phải agent; .env không đè (đã có boot log đối chiếu); thứ tự acquire fan-out có thể đảo nhưng semantics "mỗi lượt 1" vẫn thỏa + thứ tự message cho LLM giữ nguyên).
+
+---
+
+## ĐỢT R15-DEBT — Giải quyết nợ kỹ thuật còn lại (2026-10-15) — auditor R15-FB-R1 7 phát hiện, fix 7/7
+
+### BUG2-255 · C·P3 — Biên bản R14 ghi "đã fix" BUG2-253 nhưng code commit 58ede82 THỰC TẾ thiếu mục 3-4 (reopening) + P-R13-1 "1 nguồn" chưa trọn — R15-R1-01
+- **Hiện tượng (phát hiện khi triển khai R15):** git show HEAD:debt-ledger.ts xác nhận fallback kill-switch chỉ có mục 1-2 — đúng nội dung BUG2-253 ghi đã fix ở vòng R3. Hệ quả: "đã giải quyết" trên biên bản ≠ đã giải quyết trên code (đúng lớp lỗi user chẩn đoán từ đầu). Ngoài ra production path (a) (DEBT_LEDGER=1) dựng block inline riêng cũng thiếu mục 4 + vùng bảo vệ — nghịch lý chế độ kill-switch hiếm khi đầy đủ hơn chế độ chính.
+- **Fix (R15):** (1) dồn buildPendingDebtBlock (agent-goal-loop — dead-code chỉ còn 2 test import) về buildLegacyPendingDebtBlock trong debt-ledger.ts; (2) extracted formatDebtDirectiveBlock — 1 nguồn format duy nhất cho CẢ fallback lẫn production path (a); (3) 2 test file đổi import; (4) r102 F1 pin mạnh hóa + B0 MỚI pin hành vi 4 mục trên đường production (pin cũ không bắt được lỗi này).
+- **Kiểm chứng:** r102 14/14 (gồm B0 mới) + task26 7/7 + task28 9/9 behavioral; full gate 1727/1727.
+
+### BUG2-256 · E·P3 — UI list "Nợ đang mở" badge trạng thái render RỖNG: API open[] thiếu field status — R15-R1-02
+- **Hiện tượng:** getDebtLedgerSummary map open/parked không trả `status` → DebtRow.status undefined → statusBadge rơi default → Badge viền không chữ; không phân biệt được open vs in_progress trong list.
+- **Fix:** thêm `status: d.status` vào 2 map + interface DebtLedgerSummary. Kiểm chứng: đọc code + UI panel render đúng.
+
+### BUG2-257 · B·P3 — ALS re-entrancy guard không global hóa cùng pool — cửa sau stall cross-bundle/cross-process — R15-R1-03
+- **Hiện tượng:** R15 đưa pool lên globalThis singleton nhưng subAgentRunALS còn per-module-instance: next dev nạp module 2 instance → guard instance B không thấy flag instance A. Trước R15 đường trốn-guard rơi vào pool khác (chạy song song — vỡ tuần tự nhưng sống); sau R15 rơi vào GLOBAL pool đang bị cha giữ → stall bounded 15'. Đường cross-process (sub-agent CLI transport → bridge tmo_* HTTP → escalate auto-apply) ALS không xuyên được.
+- **Fix (3 lớp):** (a) ALS instance lên globalThis (`__tmoSubAgentRunALS`) đồng bộ pool; (b) LLMCallOptions.insideSubAgentRun → spawn env TMO_INSIDE_SUBAGENT_RUN (cả 2 nhánh spawn, cả call chính + wrap-up); (c) bridge _tmo-common.ts forward cờ qua context HTTP → route parse → executeTool context → guard escalate lớp 3 `context.insideSubAgentRun === true`.
+- **Kiểm chứng:** r101 B5 pin mới (globalThis ALS + guard 3 lớp) 15/15; tsc 0.
+
+### BUG2-258 · C·P4 — severity không re-derive ở nhánh bump: "tái phát ≥2" chưa-resolved không bao giờ lên high — R15-R1-04
+- **Fix:** nhánh bump thêm `severity: deriveDebtSeverity(kind, nextRecurrence)`. Kiểm chứng: đọc code; định nghĩa docblock giờ đúng mọi nhánh (create/reopen/bump).
+
+### BUG2-259 · D·P4 — comment kill-switch "+ global" sai sự thật — R15-R1-05
+- **Fix:** đính chính — global pickup TẮT cùng sổ cái (cần bảng DebtLedger).
+
+### BUG2-260 · G·P4 — .env.example thiếu SQLITE_BUSY_TIMEOUT_S (env mới P-NEW-1) — R15-R1-06
+- **Fix:** thêm mục + chú thích (giây, 1..120, mặc định 15). Precedent R12: mọi phanh phải hiện diện trong env example.
+
+### BUG2-261 · H·P4 — docs/arch-spec/ untracked ngoài scope R15 — R15-R1-07
+- **Xử lý:** KHÔNG đưa vào commit R15 (file spec design-only từ phiên khác — tránh nhiễu scope); để lại working tree chờ phiên sở hữu quyết định.
+
+> **Nợ R15 đã đóng (không cấp ID bug — là mục nợ kỹ thuật, không phải bug):** PATCH P2023 (validate cuid → 400 + catch lớp 2 — E2E curl garbage-id → 400 rõ nghĩa) · BUG2-239 observability pool (wire production consumer: /api/debt/status slotPool + queueStats p50/p95/max + UI panel) · P-R13-2 UI panel Sổ nợ (Database > Analytics — counts + phanh tuần tự + waitedMs + nút resolve/reopen/park PATCH) · P-NEW-4 triage ~10K tokens/call (reasoningEffort 'low' tường minh — mirror tiền lệ Task 55) · P-NEW-1 SQLite socket-timeout (gốc cơ chế: Prisma SQLite mặc định busy_timeout=5000ms ĐÚNG con số quan sát R11 — live-probe verified; nâng 15s qua URL socket_timeout áp MỌI connection pool + env override) · P-NEW-2 SelfDirection song song (đóng MITIGATED với bằng chứng 3 lớp: user-run-priority gate R12 wired orchestrator:2481 + worker mark/done, OC-CLI semaphore F7, pool=1 R14) · đo phân phối waitedMs (queueStats trong slotPool + UI) · severity cột chết (deriveDebtSeverity có ý nghĩa: infra hoặc tái phát ≥2 → high, hiển thị UI) · TB-03 dead-spec (NOTE R14/R15 3 chỗ + khung quyết định docs/QUYET-DINH-TUAN-TU-VS-CONCURRENCY-R15.md) · agent-delegator doc legacy (docblock LEGACY PATH) · migration re-fingerprint (MOOT — production 0 rows).
+> **Nợ còn mở (trung thực):** P-R13-3 pickup lọc theo relevance — cần dữ liệu vận hành thật (DebtLedger production 0 rows; chờ vài run có nợ tự nhiên) · UI panel đo RAM headroom cho khung kill-switch (đã có waitedMs; MemAvailable theo dõi qua MemWatchdog log) · docs/arch-spec/ chờ phiên sở hữu.

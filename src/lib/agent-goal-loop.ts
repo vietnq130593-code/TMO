@@ -1144,50 +1144,13 @@ async function buildRunTodosBlock(sessionId: string | null | undefined, runId: s
 }
 
 /**
- * 2026-10-27 (user directive — CƠ CHỂ XỬ LÝ NỢ Todo follow-up TẠI THỜI ĐIỂM
- * RÕ RẰNG): Todo follow-up (nợ kỹ thuật — trọng tài ghi khi run cũ kết thúc
- * còn side issues ngoài quyền) trước đây CHỈ được ghi ra DB rồi "ngủ" — không
- * có thời điểm nào hệ thống nhặt lên xử lý. Giờ: THỜI ĐIỂM XỬ LÝ = ĐẦU MỖI RUN
- * MỚI trong cùng session. Harness đọc các Todo follow-up pending từ các run
- * TRƯỚC (source arbiter_side_issue, loại run hiện tại) → render khối ưu tiên
- * đặt TRƯỚC user message của run mới → agent phải xử lý nợ TRƯỚC việc mới.
- *
- * Mỗi mục kèm id để agent ĐÓNG ĐÚNG row bằng todo_write({id, status}) —
- * todoWrite update-by-id không đổi runId gốc (chỉ backfill khi null) nên
- * không giành todo về run hiện tại. Fail-open tuyệt đối.
+ * P-R13-1 (R15) — buildPendingDebtBlock ĐÃ DỒN về buildLegacyPendingDebtBlock
+ * trong @/lib/execution/debt-ledger (HÀM DUY NHẤT — trước đây hàm này là
+ * dead-code production path chỉ vì 2 file test import; kill-switch fallback
+ * lại copy inline → BUG2-253 lệch mục 3-4 không ai bắt được). Mọi đường dựng
+ * khối nợ same-session giờ cùng 1 nguồn: debt-ledger.ts (user directive gốc
+ * 2026-10-27 — thời điểm xử lý nợ = đầu run mới trong cùng session).
  */
-export async function buildPendingDebtBlock(sessionId: string | null | undefined, currentRunId: string | null): Promise<string> {
-  if (!sessionId) return ''
-  try {
-    const { db } = await import('@/lib/db')
-    const pending = await db.todo.findMany({
-      where: {
-        sessionId,
-        // 2026-10-27 (rà soát Task 27-a): nhặt cả nợ đang 'in_progress'/'blocked'
-        // — run trước chết giữa lúc xử lý nợ thì nợ kẹt ở trạng thái đó, không
-        // archive được (được bảo vệ) cũng không pending → không được bỏ lại ngủ
-        // vĩnh viễn; run mới nhặt lại và xử lý tiếp.
-        status: { in: ['pending', 'in_progress', 'blocked'] },
-        content: { startsWith: '🔁 Follow-up' },
-      },
-      orderBy: { createdAt: 'asc' },
-      take: 10,
-    })
-    // Chỉ nợ từ các run KHÁC (run hiện tại chưa tồn tại nợ — filter JS cho
-    // an toàn với runId null của data cũ)
-    const debt = pending.filter(t => t.runId !== currentRunId)
-    if (debt.length === 0) return ''
-    console.log(`[GoalLoop] NỢ KỸ THUẬT: nhặt ${debt.length} Todo follow-up còn treo từ các run trước trong session ${sessionId} → ưu tiên xử lý đầu run`)
-    const lines = debt.map(t => `- [id ${t.id}] ${t.content.replace(/^🔁 Follow-up \([^)]*\):\s*/, '')}`)
-    return `[📋 NỢ KỸ THUẬT CÒN TREO — ƯU TIÊN XỬ LÝ TRƯỚC VIỆC MỚI (user directive 2026-10-27)]
-Các run trước trong phiên này còn ${debt.length} nợ kỹ thuật chưa xử lý (trọng tài đã ghi Todo follow-up). Thứ tự ưu tiên SẮT của run này:
-1. XỬ LÝ TOÀN BỘ nợ dưới đây TRƯỚC TIÊN (đưa từng mục vào todo_write kế hoạch, đặt TRƯỚC các việc mới).
-2. Xử lý xong mục nào → gọi todo_write với ĐÚNG "id" của mục đó + status "completed" (đóng row cũ — KHÔNG tạo row trùng nội dung).
-3. Mục nào vẫn nằm ngoài quyền sửa (phần hạ tầng VẪN ĐƯỢC BẢO VỆ: .env/keys, file data db/, opencode.json, .opencode/, mini-services/ — hoặc chờ phê duyệt / vendor bên thứ 3) → trước khi kết luận ngoài quyền, HÃY KIỂM TRA đã thử đủ đường tự phục vụ chưa: cài package (manage_packages), sửa schema (file_edit prisma/schema.prisma + bun run db:push), tự xây tool thiếu (create_custom_tool), gọi agent đúng chức trách (dispatch_agent), escalate Omega tạo agent mới (escalate_problem). Chỉ khi THẬT SỰ thiếu điều kiện ngoài tầm với → nêu rõ trạng thái + ĐIỀU KIỆN CẦN trong báo cáo, KHÔNG xóa bỏ.
-4. Hết nợ mới làm việc mới của yêu cầu hiện tại.
-${lines.join('\n')}`
-  } catch { return '' /* fail-open — nợ kỹ thuật không được phép làm hỏng run mới */ }
-}
 
 // ==================== P-D (2026-10-06 — user phê duyệt) — WORK LEDGER RENDER ====================
 // Hai khối render dữ liệu công việc từ DB vào directive:
@@ -2928,7 +2891,8 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
   // 2026-10-27 (user directive — THỜI ĐIỂM XỬ LÝ NỢ Todo follow-up): đầu MỖI
   // RUN MỚI trong cùng session, harness nhặt các Todo follow-up pending từ
   // các run trước → khối ưu tiên đặt TRƯỚC user message → agent xử lý nợ
-  // TRƯỚC việc mới (chi tiết buildPendingDebtBlock). RESUME: không inject lại
+  // TRƯỚC việc mới (chi tiết buildLegacyPendingDebtBlock — debt-ledger.ts,
+  // P-R13-1 dồn hàm R15). RESUME: không inject lại
   // (nợ đã nằm trong transcript snapshot nếu run trước thấy).
   // R13 — MỞ RỘNG XUYÊN SESSION: pickupDebtForRun = same-session (như cũ) +
   // NỢ GLOBAL từ DebtLedger (session khác / run chết) tạo mirror Todo trong
@@ -3020,7 +2984,8 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
     console.log(`[GoalLoop] ${agentName} nạp BẢN ĐỒ DỮ LIỆU (${dataMapBlock.length} chars) — định tuyến vùng đọc/ghi theo mục tiêu (Prisma/Qdrant/Neo4J)`)
   }
   // 2026-10-27 — Thought Progress ghi rõ run này mở đầu bằng xử lý nợ kỹ thuật
-  // (nguồn: Todo follow-up pending từ các run trước — xem buildPendingDebtBlock)
+  // (nguồn: Todo follow-up pending từ các run trước — xem buildLegacyPendingDebtBlock
+  // trong debt-ledger.ts, P-R13-1)
   if (pendingDebtBlock) {
     recordAgentThought(agentSessionId, '📋 NỢ KỸ THUẬT CÒN TREO: harness nhặt Todo follow-up pending từ các run trước trong phiên — run này ƯU TIÊN xử lý nợ TRƯỚC việc mới (user directive 2026-10-27)', 0)
   }
@@ -5477,7 +5442,8 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             for (const issue of verdict.sideIssues) {
               // 2026-10-27 (phiên 4): nợ bị BLOCKED (chưa thể xử lý chu kỳ kế) →
               // đính kèm ĐIỀU KIỆN CẦN vào nội dung follow-up để run nhặt nợ
-              // (buildPendingDebtBlock) và người quản trị thấy ngay còn thiếu gì.
+              // (buildLegacyPendingDebtBlock — debt-ledger.ts) và người quản trị
+              // thấy ngay còn thiếu gì.
               const condSuffix = verdict.debtReadiness === 'blocked' && verdict.debtBlockedReason
                 ? ` — điều kiện xử lý: ${verdict.debtBlockedReason.slice(0, 120)}`
                 : ''

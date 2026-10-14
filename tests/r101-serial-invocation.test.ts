@@ -169,7 +169,12 @@ describe('R101 · B. Source-contract — 4 call-site TUẦN TỰ', () => {
     const sd = readSrc('src/lib/subagent-delegate.ts')
     // export + ALS + fail-open outcome trong runSubAgentForProfile
     expect(sd).toContain('export function isInsideSubAgentRun(): boolean')
-    expect(sd).toContain('const subAgentRunALS = new AsyncLocalStorage')
+    // R15-R1-03 (auditor): ALS instance giờ BEHIND globalThis (cùng pattern
+    // pool — next dev đa instance module phải dùng chung 1 ALS toàn process,
+    // nếu không guard instance B không thấy flag instance A → cửa sau stall
+    // cross-bundle). Pin cả guard lẫn khai báo mới.
+    expect(sd).toContain('__tmoSubAgentRunALS')
+    expect(sd).toContain('gForSubAgentALS.__tmoSubAgentRunALS ?? (gForSubAgentALS.__tmoSubAgentRunALS = new AsyncLocalStorage')
     expect(sd).toContain('NESTED_DELEGATION_BLOCKED (R14): context hiện đang giữ slot pool sub-agent')
     // wrap holding quanh inner run
     const runFn = extractFn(sd, 'runSubAgentForProfile')
@@ -182,6 +187,8 @@ describe('R101 · B. Source-contract — 4 call-site TUẦN TỰ', () => {
     const guardRegion = te.slice(gi - 400, gi + 700)
     expect(guardRegion).toContain("const { isInsideSubAgentRun } = await import('@/lib/subagent-delegate')")
     expect(guardRegion).toContain('if (isInsideSubAgentRun()) calledFromSubAgent = true')
+    // R15-R1-03b: lớp 3 cross-process — cờ từ bridge tmo_* (CLI transport)
+    expect(guardRegion).toContain('if (context?.insideSubAgentRun === true) calledFromSubAgent = true')
   })
 
   test('B6 — FB-SERIAL-R1-02/03 + JD strings + sivil comments: hết prompt sống nói "song song"', () => {

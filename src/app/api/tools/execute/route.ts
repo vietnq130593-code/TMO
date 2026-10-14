@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json() as {
       tool?: string
       args?: Record<string, unknown>
-      context?: { agentName?: string; sessionId?: string | null; runId?: string | null }
+      context?: { agentName?: string; sessionId?: string | null; runId?: string | null; insideSubAgentRun?: boolean }
     }
 
     const { tool, args = {}, context } = body
@@ -61,6 +61,10 @@ export async function POST(request: NextRequest) {
       agentName: context?.agentName || 'opencode-bridge',
       sessionId: context?.sessionId ?? null,
       runId: context?.runId ?? null,
+      // R15-R1-03b: cờ cross-process từ bridge tmo_* (env TMO_INSIDE_SUBAGENT_RUN
+      // do subagent-delegate set lúc spawn CLI) — guard escalate dùng chặn
+      // auto-dispatch lồng từ sub-agent chạy qua CLI transport.
+      insideSubAgentRun: context?.insideSubAgentRun === true,
     })
 
     // ===== TODO AUTO-COMPLETE THEO BẰNG CHỨNG (USER DIRECTIVE 2026-09-28 —

@@ -10,6 +10,11 @@
  *   - parked[]: nợ đã dừng thử (parkReason — chờ điều kiện/thầy quyết định)
  *   - recentResolved[]: 10 nợ đã giải quyết gần nhất (đối chiếu hiệu quả)
  *   - config: ngưỡng park / giới hạn pickup global / kill-switch
+ *   - slotPool (R15 — BUG2-239 production consumer): trạng thái PHANH TUẦN TỰ
+ *     sub-agent (maxConcurrent, busy/waiting, phân phối waitedMs p50/p95) —
+ *     đài quan sát đọc trực tiếp từ singleton pool (globalThis — không parse
+ *     log). Dynamic import: route không phải nạp tĩnh cả llm.ts/tool-executor.
+ *     Fail-open: import lỗi → slotPool:null (nợ ledger vẫn trả đủ).
  *
  * PATCH /api/debt/status  { id: string, action: 'resolve'|'reopen'|'park' }
  *   Can thiệp thủ công của THẦY/USER (giám sát có giám sát — user directive R13):
@@ -17,6 +22,11 @@
  *   - reopen : mở lại nợ parked/open (attempts=0 — cấp điều kiện thử lại)
  *   - park   : dừng thử 1 nợ đang mở (không đốt thêm chu kỳ agent)
  *   Trả row sau cập nhật. Fail-open 400 khi id/action thiếu.
+ *   R15 (P2023 debt fix — fixbug.md "Ngoài phạm vi" R14): id sai-format
+ *   ("abc", "123", chuỗi tấn công) trước đây rơi Prisma P2023 "Inconsistent
+ *   column data" → 500 không rõ nghĩa. Giờ validate format cuid TRƯỚC query →
+ *   400; catch vẫn hứng P2023 làm lớp 2 (belt-and-suspenders — nếu tương lai
+ *   Prisma đổi format thì không mở lại lỗ 500).
  */
 
 import { NextResponse, NextRequest } from 'next/server'
@@ -27,6 +37,16 @@ export const dynamic = 'force-dynamic'
 export async function GET() {
   try {
     const summary = await getDebtLedgerSummary()
+    // R15 (BUG2-239): production consumer đầu tiên cho getSubAgentSlotPoolInfo
+    // — "đài quan sát" phanh tuần tự. Dynamic import (pattern import db phía
+    // PATCH): tránh nạp tĩnh chu trình llm/tool-executor vào route bundle.
+    let slotPool: ReturnType<typeof import('@/lib/subagent-delegate')['getSubAgentSlotPoolInfo']> | null = null
+    try {
+      const { getSubAgentSlotPoolInfo } = await import('@/lib/subagent-delegate')
+      slotPool = getSubAgentSlotPoolInfo()
+    } catch {
+      slotPool = null // fail-open — ledger vẫn trả; UI hiển thị "—"
+    }
     return NextResponse.json({
       ok: true,
       enabled: DEBT_LEDGER_ENABLED,
@@ -36,6 +56,7 @@ export async function GET() {
         globalMinAgeMin: DEBT_GLOBAL_MIN_AGE_MIN,
         sweepStaleDays: DEBT_SWEEP_STALE_DAYS,
       },
+      slotPool,
       ...summary,
     })
   } catch (err) {
@@ -53,6 +74,12 @@ export async function PATCH(req: NextRequest) {
     const reason = typeof body?.reason === 'string' ? body.reason.slice(0, 200) : ''
     if (!id || !action || !['resolve', 'reopen', 'park'].includes(action)) {
       return NextResponse.json({ ok: false, error: 'Cần { id: string, action: "resolve"|"reopen"|"park" } (tùy chọn reason: string)' }, { status: 400 })
+    }
+    // R15 (P2023): DebtLedger.id là cuid (c + 24 ký tự [a-z0-9], tổng 25 —
+    // prisma @default(cuid())). Chuỗi ngoài charset/độ dài này khiến Prisma
+    // throw P2023 → 500. Chặn trước: 400 kèm thông điệp rõ.
+    if (!/^c[a-z0-9]{8,40}$/i.test(id)) {
+      return NextResponse.json({ ok: false, error: `id "${id.slice(0, 40)}" không đúng format cuid của DebtLedger (c + [a-z0-9]) — kiểm tra lại id từ GET /api/debt/status` }, { status: 400 })
     }
     const { db } = await import('@/lib/db')
     const row = await db.debtLedger.findUnique({ where: { id } })
@@ -95,6 +122,13 @@ export async function PATCH(req: NextRequest) {
     })
     return NextResponse.json({ ok: true, debt: updated })
   } catch (err) {
+    // R15 (P2023 lớp 2): nếu Prisma vẫn nổ inconsistent-column (format cuid
+    // đổi ở tương lai) → 400 thay vì 500 — PATCH là can thiệp thủ công,
+    // người gọi cần thông điệp sửa được chứ không phải server-error.
+    const msg = err instanceof Error ? err.message : String(err)
+    if (msg.includes('P2023') || /inconsistent column data/i.test(msg)) {
+      return NextResponse.json({ ok: false, error: 'id không khớp format lưu trữ của DebtLedger (P2023) — lấy lại id từ GET /api/debt/status' }, { status: 400 })
+    }
     return NextResponse.json({ ok: false, error: err instanceof Error ? err.message.slice(0, 200) : 'unknown' }, { status: 500 })
   }
 }

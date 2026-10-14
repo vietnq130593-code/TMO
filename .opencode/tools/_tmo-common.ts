@@ -23,6 +23,13 @@ const SESSION_ID = process.env.TMO_SESSION_ID || null
  * autoCompleteRunTodosByEvidence đều query theo sessionId+runId. */
 const RUN_ID = process.env.TMO_RUN_ID || null
 
+/** R15-R1-03b (auditor): cờ "call này phát từ sub-agent đang giữ slot" — env
+ * từ callOpenCodeCLIProvider (subagent-delegate set options.insideSubAgentRun).
+ * Forward qua context HTTP để guard escalate phía app chặn auto-dispatch lồng
+ * cross-process (ALS không xuyên được qua process CLI — FB-SERIAL-R1-01
+ * mở rộng đường CLI transport). */
+const INSIDE_SUBAGENT_RUN = process.env.TMO_INSIDE_SUBAGENT_RUN === '1'
+
 /**
  * Call TMO executeTool via HTTP.
  * Returns stringified result (compact for LLM context).
@@ -42,6 +49,7 @@ export async function callTmoTool(
           agentName: AGENT_NAME,
           sessionId: SESSION_ID,
           runId: RUN_ID,
+          insideSubAgentRun: INSIDE_SUBAGENT_RUN,
         },
       }),
       signal: AbortSignal.timeout(60000), // 60s timeout

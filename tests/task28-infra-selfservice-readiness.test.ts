@@ -14,10 +14,10 @@
 import { describe, expect, test } from 'bun:test'
 import {
   assembleGoalLoopSystemPrompt,
-  buildPendingDebtBlock,
   EVALUATOR_SYSTEM_PROMPT,
   parseEvalVerdict,
 } from '../src/lib/agent-goal-loop'
+import { buildLegacyPendingDebtBlock } from '../src/lib/execution/debt-ledger'
 
 // ==================== (1) INFRA SELF-SERVICE PROTOCOL ====================
 
@@ -123,7 +123,7 @@ describe('Task 28 — GĐ3 debt readiness (xác định lại khả năng xử l
 
 // ==================== (3) NỢ FOLLOW-UP BLOCK — ĐƯỜNG TỰ PHỤC VỤ ====================
 
-describe('Task 28 — buildPendingDebtBlock nhắc đường tự phục vụ trước khi kết luận ngoài quyền', () => {
+describe('Task 28 — buildLegacyPendingDebtBlock nhắc đường tự phục vụ trước khi kết luận ngoài quyền (P-R13-1 R15)', () => {
   test('D1. Block nợ chứa hướng dẫn thử đường tự phục vụ (package/schema/tool/delegate/escalate)', async () => {
     const SESSION = `test-task28-${Date.now()}`
     const { db } = await import('../src/lib/db')
@@ -135,7 +135,7 @@ describe('Task 28 — buildPendingDebtBlock nhắc đường tự phục vụ tr
         runId: 'old-run-t28',
       },
     })
-    const block = await buildPendingDebtBlock(SESSION, 'cur-run-t28')
+    const block = await buildLegacyPendingDebtBlock(SESSION, 'cur-run-t28')
     expect(block).toContain('NỢ KỸ THUẬT CÒN TREO')
     expect(block).toContain('manage_packages')
     expect(block).toContain('create_custom_tool')

@@ -388,6 +388,16 @@ function buildSingleAgentTask(
 /**
  * Execute a sub-agent task.
  *
+ * ⚠️ LEGACY PATH (ghi nhận R15 — nợ doc từ fixbug R14 "Ngoài phạm vi"):
+ * production KHÔNG đi qua module này cho việc điều phối sub-agent — mọi đường
+ * delegate thật (delegate_task / dispatch_agent / dispatch_agents_parallel /
+ * eval harness / goal-loop) tập trung tại subagent-delegate.ts
+ * runSubAgentForProfile (điểm đi qua DUY NHẤT — R14 tuần tự hóa pool=1).
+ * Module này là đường orchestration v2.1 Phase 5.2 cũ, giữ vì orchestration/
+ * index + dev-tools + tool-executor còn import types/helper; flag
+ * ENABLE_REAL_DELEGATE=false cố ý (placeholder 100ms) — KHÔNG bật và KHÔNG xây
+ * tính năng mới trên đường này; muốn sub-agent thật → subagent-delegate.
+ *
  * v2.1 Phase 5.2 — when ENABLE_REAL_DELEGATE is true, this dispatches a REAL
  * sub-agent LLM call (with optional single tool call + synthesis). When the
  * flag is false, the legacy placeholder behavior (100ms sleep + fake success)

@@ -4381,7 +4381,7 @@ export async function archiveStaleRunTodos(sessionId: string): Promise<number> {
         // 2026-10-27 (user directive — NỢ KỸ THUẬT sống qua archive): Todo
         // follow-up ("🔁 Follow-up...") là NỢ KỸ THUẬT hệ thống ghi ở cuối run
         // cho RUN SAU xử lý — KHÔNG phải todo task của run cũ. Nếu archive chúng
-        // ở đầu run mới thì buildPendingDebtBlock (cơ chế xử lý nợ đầu run —
+        // ở đầu run mới thì buildLegacyPendingDebtBlock/debt-ledger (cơ chế xử lý nợ đầu run —
         // user directive 2026-10-27) không bao giờ thấy → nợ ngủ vĩnh viễn.
         // Giữ nguyên pending; agent xử lý xong tự đánh completed qua todo_write.
         NOT: { content: { startsWith: '🔁 Follow-up' } },
@@ -4439,7 +4439,7 @@ export async function closeRunTodosAtEnd(params: {
     // 2026-10-27 (rà soát Task 27-a — BUG nợ tự đóng): Todo follow-up
     // ("🔁 Follow-up...") là NỢ KỸ THUẬT hệ thống ghi ở cuối run (nhánh
     // complete + ghi nợ) cho RUN SAU xử lý — nếu bulk-close dưới đây ép chúng
-    // thành completed/failed/archived thì buildPendingDebtBlock (chỉ nhặt nợ
+    // thành completed/failed/archived thì pickup nợ debt-ledger (chỉ nhặt nợ
     // còn treo) không bao giờ thấy → nợ ngủ vĩnh viễn (bằng chứng DB thật:
     // 2 todo arbiter_side_issue bị completed sau +74ms). Giữ nguyên mọi trạng
     // thái; agent xử lý xong tự đánh completed qua todo_write update-by-id.

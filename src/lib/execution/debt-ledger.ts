@@ -34,8 +34,9 @@
 //          archived) — giảm nợ ảo từ session chết (N1 phần đuôi).
 //   ĐO   : summary counts mọi lúc (boot log + final report + API) (N4).
 //
-// Kill-switch: DEBT_LEDGER=0 → mọi hàm no-op, hành vi y hệt trước R13
-// (goal-loop vẫn chạy buildPendingDebtBlock same-session như cũ).
+// Kill-switch: DEBT_LEDGER=0 → sổ cái no-op, goal-loop vẫn nhặt nợ same-session
+// (legacy block — buildLegacyPendingDebtBlock; global pickup TẮT cùng sổ cái
+// vì cần bảng DebtLedger — R15-R1-05 auditor đính chính "+ global" sai).
 // Fail-open tuyệt đối: lỗi DebtLedger KHÔNG BAO GIỜ làm hỏng run chat.
 
 /** Đọc 1 lần lúc module load (env hot-reload không ảnh hưởng giữa chừng run). */
@@ -132,6 +133,21 @@ export interface RecordDebtParams {
  * - có & resolved → REOPEN: lỗi tái phát sau khi từng đóng (attempts=0,
  *   recurrenceCount++, resolvedAt=null) — nợ tái phát phải thấy được.
  * Kill-switch DEBT_LEDGER=0 → no-op. Fail-open tuyệt đối.
+ *
+ * SEVERITY (R15 — hết "cột chết" ghi nhận R13): suy từ dữ liệu thật —
+ *   'high' khi kind='infra' (agent không tự phục vụ được — thầy phải nhìn)
+ *   HOẶC tái phát ≥ 2 lần (vấn đề dai dẳng, không phải ngẫu nhiên một lần);
+ *   còn lại 'medium'. Định nghĩa hẹp có thể kiểm chứng, không gán bừa.
+ * Kill-switch DEBT_LEDGER=0 → no-op. Fail-open tuyệt đối.
+ */
+function deriveDebtSeverity(kind: 'agent' | 'infra', recurrenceCount: number): 'high' | 'medium' {
+  if (kind === 'infra') return 'high'
+  if (recurrenceCount >= 2) return 'high'
+  return 'medium'
+}
+
+/**
+ * Ghi nợ vào sổ cái (gọi tại MỌI nơi tạo Todo follow-up).
  */
 export async function recordDebtIssue(params: RecordDebtParams): Promise<void> {
   if (!DEBT_LEDGER_ENABLED) return
@@ -149,6 +165,7 @@ export async function recordDebtIssue(params: RecordDebtParams): Promise<void> {
           title,
           kind: params.kind,
           status: 'open',
+          severity: deriveDebtSeverity(params.kind, 0),
           originSessionId: params.sessionId ?? null,
           originRunId: params.runId ?? null,
           todoId: params.todoId ?? null,
@@ -161,12 +178,14 @@ export async function recordDebtIssue(params: RecordDebtParams): Promise<void> {
       return
     }
     if (existing.status === 'resolved') {
+      const nextRecurrence = existing.recurrenceCount + 1
       await db.debtLedger.update({
         where: { id: existing.id },
         data: {
           status: 'open',
           attempts: 0,
           recurrenceCount: { increment: 1 },
+          severity: deriveDebtSeverity(existing.kind === 'infra' ? 'infra' : 'agent', nextRecurrence),
           lastSeenAt: now,
           resolvedAt: null,
           resolvedByRunId: null,
@@ -180,9 +199,14 @@ export async function recordDebtIssue(params: RecordDebtParams): Promise<void> {
     // open / in_progress / parked → bump recurrence + lastSeenAt
     // FB-R13DEBT-R1-05: increment phía DB (2 run song song ghi cùng debt —
     // read-then-write cũ mất update: 0→1 thay vì 0→2).
+    // R15-R1-04 (auditor): re-derive severity theo recurrence MỚI — nợ chưa
+    // từng resolved nhưng tái xuất hiện ≥2 lần (mỗi lần recordDebtIssue nhánh
+    // bump) cũng phải lên 'high' đúng docblock "tái phát ≥ 2 lần" (trước đây
+    // chỉ create/reopen derive → bump mãi 'medium' — badge UI không bao giờ hiện).
+    const nextRecurrenceBump = existing.recurrenceCount + 1
     await db.debtLedger.update({
       where: { id: existing.id },
-      data: { lastSeenAt: now, recurrenceCount: { increment: 1 } },
+      data: { lastSeenAt: now, recurrenceCount: { increment: 1 }, severity: deriveDebtSeverity(existing.kind === 'infra' ? 'infra' : 'agent', nextRecurrenceBump) },
     })
   } catch (err) {
     // Fail-open — sổ nợ không được phép làm hỏng flow ghi nợ gốc
@@ -213,9 +237,78 @@ export interface DebtPickupResult {
 }
 
 /**
+ * FORMAT KHỐI DIRECTIVE NỢ — ĐÚNG 1 NGUỒN cho MỌI đường (R15-R1-01 auditor:
+ * trước đây production path (a) dựng inline riêng thiếu mục 4 + vùng bảo vệ
+ * trong khi fallback đủ 4 mục — "1 nguồn" chưa trọn; nghịch lý chế độ
+ * kill-switch hiếm khi ĐẦY ĐỦ hơn chế độ chính). 4 mục nguyên văn bản gốc
+ * user directive 2026-10-27:
+ *   1-2. ưu tiên xử lý nợ trước việc mới + đóng đúng id
+ *   3. vùng bảo vệ + checklist tự phục vụ + ĐIỀU KIỆN CẦN
+ *   4. hết nợ mới làm việc mới
+ * Caller: buildLegacyPendingDebtBlock (kill-switch + tests) VÀ
+ * pickupDebtForRun path (a) (production — danh sách actionable đã lọc
+ * parked/resolved theo DebtLedger). Fail-open không áp dụng đây (thuần format).
+ */
+function formatDebtDirectiveBlock(debts: Array<{ id: string; content: string }>, note?: string): string {
+  const lines = debts.map(t => `- [id ${t.id}] ${t.content.replace(/^🔁 Follow-up \([^)]*\):\s*/, '')}`)
+  return `[📋 NỢ KỸ THUẬT CÒN TREO — ƯU TIÊN XỬ LÝ TRƯỚC VIỆC MỚI (user directive 2026-10-27${note ? `; ${note}` : ''})]
+Các run trước trong phiên này còn ${debts.length} nợ kỹ thuật chưa xử lý (trọng tài đã ghi Todo follow-up). Thứ tự ưu tiên SẮT của run này:
+1. XỬ LÝ TOÀN BỘ nợ dưới đây TRƯỚC TIÊN (đưa từng mục vào todo_write kế hoạch, đặt TRƯỚC các việc mới).
+2. Xử lý xong mục nào → gọi todo_write với ĐÚNG "id" của mục đó + status "completed" (đóng row cũ — KHÔNG tạo row trùng nội dung).
+3. Mục nào vẫn nằm ngoài quyền sửa (phần hạ tầng VẪN ĐƯỢC BẢO VỆ: .env/keys, file data db/, opencode.json, .opencode/, mini-services/ — hoặc chờ phê duyệt / vendor bên thứ 3) → trước khi kết luận ngoài quyền, HÃY KIỂM TRA đã thử đủ đường tự phục vụ chưa: cài package (manage_packages), sửa schema (file_edit prisma/schema.prisma + bun run db:push), tự xây tool thiếu (create_custom_tool), gọi agent đúng chức trách (dispatch_agent), escalate Omega tạo agent mới (escalate_problem). Chỉ khi THẬT SỰ thiếu điều kiện ngoài tầm với → nêu rõ trạng thái + ĐIỀU KIỆN CẦN trong báo cáo, KHÔNG xóa bỏ.
+4. Hết nợ mới làm việc mới của yêu cầu hiện tại.
+${lines.join('\n')}`
+}
+
+/**
+ * Build khối nợ LEGACY same-session (P-R13-1 — R15 dồn về 1 hàm).
+ * Lịch sử: đây CHÍNH LÀ buildPendingDebtBlock cũ của agent-goal-loop.ts
+ * (user directive 2026-10-27 — thời điểm xử lý nợ = đầu run mới trong cùng
+ * session) — R13 chuyển production path sang pickupDebtForRun (thêm
+ * DebtLedger + global pickup) nhưng để lại bản gốc làm dead-code chỉ vì 2
+ * file test import. R15: dồn về HÀM DUY NHẤT này trong debt-ledger (nơi logic
+ * nợ sống); agent-goal-loop + tests cùng dùng một nguồn.
+ *
+ * ĐỦ 4 MỤC nguyên văn bản gốc (BUG2-253 — biên bản R14 vòng R3 ghi "đã fix"
+ * nhưng code commit THỰC TẾ vẫn thiếu mục 3-4 ở fallback kill-switch; phát
+ * hiện lại khi dồn hàm R15 — giờ 1 nguồn duy nhất nên không thể lệch).
+ *
+ * @param note ghi chú thêm vào header (kill-switch truyền 'sổ cái DebtLedger
+ *        OFF — chế độ legacy' để agent biết đang chạy mode nào)
+ * Fail-open tuyệt đối: lỗi bất kỳ → '' (nợ không được phép làm hỏng run mới).
+ */
+export async function buildLegacyPendingDebtBlock(
+  sessionId: string | null | undefined,
+  currentRunId: string | null,
+  note?: string,
+): Promise<string> {
+  if (!sessionId) return ''
+  try {
+    const { db } = await import('@/lib/db')
+    const pending = await db.todo.findMany({
+      where: {
+        sessionId,
+        // nhặt cả nợ đang 'in_progress'/'blocked' — run trước chết giữa lúc
+        // xử lý nợ thì nợ kẹt ở trạng thái đó, không được bỏ lại ngủ vĩnh viễn
+        status: { in: ['pending', 'in_progress', 'blocked'] },
+        content: { startsWith: '🔁 Follow-up' },
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 10,
+    })
+    // Chỉ nợ từ các run KHÁC (run hiện tại chưa tồn tại nợ — filter JS cho
+    // an toàn với runId null của data cũ)
+    const debt = pending.filter(t => t.runId !== currentRunId)
+    if (debt.length === 0) return ''
+    console.log(`[DebtLedger] NỢ KỸ THUẬT (legacy block): nhặt ${debt.length} Todo follow-up còn treo từ các run trước trong session ${sessionId} → ưu tiên xử lý đầu run`)
+    return formatDebtDirectiveBlock(debt, note)
+  } catch { return '' /* fail-open — nợ kỹ thuật không được phép làm hỏng run mới */ }
+}
+
+/**
  * Đầu mỗi run mới (không resume): nhặt nợ để ưu tiên xử lý.
  * (a) Same-session: Todo follow-up pending/in_progress/blocked — GIỮ NGUYÊN
- *     logic buildPendingDebtBlock (format directive cũ, agent đã quen) —
+ *     logic legacy buildLegacyPendingDebtBlock (format directive cũ, agent đã quen) —
  *     thêm đánh dấu DebtLedger in_progress + attempts++.
  * (b) Global (N1 — fix chính): DebtLedger status=open (hoặc in_progress kẹt
  *     từ run chết, cũ hơn DEBT_GLOBAL_MIN_AGE_MIN) từ session KHÁC → tạo Todo
@@ -233,36 +326,18 @@ export async function pickupDebtForRun(params: {
   const empty: DebtPickupResult = { directiveBlock: '', picked: [], openCountBefore: 0 }
   if (!params.sessionId) return empty
   // FB-R13DEBT-R1-03: kill-switch DEBT_LEDGER=0 chỉ tắt SỔ CÁI (DebtLedger) —
-  // KHÔNG được tát same-session pickup (chức năng user directive 2026-10-27 có
-  // từ TRƯỚC R13; comment module này hứa "goal-loop vẫn chạy same-session như
-  // cũ" nhưng thực tế đã âm thầm mất). Fallback: dựng block legacy INLINE
-  // (query + format hệt buildPendingDebtBlock — không import ngược vào
-  // agent-goal-loop để tránh chu trình tĩnh mới cho check:imports).
+  // KHÔNG được tắt same-session pickup (chức năng user directive 2026-10-27 có
+  // từ TRƯỚC R13). R15 (P-R13-1): gọi buildLegacyPendingDebtBlock — HÀM DUY
+  // NHẤT (trước đây dựng inline → BUG2-253 fallback thiếu mục 3-4 mà biên bản
+  // ghi đã fix; 1 nguồn thì không thể lệch giữa các đường).
   if (!DEBT_LEDGER_ENABLED) {
-    try {
-      const { db } = await import('@/lib/db')
-      const pending = await db.todo.findMany({
-        where: {
-          sessionId: params.sessionId,
-          status: { in: ['pending', 'in_progress', 'blocked'] },
-          content: { startsWith: '🔁 Follow-up' },
-        },
-        orderBy: { createdAt: 'asc' },
-        take: 10,
-      })
-      const debt = pending.filter(t => t.runId !== params.currentRunId)
-      if (debt.length === 0) return empty
-      const lines = debt.map(t => `- [id ${t.id}] ${t.content.replace(/^🔁 Follow-up \([^)]*\):\s*/, '')}`)
-      return {
-        directiveBlock: `\n[📋 NỢ KỸ THUẬT CÒN TREO — ƯU TIÊN XỬ LÝ TRƯỚC VIỆC MỚI (user directive 2026-10-27; sổ cái DebtLedger OFF — chế độ legacy)]
-Các run trước trong phiên này còn ${debt.length} nợ kỹ thuật chưa xử lý (trọng tài đã ghi Todo follow-up). Thứ tự ưu tiên SẮT của run này:
-1. XỬ LÝ TOÀN BỘ nợ dưới đây TRƯỚC TIÊN (đưa từng mục vào todo_write kế hoạch, đặt TRƯỚC các việc mới).
-2. Xử lý xong mục nào → gọi todo_write với ĐÚNG "id" của mục đó + status "completed" (đóng row cũ — KHÔNG tạo row trùng nội dung).
-${lines.join('\n')}`,
-        picked: [],
-        openCountBefore: 0,
-      }
-    } catch { return empty }
+    const legacyBlock = await buildLegacyPendingDebtBlock(params.sessionId, params.currentRunId, 'sổ cái DebtLedger OFF — chế độ legacy')
+    if (!legacyBlock) return empty
+    return {
+      directiveBlock: `\n${legacyBlock}`,
+      picked: [],
+      openCountBefore: 0,
+    }
   }
   try {
     const { db } = await import('@/lib/db')
@@ -272,7 +347,7 @@ ${lines.join('\n')}`,
     const picked: PickedDebt[] = []
     const blocks: string[] = []
 
-    // ---- (a) Same-session Todo follow-up (giữ query buildPendingDebtBlock) ----
+    // ---- (a) Same-session Todo follow-up (giữ query như buildLegacyPendingDebtBlock) ----
     const pending = await db.todo.findMany({
       where: {
         sessionId: params.sessionId,
@@ -315,13 +390,12 @@ ${lines.join('\n')}`,
         } catch { /* từng item fail-open */ }
       }
       if (actionable.length > 0) {
-        const lines = actionable.map(t => `- [id ${t.id}] ${t.content.replace(/^🔁 Follow-up \([^)]*\):\s*/, '')}`)
-        blocks.push(`[📋 NỢ KỸ THUẬT CÒN TREO TRONG PHIÊN NÀY — ƯU TIÊN XỬ LÝ TRƯỚC VIỆC MỚI (user directive 2026-10-27)
-Các run trước trong phiên còn ${actionable.length} nợ chưa xử lý. Thứ tự:
-1. XỬ LÝ nợ dưới đây TRƯỚC TIÊN (đưa vào todo_write kế hoạch, đặt TRƯỚC việc mới).
-2. Xử lý xong mục nào → todo_write với ĐÚNG "id" + status "completed" (kèm bằng chứng verify) — KHÔNG tạo row trùng.
-3. Mục ngoài quyền sửa → đã thử đủ đường tự phục vụ (manage_packages, sửa schema + db:push, create_custom_tool, dispatch_agent, escalate_problem) chưa? Thử hết rồi mới nêu "chờ phê duyệt" + ĐIỀU KIỆN CẦN.
-${lines.join('\n')}`)
+        // R15-R1-01 (auditor): dùng formatDebtDirectiveBlock CHUNG với legacy —
+        // hết "2 nguồn" (bản inline cũ thiếu mục 4 "Hết nợ mới làm việc mới" +
+        // vùng bảo vệ ở mục 3; kill-switch lại đủ 4 mục — nghịch lý chế độ hiếm
+        // đầy đủ hơn chế độ chính). Danh sách actionable ĐÃ lọc parked/resolved
+        // theo DebtLedger (bên trên) — chỉ format là dùng chung.
+        blocks.push(formatDebtDirectiveBlock(actionable, 'sổ cái DebtLedger ON'))
       }
       if (parkedNotes.length > 0) {
         blocks.push(`[ℹ️ NỢ PHIÊN NÀY ĐÃ DỪNG THEO DÕI (DebtLedger R14) — KHÔNG đưa vào kế hoạch:
@@ -560,8 +634,8 @@ export async function finalizeDebtAfterRun(params: {
 
 export interface DebtLedgerSummary {
   counts: Record<string, number>
-  open: Array<{ id: string; title: string; kind: string; attempts: number; recurrenceCount: number; lastSeenAt: string; originSessionId: string | null }>
-  parked: Array<{ id: string; title: string; kind: string; attempts: number; parkReason: string | null; lastSeenAt: string }>
+  open: Array<{ id: string; title: string; kind: string; severity: string; status: string; attempts: number; recurrenceCount: number; lastSeenAt: string; originSessionId: string | null }>
+  parked: Array<{ id: string; title: string; kind: string; severity: string; status: string; attempts: number; parkReason: string | null; lastSeenAt: string }>
   recentResolved: Array<{ id: string; title: string; resolvedAt: string; resolvedByRunId: string | null; attempts: number }>
 }
 
@@ -576,8 +650,10 @@ export async function getDebtLedgerSummary(): Promise<DebtLedgerSummary> {
       db.debtLedger.findMany({ where: { status: 'parked' }, orderBy: { lastSeenAt: 'desc' }, take: 20 }),
       db.debtLedger.findMany({ where: { status: 'resolved' }, orderBy: { resolvedAt: 'desc' }, take: 10 }),
     ])
-    out.open = open.map(d => ({ id: d.id, title: d.title, kind: d.kind, attempts: d.attempts, recurrenceCount: d.recurrenceCount, lastSeenAt: d.lastSeenAt.toISOString(), originSessionId: d.originSessionId }))
-    out.parked = parked.map(d => ({ id: d.id, title: d.title, kind: d.kind, attempts: d.attempts, parkReason: d.parkReason, lastSeenAt: d.lastSeenAt.toISOString() }))
+    // R15-R1-02 (auditor): trả status để UI phân biệt open vs in_progress
+    // (trước đây map thiếu field — badge trong list render rỗng)
+    out.open = open.map(d => ({ id: d.id, title: d.title, kind: d.kind, severity: d.severity, status: d.status, attempts: d.attempts, recurrenceCount: d.recurrenceCount, lastSeenAt: d.lastSeenAt.toISOString(), originSessionId: d.originSessionId }))
+    out.parked = parked.map(d => ({ id: d.id, title: d.title, kind: d.kind, severity: d.severity, status: d.status, attempts: d.attempts, parkReason: d.parkReason, lastSeenAt: d.lastSeenAt.toISOString() }))
     out.recentResolved = resolved.map(d => ({ id: d.id, title: d.title, resolvedAt: (d.resolvedAt ?? d.lastSeenAt).toISOString(), resolvedByRunId: d.resolvedByRunId, attempts: d.attempts }))
   } catch { /* fail-open — trả phần đã có */ }
   return out

@@ -109,14 +109,22 @@ export async function classifyChatRequest(input: {
 }
 
 /** Classifier LLM — utility-core (chuỗi failover SBF sẵn có), JSON 1 dòng.
- *  Trả null khi lỗi/timeout/không parse được (caller mặc định 'task'). */
+ *  Trả null khi lỗi/timeout/không parse được (caller mặc định 'task').
+ *  P-NEW-4 fix (R15): reasoningEffort 'low' tường minh — space-bunny mặc định
+ *  effort MAX theo directive 2026-09-28 (đúng cho tác vụ agent) nhưng phân loại
+ *  question|task 1 dòng JSON không cần sâu suy — đo vận hành R13: ~10K
+ *  tokens/call phần lớn là reasoning; effort low cắt về ~vài trăm (mirror tiền
+ *  lệ Task 55: compression dùng low — 88 reasoning tokens, nhanh 2-4x).
+ *  Directive vẫn tôn trọng: caller ghi đè effort rõ ràng thì callZenProvider
+ *  nghe theo (llm.ts:3714). Anti-starvation an toàn: effort low + maxTokens
+ *  200 dư sức cho {"type":"question"}. */
 async function classifyViaLLM(msg: string, agentName?: string): Promise<TriageResult | null> {
   try {
     const { callUtilityLLM } = await import('@/lib/llm')
     const sys = 'Bạn là bộ phân loại yêu cầu cho hệ thống AI-agent. Chỉ xuất JSON đúng 1 dòng: {"type":"question"} hoặc {"type":"task"}. Không giải thích, không markdown.'
     const prompt = `Yêu cầu gửi tới agent ${agentName || 'trợ lý'}:\n"""${msg.slice(0, 500)}"""\n\nPhân loại:\n- "question": câu hỏi/hội thoại agent trả lời NGAY bằng kiến thức sẵn có hoặc thông tin về chính mình trong phiên — KHÔNG cần đọc file/DB/hệ thống, KHÔNG cần nhiều bước.\n- "task": việc đòi khảo sát hệ thống thật (đọc file, truy vấn DB, đếm/kiểm tra hiện trạng), sửa/tạo code, chạy lệnh, phân tích dữ liệu, hoặc thực hiện nhiều bước.\nChỉ xuất JSON:`
     const res = await Promise.race([
-      callUtilityLLM(prompt, sys, 'triage:chat', { maxTokens: 200, temperature: 0 }),
+      callUtilityLLM(prompt, sys, 'triage:chat', { maxTokens: 200, temperature: 0, reasoningEffort: 'low' }),
       new Promise<null>(r => setTimeout(() => r(null), 25_000)),
     ])
     const content = res && typeof res.content === 'string' ? res.content : ''

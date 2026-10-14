@@ -15,7 +15,9 @@ import {
   budgetPrompt,
   type PromptBlock,
 } from '../src/lib/prompt-budget'
-import { assembleGoalLoopSystemPrompt, buildPendingDebtBlock } from '../src/lib/agent-goal-loop'
+import { assembleGoalLoopSystemPrompt } from '../src/lib/agent-goal-loop'
+// P-R13-1 (R15): buildPendingDebtBlock dồn về debt-ledger — HÀM DUY NHẤT
+import { buildLegacyPendingDebtBlock } from '../src/lib/execution/debt-ledger'
 
 // ==================== (1) TRẦN PROMPT THEO TÁC VỤ ====================
 
@@ -80,7 +82,7 @@ describe('Task 26 — budget prompt (r73: chỉ còn trần env hệ thống)', 
 
 const TEST_SESSION = `test-task26-${Date.now()}`
 
-describe('Task 26 — buildPendingDebtBlock (thời điểm xử lý nợ = đầu run mới)', () => {
+describe('Task 26 — buildLegacyPendingDebtBlock (thời điểm xử lý nợ = đầu run mới — P-R13-1 dồn hàm R15)', () => {
   test('B1. Chỉ nhặt Todo follow-up PENDING từ run KHÁC — kèm id để đóng đúng row', async () => {
     const { db } = await import('../src/lib/db')
     // Seed: 1 follow-up pending từ run cũ + 1 follow-up completed (đã xong) +
@@ -91,12 +93,18 @@ describe('Task 26 — buildPendingDebtBlock (thời điểm xử lý nợ = đ�
     await db.todo.create({ data: { sessionId: TEST_SESSION, content: '🔁 Follow-up (nợ kỹ thuật từ run cur-run-999): Nợ của chính run hiện tại', status: 'pending', runId: 'cur-run-999' } })
     await db.todo.create({ data: { sessionId: TEST_SESSION, content: 'Việc thường của run cũ (không phải nợ)', status: 'pending', runId: 'old-run-333' } })
 
-    const block = await buildPendingDebtBlock(TEST_SESSION, 'cur-run-999')
+    const block = await buildLegacyPendingDebtBlock(TEST_SESSION, 'cur-run-999')
     // Chỉ nợ pending từ run KHÁC xuất hiện
     expect(block).toContain('NỢ KỸ THUẬT CÒN TREO')
     expect(block).toContain('Lỗi lint file X chưa sửa')
     expect(block).toContain('[id ') // mục kèm id để todo_write đóng đúng row
     expect(block).toContain('ƯU TIÊN')
+    // R15 (BUG2-253 reopening): pin NỘI DUNG ĐỦ 4 MỤC — biên bản R14 ghi đã
+    // fix nhưng code thiếu mục 3-4 (checklist tự phục vụ + hết nợ mới làm
+    // việc mới); behavioral pin này chặn lệch lại giữa các đường dựng block.
+    expect(block).toContain('3. Mục nào vẫn nằm ngoài quyền sửa')
+    expect(block).toContain('tự phục vụ')
+    expect(block).toContain('4. Hết nợ mới làm việc mới của yêu cầu hiện tại.')
     // KHÔNG chứa: nợ completed, nợ của run hiện tại, todo thường
     expect(block).not.toContain('Lỗi đã xử lý')
     expect(block).not.toContain('Nợ của chính run hiện tại')
@@ -104,12 +112,12 @@ describe('Task 26 — buildPendingDebtBlock (thời điểm xử lý nợ = đ�
   })
 
   test('B2. Session không có nợ → block rỗng (không inject)', async () => {
-    const block = await buildPendingDebtBlock(`${TEST_SESSION}-clean`, 'any-run')
+    const block = await buildLegacyPendingDebtBlock(`${TEST_SESSION}-clean`, 'any-run')
     expect(block).toBe('')
   })
 
   test('B3. sessionId null → rỗng (fail-open)', async () => {
-    const block = await buildPendingDebtBlock(null, 'any-run')
+    const block = await buildLegacyPendingDebtBlock(null, 'any-run')
     expect(block).toBe('')
   })
 

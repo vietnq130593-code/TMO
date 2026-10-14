@@ -369,7 +369,7 @@ Sub-agent plan → Synthesis report → Specs cho BELI (K specs)
 - **Mục đích:** BELI nhận từng spec → sinh artifact: **code lượt đầu (M1)** hoặc **research report + POC trong Workspace (M2)** — draft tốt ngay lần đầu (signature move).
 - **Input:** K specs từ SIVIL (sau council) + Artifact Map.
 - **Thao tác:**
-  - M1: BELI nhận SPEC #1 → code → submit; SPEC #2 → code → submit; ... tuần tự hoặc song song (tùy infrastructure). [SRC dòng 316–321]
+  - M1: BELI nhận SPEC #1 → code → submit; SPEC #2 → code → submit; ... tuần tự hoặc song song (tùy infrastructure). [SRC dòng 316–321] *(R14/R15: infrastructure hiện hành = TUẦN TỰ — pool=1 subagent-delegate; "song song" chỉ khi kill-switch bật — xem docs/QUYET-DINH-TUAN-TU-VS-CONCURRENCY-R15.md)*
   - M2: BELI viết research report (theo Findings Schema + evidence file:line) + **POC code minh họa chạy thử trong Workspace**. [SRC dòng 641, 590]
   - Mỗi submission kèm: draft đầy đủ theo spec + **notes** (edge cases gặp phải) + **suggestions** cho G2. [SRC dòng 643–646]
   - Feedback song song: issue/khó khăn → feedback loop §8 (SIVIL điều chỉnh, dispatch lại nếu cần).
@@ -446,6 +446,8 @@ SIVIL chạy trên model stack (Kimi-k3 chính) với **agent framework** — kh
 
 ### 5.2 Khi nào dùng ít / nhiều + chiến lược batch
 
+> **📝 NOTE R14/R15:** bảng dưới là trạng thái THIẾT KẾ v1.3. Runtime hiện hành = **Sequential 1 SA/lượt cho MỌI N** (user directive bản 3 — R14). "Parallel wave"/"Hybrid" chỉ áp dụng lại khi user bật kill-switch `SUBAGENT_MAX_CONCURRENT>=2` sau khi xem khung quyết định `docs/QUYET-DINH-TUAN-TU-VS-CONCURRENCY-R15.md` (đo waitedMs p50/p95 + RAM + lịch sử OOM).
+
 | N | Dấu hiệu task | Chiến lược batch khuyến nghị [EXT] |
 |---|---|---|
 | **Ít (5–15)** | Scope hẹp: 1 dataset/1 câu hỏi (tier MEDIUM — tier SIMPLE không qua G1, nguồn dòng 3187–3191) hoặc 1 module map M2 (tier COMPLEX — audit 1 module = 7 điểm, nguồn dòng 3279); deadline gấp | 1 wave parallel — tất cả SA chạy 1 lần, tổng hợp luôn |
@@ -498,7 +500,7 @@ Nguồn không định nghĩa ngưỡng dừng — phần này là thiết kế 
 | S5 | **SA đơn lẻ chết** | Retry ≤ 2 lần (context y nguyên); vẫn chết → đánh dấu ❌ trong bảng kết quả, KHÔNG chặn batch |
 
 **Giới hạn batch [EXT]:**
-- Kích thước batch mặc định: **10–25 SA chạy đồng thời** (đủ để framework điều phối, không trôi tụt context SIVIL). Wave lớn hơn phải chia batch con. *(✅ chốt v1.3: 20 mặc định / burst 25 — §12 Q1)*
+- Kích thước batch mặc định: **10–25 SA chạy đồng thời** (đủ để framework điều phối, không trôi tụt context SIVIL). Wave lớn hơn phải chia batch con. *(✅ chốt v1.3: 20 mặc định / burst 25 — §12 Q1)* *(⚠ R14/R15: GIÁ TRỊ HIỆN HÀNH = 1 SA đồng thời — bảng giá trị 10–25 là ceiling thiết kế chờ kill-switch; đài quan sát waitedMs tại /api/debt/status → slotPool.queueStats cung cấp dữ liệu quyết định nâng dần)*
 - Monitor: SIVIL giữ registry SA-NN → {status: PENDING/RUNNING/DONE/FAILED, branch, kết quả, retries}.
 - SA không spawn SA khác (chỉ SIVIL spawn — 1 tầng duy nhất).
 

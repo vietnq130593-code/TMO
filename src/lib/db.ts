@@ -118,6 +118,34 @@ const globalForPrisma = globalThis as unknown as {
   sqlitePragmasApplied: boolean | undefined
 }
 
+// ==================== SQLITE BUSY_TIMEOUT — P-NEW-1 GỐC CƠ CHẾ (R15) ====================
+// Quan sát gốc R11 §8.3 (51 lỗi dev.log): cụm "Socket timeout (the database
+// failed to respond to a query within the configured timeout)" tập trung
+// ĐÚNG lúc run-close ghi bùng nổ. Live-probe R15 (bun + @prisma/client 6.19):
+//   URL không param → PRAGMA busy_timeout = 5000 (ms) — ĐÚNG con số
+//   "transaction timeout 5000ms" của quan sát R11; URL ?socket_timeout=15
+//   → PRAGMA busy_timeout = 15000 (đơn vị param là GIÂY, engine nhân 1000).
+// FIX 3 tầng (R15): (1) URL param socket_timeout cho MỌI connection pool
+// (PRAGMA raw $queryRawUnsafe chỉ ảnh hưởng connection thực thi nó — không
+// đủ trong pool nhiều connection); (2) tầng R14 giảm nguồn contention
+// (sub-agent pool=1 + OC-CLI semaphore + user-run priority);
+// (3) withSqliteRetry giữ làm lưới an toàn. REOPEN nếu "Socket timeout"
+// tái xuất dưới tải thật — bước kế tiếp khi đó: write-queue architecture.
+// Env override: SQLITE_BUSY_TIMEOUT_S (giây, 1..120, mặc định 15).
+const SQLITE_BUSY_TIMEOUT_S = (() => {
+  const raw = parseInt(process.env.SQLITE_BUSY_TIMEOUT_S || '', 10)
+  return Number.isFinite(raw) && raw >= 1 && raw <= 120 ? raw : 15
+})()
+
+/** Thêm ?socket_timeout=N cho URL file: (SQLite) — không đụng URL đã có sẵn
+ *  socket_timeout do user tự cấu hình; URL không phải file: trả nguyên bản. */
+function urlWithSqliteBusyTimeout(url: string): string {
+  if (!url.startsWith('file:')) return url
+  if (/[?&]socket_timeout=/.test(url)) return url
+  const sep = url.includes('?') ? '&' : '?'
+  return `${url}${sep}socket_timeout=${SQLITE_BUSY_TIMEOUT_S}`
+}
+
 export const db =
   globalForPrisma.prisma ??
   (() => {
@@ -128,7 +156,12 @@ export const db =
     // 'error' sang event emitter và LỌC đúng họ P2025 (record not found) —
     // im lặng vì caller đã xử lý; MỌI lỗi khác (connection, SQL, P2002...)
     // vẫn in prisma:error như cũ. 'warn' giữ stdout (dev only) như trước.
+    // P-NEW-1 (R15): datasources.url scope socket_timeout CHỈ cho client —
+    // process.env.DATABASE_URL giữ nguyên để Prisma CLI (db push qua
+    // db-setup.ts:229 inherit env) không phải ăn param lạ.
+    const resolvedUrl = (process.env.DATABASE_URL || '').trim()
     const client = new PrismaClient({
+      ...(resolvedUrl ? { datasources: { db: { url: urlWithSqliteBusyTimeout(resolvedUrl) } } } : {}),
       log: [
         ...(process.env.NODE_ENV === 'development'
           ? [{ emit: 'stdout' as const, level: 'warn' as const }]
@@ -167,11 +200,13 @@ if (!globalForPrisma.sqlitePragmasApplied) {
       // but Prisma still sometimes rejects them with $executeRawUnsafe.
       // Safest approach: use $queryRawUnsafe which handles both cases.
       await db.$queryRawUnsafe('PRAGMA journal_mode=WAL')
-      await db.$queryRawUnsafe('PRAGMA busy_timeout=5000')
+      // P-NEW-1 (R15): đồng bộ với URL param — connection raw này cũng được
+      // 15s (URL đã lo phần pool; PRAGMA raw ở đây giữ nhất quán + log rõ)
+      await db.$queryRawUnsafe(`PRAGMA busy_timeout=${SQLITE_BUSY_TIMEOUT_S * 1000}`)
       await db.$queryRawUnsafe('PRAGMA synchronous=NORMAL')
       await db.$queryRawUnsafe('PRAGMA cache_size=-64000')
       await db.$queryRawUnsafe('PRAGMA temp_store=MEMORY')
-      console.log('[DB] SQLite PRAGMAs applied: WAL, busy_timeout=5000, synchronous=NORMAL, cache_size=64MB, temp_store=MEMORY')
+      console.log(`[DB] SQLite PRAGMAs applied: WAL, busy_timeout=${SQLITE_BUSY_TIMEOUT_S * 1000} (P-NEW-1 R15 — URL socket_timeout=${SQLITE_BUSY_TIMEOUT_S}s áp mọi connection pool), synchronous=NORMAL, cache_size=64MB, temp_store=MEMORY`)
     } catch (err) {
       console.warn('[DB] SQLite PRAGMA setup error (non-critical):', err instanceof Error ? err.message : String(err))
     }

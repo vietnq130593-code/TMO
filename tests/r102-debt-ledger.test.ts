@@ -128,6 +128,25 @@ describe('R102 · B. Vòng đời same-session (DB qua gate)', () => {
   beforeAll(async () => { await cleanup() })
   afterAll(async () => { await cleanup() })
 
+  test('B0 — R15-R1-01: production path (a) directiveBlock ĐỦ 4 MỤC như legacy (1 nguồn format)', async () => {
+    // Pin hành vi cho fix auditor R15-R1-01: trước đây path (a) (DEBT_LEDGER=1
+    // — production) dựng block inline riêng THIẾU mục 4 "Hết nợ mới làm việc
+    // mới" + vùng bảo vệ ở mục 3, trong khi kill-switch fallback đủ 4 mục —
+    // nghịch lý chế độ hiếm đầy đủ hơn chế độ chính (lớp BUG2-253).
+    // Giờ cả 2 đường cùng formatDebtDirectiveBlock — pin này chặn lệch lại.
+    const { todoId } = await seedDebt('B0', `Lỗi B0 ${RUN_TAG}: directive thiếu mục 4 thời kỳ trước R15`)
+    void todoId
+    const pick = await pickupDebtForRun({ sessionId: SESS_A, currentRunId: `run-${RUN_TAG}-b0` })
+    expect(pick.directiveBlock).toContain('ƯU TIÊN XỬ LÝ TRƯỚC VIỆC MỚI')
+    expect(pick.directiveBlock).toContain('sổ cái DebtLedger ON')
+    expect(pick.directiveBlock).toContain('3. Mục nào vẫn nằm ngoài quyền sửa')
+    expect(pick.directiveBlock).toContain('phần hạ tầng VẪN ĐƯỢC BẢO VỆ')
+    expect(pick.directiveBlock).toContain('4. Hết nợ mới làm việc mới của yêu cầu hiện tại.')
+    // Dọn nợ B0 để không nhiễu các test sau (park qua finalize đường thường)
+    await db.todo.deleteMany({ where: { id: todoId } }).catch(() => {})
+    await db.debtLedger.deleteMany({ where: { fingerprint: fingerprintDebtIssue(`🔁 Follow-up (trọng tài R102 B0): Lỗi B0 ${RUN_TAG}: directive thiếu mục 4 thời kỳ trước R15`) } }).catch(() => {})
+  })
+
   test('B1→B3 — FB-R13DEBT-R1-01 (P1): hoàn thành Todo GỐC → nợ RESOLVED (lookup cũ bỏ sót Todo gốc)', async () => {
     // B1: ghi nợ + Todo gốc pending
     const { todoId } = await seedDebt('P1', `Lỗi hạ tầng ${RUN_TAG}: HTTP 410 ModelDeprecated từ provider zen`)
@@ -329,8 +348,20 @@ describe('R102 · D-F. Source pins (race + PATCH + kill-switch)', () => {
     expect(src).toContain('if (!DEBT_LEDGER_ENABLED) {')
     expect(src).toContain('chế độ legacy')
     // comment module hứa "hành vi y hệt trước R13" giờ THẬT: block same-session
-    // được dựng inline (không import ngược agent-goal-loop — tránh chu trình)
+    // dựng bằng buildLegacyPendingDebtBlock — HÀM DUY NHẤT dùng chung với
+    // production path (a) qua formatDebtDirectiveBlock (R15-R1-01); không
+    // import ngược agent-goal-loop (tránh chu trình)
     expect(src).not.toContain("await import('@/lib/agent-goal-loop')")
+    // R15 (P-R13-1 + BUG2-253 reopening): fallback giờ gọi HÀM DUY NHẤT
+    // buildLegacyPendingDebtBlock — pin nội dung ĐỦ 4 MỤC (bản R14 ghi "đã
+    // fix" trong biên bản nhưng code commit thực tế thiếu mục 3-4 — pin yếu
+    // cũ không bắt được; pin này chặn lặp lại).
+    expect(src).toContain('await buildLegacyPendingDebtBlock(params.sessionId, params.currentRunId')
+    expect(src).toContain('3. Mục nào vẫn nằm ngoài quyền sửa')
+    expect(src).toContain('4. Hết nợ mới làm việc mới của yêu cầu hiện tại.')
+    // single-source: agent-goal-loop KHÔNG còn export buildPendingDebtBlock
+    const agl = readSrc('src/lib/agent-goal-loop.ts')
+    expect(agl).not.toContain('export async function buildPendingDebtBlock')
   })
 
   test('F2 — FB-R13DEBT-R1-08: sweeper có đồng hồ riêng tại module-load', () => {

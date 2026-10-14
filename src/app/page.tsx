@@ -47,6 +47,9 @@ const AutoLearnSection = dynamic(withChunkRetry(() => import('@/components/datab
 const NeuralArchitectureSection = dynamic(withChunkRetry(() => import('@/components/database/neural-architecture-section').then(m => m.NeuralArchitectureSection)), { loading: ModuleLoading })
 const RuntimeMetricsPanel = dynamic(withChunkRetry(() => import('@/components/analytics/runtime-metrics-panel').then(m => m.RuntimeMetricsPanel)), { loading: ModuleLoading })
 const EpisodicMemoryPanel = dynamic(withChunkRetry(() => import('@/components/analytics/episodic-memory-panel').then(m => m.EpisodicMemoryPanel)), { loading: ModuleLoading })
+// R15 (P-R13-2 + BUG2-239): panel Sổ nợ kỹ thuật + đài quan sát phanh tuần tự
+// sub-agent — mount trong tab Analytics (poll /api/debt/status 15s).
+const DebtLedgerPanel = dynamic(withChunkRetry(() => import('@/components/analytics/debt-ledger-panel').then(m => m.DebtLedgerPanel)), { loading: ModuleLoading })
 
 
 // ==================== STATUS HELPERS ====================
@@ -2891,6 +2894,12 @@ export default function Home() {
                             và nhận analyticsRange để chuyển chế độ lịch sử */}
                         <EpisodicMemoryPanel analyticsRange={analyticsRange} onAnalyticsRangeChange={setAnalyticsRange} />
                       </div>
+                    </div>
+                    {/* R15 (P-R13-2): Sổ nợ kỹ thuật — vòng đời nợ DebtLedger + đài quan sát
+                        phanh tuần tự sub-agent (BUG2-239) + nút can thiệp resolve/reopen/park.
+                        Panel tự render header riêng (đủ thông tin) — không lặp header ở đây. */}
+                    <div className="mb-5">
+                      <DebtLedgerPanel />
                     </div>
                     <AnalyticsSection data={{
                       documents,

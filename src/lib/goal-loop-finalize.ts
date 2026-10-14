@@ -99,7 +99,7 @@ export function isTrivialExchange(userMsg: string, assistantMsg: string): boolea
  *
  * Lưu trữ: TaskContextArchive kind='regression' (tags='open' → hết mục mở
  * thì getRegressionQueue tự đánh 'resolved'). Loại trừ Todo follow-up
- * ("🔁 Follow-up...") — nợ kỹ thuật đã có cơ chế riêng buildPendingDebtBlock.
+ * ("🔁 Follow-up...") — nợ kỹ thuật đã có cơ chế riêng debt-ledger (buildLegacyPendingDebtBlock/pickupDebtForRun).
  * Dedupe theo runId: crash-resume chạy finalize 2 lần không đẻ snapshot
  * trùng. Fail-open tuyệt đối — không bao giờ throw lên caller.
  *

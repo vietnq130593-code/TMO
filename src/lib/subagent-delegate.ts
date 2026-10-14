@@ -500,27 +500,76 @@ interface SubAgentSlot {
   /** Index key Zen (0-based) ghim cho slot này; -1 = không ghim (slot thừa hơn số key) */
   keyIndex: number
 }
-const subAgentSlots: SubAgentSlot[] = Array.from(
-  { length: SUBAGENT_MAX_CONCURRENT },
-  (_, i) => ({ id: i + 1, keyIndex: i < zenKeyCountForSlots ? i : -1 }),
-)
-/** Chuỗi hiển thị agent đang giữ từng slot (rỗng = slot tự do) */
-const subAgentSlotHolders: string[] = subAgentSlots.map(() => '')
+interface SubAgentSlotWaiter {
+  holder: string
+  startedAt: number
+  resolve: (slot: SubAgentSlot) => void
+}
+
+/** R15 (fixbug.md đợt R14 "đo phân phối waitedMs hàng đợi chéo" + BUG2-239
+ *  "đài quan sát"): thống kê hàng đợi. Chỉ lượt PHẢI XẾP HÀNG mới ghi mẫu
+ *  waitedMs (nhận slot ngay không ghi — không làm lệch trung bình); recent
+ *  giữ 20 mẫu gần nhất, consumer (API/UI) tự tính p50/p95. */
+interface SubAgentQueueStats {
+  /** Tổng lượt acquire (kể cả nhận slot ngay không xếp hàng) */
+  acquires: number
+  /** Số lượt phải xếp hàng (= số mẫu waitedMs thật) */
+  queued: number
+  waitedMsTotal: number
+  waitedMsMax: number
+  recentWaitedMs: number[]
+}
+
+/** Toàn bộ state pool để BEHIND globalThis singleton (R15) — cùng pattern
+ *  __tmoOcCliGate của llm.ts. Lý do: next dev nạp module đa instance theo từng
+ *  route-bundle → 2 pool riêng = 2 sub-agent chạy song song (VỠ tính tuần tự
+ *  R14) + đài quan sát đọc pool sai instance (thấy số 0 giả). 1 singleton
+ *  toàn process khắc phục cả hai. Ghi chú: slots tạo theo SUBAGENT_MAX_CONCURRENT
+ *  của instance nạp đầu — cùng process thì env đồng nhất, không phải edge thật. */
+interface SubAgentSlotPoolState {
+  slots: SubAgentSlot[]
+  /** Chuỗi hiển thị agent đang giữ từng slot (rỗng = slot tự do) */
+  holders: string[]
+  waiters: SubAgentSlotWaiter[]
+  queueStats: SubAgentQueueStats
+}
+const gForSubAgentSlots = globalThis as unknown as { __tmoSubAgentSlotPool?: SubAgentSlotPoolState; __tmoSubAgentSlotBootLogged?: boolean }
+function subAgentSlotPool(): SubAgentSlotPoolState {
+  if (!gForSubAgentSlots.__tmoSubAgentSlotPool) {
+    gForSubAgentSlots.__tmoSubAgentSlotPool = {
+      slots: Array.from(
+        { length: SUBAGENT_MAX_CONCURRENT },
+        (_, i) => ({ id: i + 1, keyIndex: i < zenKeyCountForSlots ? i : -1 }),
+      ),
+      holders: Array.from({ length: SUBAGENT_MAX_CONCURRENT }, () => ''),
+      waiters: [],
+      queueStats: { acquires: 0, queued: 0, waitedMsTotal: 0, waitedMsMax: 0, recentWaitedMs: [] },
+    }
+  }
+  return gForSubAgentSlots.__tmoSubAgentSlotPool
+}
 
 // Boot log phanh (R12 lesson: "mọi fix phanh phải kèm boot log đối chiếu
 // được" — .env đè default là lỗi đã xảy ra thật với GOAL_LOOP_MAX_DEBT_CYCLES).
-// 1 dòng, hiện đúng 1 lần lúc module load — kèm giá trị hiệu dụng + nguồn
-// (env hay default) để đối chiếu dev.log sau mỗi restart.
-console.log(
-  `[SubAgentSlot] Phanh hiệu dụng (R14): maxConcurrent=${SUBAGENT_MAX_CONCURRENT} — TUẦN TỰ, mỗi lượt 1 sub-agent, hoàn tất mới tới kế tiếp (user directive bản 3; ` +
-  `kill-switch env SUBAGENT_MAX_CONCURRENT>=2 để quay lại bản 2 song song) [ nguồn: ${
-    Number.isFinite(rawSubagentMaxConcurrent) && rawSubagentMaxConcurrent >= 1 ? `env=${rawSubagentMaxConcurrent}` : 'default=1'
-  }, zenKeys=${zenKeyCountForSlots} ]`,
-)
+// 1 dòng, hiện đúng 1 lần/process — globalThis guard đảm bảo KHÔNG lặp khi
+// next dev nạp module lần 2 từ bundle khác (bài học __tmoOcCliGate llm.ts).
+if (!gForSubAgentSlots.__tmoSubAgentSlotBootLogged) {
+  gForSubAgentSlots.__tmoSubAgentSlotBootLogged = true
+  console.log(
+    `[SubAgentSlot] Phanh hiệu dụng (R14): maxConcurrent=${SUBAGENT_MAX_CONCURRENT} — TUẦN TỰ, mỗi lượt 1 sub-agent, hoàn tất mới tới kế tiếp (user directive bản 3; ` +
+    `kill-switch env SUBAGENT_MAX_CONCURRENT>=2 để quay lại bản 2 song song) [ nguồn: ${
+      Number.isFinite(rawSubagentMaxConcurrent) && rawSubagentMaxConcurrent >= 1 ? `env=${rawSubagentMaxConcurrent}` : 'default=1'
+    }, zenKeys=${zenKeyCountForSlots} ]`,
+  )
+}
 
 /**
  * Trạng thái pool cho quan sát/test (R14) — observability: đài quan sát + test
  * đọc giá trị hiệu dụng mà không phải parse log. Fail-open: luôn trả object.
+ * R15: (+) queueStats — phân phối waitedMs hàng đợi (đo đếm theo directive
+ * fixbug.md R14 "đo phân phối waitedMs") — dữ liệu đầu vào cho quyết định
+ * kill-switch concurrency (đợ bàn TB-03): p95 chờ thấp + RAM dư → có thể cân
+ * nhắc nâng pool; p95 cao + OOM từng xảy ra → giữ 1.
  */
 export function getSubAgentSlotPoolInfo(): {
   maxConcurrent: number
@@ -528,43 +577,70 @@ export function getSubAgentSlotPoolInfo(): {
   zenKeys: number
   busySlots: number
   waiting: number
+  queueStats: {
+    acquires: number
+    queued: number
+    waitedMsAvg: number | null
+    waitedMsMax: number | null
+    p50WaitedMs: number | null
+    p95WaitedMs: number | null
+    recentSamples: number
+  }
 } {
+  const pool = subAgentSlotPool()
+  const q = pool.queueStats
+  // p50/p95 trên 20 mẫu gần nhất (sorted copy — không đổi mảng gốc)
+  const sorted = [...q.recentWaitedMs].sort((a, b) => a - b)
+  const pct = (p: number): number | null => (sorted.length === 0 ? null : sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))])
   return {
     maxConcurrent: SUBAGENT_MAX_CONCURRENT,
     source: Number.isFinite(rawSubagentMaxConcurrent) && rawSubagentMaxConcurrent >= 1 ? 'env' : 'default',
     zenKeys: zenKeyCountForSlots,
-    busySlots: subAgentSlotHolders.filter(Boolean).length,
-    waiting: subAgentSlotWaiters.length,
+    busySlots: pool.holders.filter(Boolean).length,
+    waiting: pool.waiters.length,
+    queueStats: {
+      acquires: q.acquires,
+      queued: q.queued,
+      waitedMsAvg: q.queued > 0 ? Math.round(q.waitedMsTotal / q.queued) : null,
+      waitedMsMax: q.waitedMsMax || null,
+      p50WaitedMs: pct(0.5),
+      p95WaitedMs: pct(0.95),
+      recentSamples: sorted.length,
+    },
   }
 }
-interface SubAgentSlotWaiter {
-  holder: string
-  startedAt: number
-  resolve: (slot: SubAgentSlot) => void
-}
-const subAgentSlotWaiters: SubAgentSlotWaiter[] = []
 
 function assignSubAgentSlot(idx: number, holder: string): SubAgentSlot {
-  subAgentSlotHolders[idx] = holder
-  return subAgentSlots[idx]
+  const pool = subAgentSlotPool()
+  pool.holders[idx] = holder
+  return pool.slots[idx]
 }
 
 /** Nhận slot: FIFO công bằng — slot tự do chỉ trao thẳng khi KHÔNG có người chờ. */
 function acquireSubAgentSlot(profileName: string, parentAgentName: string): Promise<SubAgentSlot> {
+  const pool = subAgentSlotPool()
+  const q = pool.queueStats
+  q.acquires++
   const holder = `${profileName} ← ${parentAgentName}`
-  if (subAgentSlotWaiters.length === 0) {
-    const freeIdx = subAgentSlotHolders.findIndex(h => h === '')
+  if (pool.waiters.length === 0) {
+    const freeIdx = pool.holders.findIndex(h => h === '')
     if (freeIdx >= 0) return Promise.resolve(assignSubAgentSlot(freeIdx, holder))
   }
-  const busy = subAgentSlotHolders.filter(Boolean)
-  console.log(`[SubAgentSlot] ${profileName} (từ ${parentAgentName}) xếp hàng — ${busy.length}/${SUBAGENT_MAX_CONCURRENT} slot bận${busy.length > 0 ? `: ${busy.join(' · ')}` : ''}${subAgentSlotWaiters.length > 0 ? ` (+${subAgentSlotWaiters.length} đang chờ trước)` : ''}`)
+  const busy = pool.holders.filter(Boolean)
+  console.log(`[SubAgentSlot] ${profileName} (từ ${parentAgentName}) xếp hàng — ${busy.length}/${SUBAGENT_MAX_CONCURRENT} slot bận${busy.length > 0 ? `: ${busy.join(' · ')}` : ''}${pool.waiters.length > 0 ? ` (+${pool.waiters.length} đang chờ trước)` : ''}`)
   return new Promise<SubAgentSlot>(resolve => {
     const startedAt = Date.now()
-    subAgentSlotWaiters.push({
+    pool.waiters.push({
       holder,
       startedAt,
       resolve: slot => {
         const waitedMs = Date.now() - startedAt
+        // R15 stats: đây là mẫu waitedMs THẬT (đã xếp hàng) — ghi vào phân phối
+        q.queued++
+        q.waitedMsTotal += waitedMs
+        if (waitedMs > q.waitedMsMax) q.waitedMsMax = waitedMs
+        q.recentWaitedMs.push(waitedMs)
+        if (q.recentWaitedMs.length > 20) q.recentWaitedMs.shift()
         if (waitedMs >= SUBAGENT_SLOT_QUEUE_LOG_MS) {
           console.log(`[SubAgentSlot] ${profileName} chờ ${Math.round(waitedMs / 1000)}s → nhận slot ${slot.id}${slot.keyIndex >= 0 ? ` (ghim Zen key #${slot.keyIndex + 1})` : ''}`)
         }
@@ -576,12 +652,13 @@ function acquireSubAgentSlot(profileName: string, parentAgentName: string): Prom
 
 /** Nhả slot — trao thẳng cho người chờ đầu hàng (FIFO, không ai nhảy hàng). */
 function releaseSubAgentSlot(slot: SubAgentSlot): void {
+  const pool = subAgentSlotPool()
   const idx = slot.id - 1
-  const next = subAgentSlotWaiters.shift()
+  const next = pool.waiters.shift()
   if (next) {
     next.resolve(assignSubAgentSlot(idx, next.holder))
   } else {
-    subAgentSlotHolders[idx] = ''
+    pool.holders[idx] = ''
   }
 }
 
@@ -595,7 +672,12 @@ function releaseSubAgentSlot(slot: SubAgentSlot): void {
 // xếp hàng chờ CHÍNH NÓ (pool=1) → tự-chờ deadlock (bounded bởi loop-bound,
 // = 0 → vô hạn thật). Flag này phủ MỌI đường dispatch lồng từ trong sub-agent
 // (không phụ thuộc context có delegationRunId hay không).
-const subAgentRunALS = new AsyncLocalStorage<{ holding: true }>()
+// R15-R1-03 (auditor): ALS instance ĐƯA LÊN globalThis cùng pool — nếu
+// next dev nạp module 2 instance (route-bundle khác), 2 ALS riêng = guard
+// instance B không thấy flag của instance A → cửa sau stall cross-bundle
+// (pool đã global từ R15 nhưng guard thì chưa). 1 ALS toàn process.
+const gForSubAgentALS = globalThis as unknown as { __tmoSubAgentRunALS?: AsyncLocalStorage<{ holding: true }> }
+const subAgentRunALS = gForSubAgentALS.__tmoSubAgentRunALS ?? (gForSubAgentALS.__tmoSubAgentRunALS = new AsyncLocalStorage<{ holding: true }>())
 
 /** true nếu async context hiện tại đang chạy bên trong runSubAgentForProfile
  *  (đang giữ slot pool). Dùng cho guard tool-executor + fail-fast nested. */
@@ -1120,6 +1202,10 @@ async function runSubAgentForProfileInner(params: {
                 agentId: profile.id || `subagent:${profile.name}`,
                 agentName: `${profile.name} (sub-agent)`,
                 temperature: profile.temperature,
+                // R15-R1-03b: cờ lan xuống OC-CLI spawn env (TMO_INSIDE_SUBAGENT_RUN)
+                // → bridge tmo_* forward qua HTTP context → guard escalate phía
+                // app thấy đường cross-process (ALS không xuyên được qua CLI).
+                insideSubAgentRun: true,
                 // TASK 39 — bỏ cap 16384: maxTokens <= 0 (-1) = KHÔNG giới hạn
                 // (callZenProvider omit max_tokens → model output max 512k);
                 // > 0 giữ nguyên giá trị profile (cap không phải target).
@@ -1635,6 +1721,7 @@ async function runSubAgentForProfileInner(params: {
               agentName: `${profile.name} (sub-agent wrap-up)`,
               temperature: 0.3,
               maxTokens: 900,
+              insideSubAgentRun: true, // R15-R1-03b — mirror call chính (xem trên)
               abortCheck: isCancelled,
             },
           ),

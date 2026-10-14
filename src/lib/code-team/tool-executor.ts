@@ -2439,6 +2439,10 @@ export async function executeTool(
      * ghi vào run của sub-agent (chứ không trộn vào parent run).
      */
     delegationRunId?: string | null
+    /** R15-R1-03b: cờ cross-process từ bridge tmo_* (CLI transport) — call
+     *  này phát từ sub-agent đang giữ slot (env TMO_INSIDE_SUBAGENT_RUN lan
+     *  từ callOpenCodeCLIProvider spawn). Guard escalate dùng làm lớp 3. */
+    insideSubAgentRun?: boolean
   }
 ): Promise<ToolExecutionResult> {
   const startTime = Date.now()
@@ -3293,7 +3297,7 @@ export async function executeTool(
         // /api/tools/execute truyền sessionId/runId qua CONTEXT (env
         // TMO_SESSION_ID/TMO_RUN_ID của CLI spawn) chứ KHÔNG qua args → trước đây
         // todoWrite không thấy → todos rơi session 'default' → Thought Progress
-        // panel + buildRunTodosBlock (TODO block chu kỳ sau) + buildPendingDebtBlock
+        // panel + buildRunTodosBlock (TODO block chu kỳ sau) + pickupDebtForRun (debt-ledger)
         // (nợ kỹ thuật đầu run) KHÔNG thấy todos của run. Merge context → args khi
         // args thiếu (đường goal-loop TMO đã inject sẵn trong args — không đổi).
         {
@@ -3936,6 +3940,12 @@ export async function executeTool(
           // pool=1 sub-agent tự-chờ chính nó. Bổ sung detect AsyncLocalStorage
           // (isInsideSubAgentRun — phủ mọi đường, không phụ thuộc runId).
           let calledFromSubAgent = Boolean(context?.delegationRunId)
+          // R15-R1-03b (auditor): lớp 3 — cờ cross-process từ bridge tmo_* (CLI
+          // transport): ALS không xuyên được qua process CLI → sub-agent chạy
+          // qua OC-CLI gọi escalate → context.insideSubAgentRun (env lan từ
+          // spawn) chặn auto-dispatch lồng (pool global R15 biến đường này từ
+          // "chạy song song" thành "stall chờ chính mình").
+          if (context?.insideSubAgentRun === true) calledFromSubAgent = true
           try {
             const { isInsideSubAgentRun } = await import('@/lib/subagent-delegate')
             if (isInsideSubAgentRun()) calledFromSubAgent = true
