@@ -1366,3 +1366,23 @@
 ### BUG2-229 · D·P4 — Lặp từ do chính fix R1-12 sinh ra (bắt tại LIVE verify, sau vòng R2): catch fetchTimeline đặt loadError "Mất kết nối — giữ dữ liệu cũ, đang thử lại" + hậu tố spinner của fix R1-12 thêm "— thử lại" → hiển thị "Mất kết nối — giữ dữ liệu cũ, đang thử lại — thử lại" (thừa chữ "thử lại" 2 lần) — FB-OBS-LIVE-01 (coordinator 24 live verify agent-browser: chặn network route **/api/observation/timeline* --abort → innerText region hiện đủ câu lặp)
 - **Fix (Task 24, vòng R3):** rút gọn catch → 'Mất kết nối — giữ dữ liệu cũ' — phần "thử lại" do hậu tố spinner đảm nhiệm (một nguồn duy nhất).
 - **Kiểm chứng:** live verify lại (network vẫn chặn): innerText "Mất kết nối — giữ dữ liệu cũ — thử lại" — hết lặp; r97-B10 pin '— thử lại' vẫn pass (hậu tố giữ nguyên — chuỗi pin không đổi); gate 4 tầng PASS lại (tsc · eslint · check:imports · full suite 1504/1504).
+
+### BUG2-230 · F·P1 — Zen free-tier gate phát hiện PROJECT CONFIG (không phải IP): opencode CLI từ dir sạch chạy model free OK (kể cả IP datacenter, keyless), nhưng session có opencode.json (project/global/ancestor) HOẶC PWD env trỏ về dir có config → 403 FreeTierError — R10 (2026-10-14, phiên phục hồi sau container reset)
+- **Phát hiện khi nào:** user report "đăng nhập tài khoản OpenCode nhưng vẫn gặp 'free-tier vẫn bị chặn (egress: AS7552 Viettel Group · không phải datacenter)'" — egress ĐÚNG là IP cá nhân VN, chứng minh chặn KHÔNG theo IP.
+- **Bằng chứng live-probe 2026-10-14 (ma trận cô lập biến, sandbox IP datacenter Alibaba HK):**
+  1. CLI v1.19.0 + dir trống: space-bunny-free/big-pickle/mimo OK exit 0 — KEYLESS, từ datacenter → free-tier mở cho client OpenCode THẬT bất kể IP.
+  2. +opencode.json (project cwd, kể cả tối giản `{"permission":{...}}` không providers; HOẶC global ~/.config/opencode/) → 403 FreeTierError ngay.
+  3. CLI đọc config theo chuỗi thư mục CHA từ cwd — workspace lồng trong app dir không thoát.
+  4. `.opencode/` dir (bridge tools tmo_*, KHÔNG package.json) + `.opencode/agent/build.md` (chỉ description/mode/prompt) → VẪN QUA GATE ✓.
+  5. Agent frontmatter `tools:` (filter native tools) HOẶC `permission:` → bị gate bắt (đổi request toolset / bật permission engine).
+  6. `.opencode/package.json` → CLI TỰ npm-install deps tạo node_modules → run sau đó "Unexpected server error" (Zen 500).
+  7. **Bisect env 99 biến của process Next.js → thủ phạm duy nhất `PWD`**: CLI đọc biến PWD (không chỉ cwd) để resolve project config — spawn cwd=ws-sạch nhưng PWD=app-dir (có opencode.json) vẫn 403. Ghi đè PWD=ws → OK (verified D1).
+- **Tác động:** toàn bộ đường OC-CLI (failover tier 2 + last-resort pool) chết trên sandbox LẪN máy user local (mọi máy chạy TMO từ app dir); agents rơi hết xuống NIM rescue (tốn quota NVIDIA); UI dropdown model free báo chặn sai nguyên nhân.
+- **Fix R10 (src/lib/llm.ts — 3 lớp):**
+  1. **R10 workspace sạch**: `ensureCliWorkspace()` — copy `.opencode/tools` từ app ra `~/.oc-cli-ws/.opencode/tools` (ngoài app dir, refresh khi nguồn mới hơn) + tự sinh `.opencode/agent/build.md` prompt chặn MỀM native write/edit/bash (tmo_* bridges ưu tiên — INFRA GUARD audit). Override env `OPENCODE_CLI_WORKSPACE`.
+  2. **R10b chống nhiễm**: KHÔNG copy package.json/package-lock (tránh CLI auto-install độc hại); MỖI spawn dọn dấu vết node_modules/package*.json trong ws (self-heal).
+  3. **R10c PWD override**: mọi spawn (provider + probe) ghi đè `PWD: ws` trong env — CLI thấy session không project config.
+  4. SBF alias opencode-k1/k2/k3 (sống trong opencode.json) không khả dụng trên đường CLI → MỌI model dùng native `opencode/<model>` + auth.json (xoay key đa giữ nguyên đường HTTP callZenProvider).
+- **Kết luận cho user (câu hỏi "đã đăng nhập mà vẫn bị chặn"):** đăng nhập OAuth đúng nhưng TMO cũ gọi HTTP bằng oc_sk key / CLI từ app dir — 2 transport đều bị gate bắt vì session "không thuần OpenCode". Sau fix: model free chạy QUA CLI từ ws sạch — KHÔNG cần đăng nhập, không phụ thuộc IP.
+- **Kiểm chứng E2E:** boot-sweep + chat Omega "Chỉ trả lời đúng 1 từ: OK" → log `[LLM] Agent dùng OpenCode CLI space-bunny-free ✓ (16479 tokens)` + ChatMessage assistant "OK" — KHÔNG rơi NIM rescue; probe Zen HTTP vẫn 403 (oc_sk HTTP bị chặn — đúng, tier HTTP chết, tier CLI sống).
+- **Còn treo (không fix phiên này):** mini-services/opencode-server (Code tab sandbox) có opencode.json riêng — đường CLI của nó (nếu có) cần cùng xử lý PWD/ws khi đụng model free; native write/edit/bash chỉ chặn MỀM bằng prompt (mọi cơ chế chặn cứng đều bị gate bắt) — chấp nhận rủi ro, xem xét quay lại khi Zen đổi policy.

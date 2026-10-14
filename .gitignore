@@ -295,3 +295,4 @@ agent-runs/
 # từ chối dispatch nếu thiếu → chống ping-pong kiểu mission. Chạy:
 #   bun run scripts/mission-dispatch.ts --directive <file> --profile <id> --title "<tên>"
 !/scripts/mission-dispatch.ts
+.oc-cli-ws/
