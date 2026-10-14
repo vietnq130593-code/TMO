@@ -114,6 +114,10 @@ function stopReasonBadge(reason: string | null): { label: string; className: str
     // liên tiếp (bế tắc chất lượng verdict — họ stall, amber như no_progress)
     case 'verdict_stagnation':
       return { label: 'verdict_stagnation', className: 'bg-amber-950/60 text-amber-400 border-amber-500/50' }
+    // R4-ĐIỀU TRA (lượt 4) — conf_stagnation: soft-loop — conf không cải thiện
+    // qua nhiều chu kỳ dù tool thành công + đã qua nhịp tự phản chiếu (họ stall)
+    case 'conf_stagnation':
+      return { label: 'conf_stagnation', className: 'bg-amber-950/60 text-amber-400 border-amber-500/50' }
     case 'concluded':
       return { label: 'concluded', className: 'bg-emerald-950/60 text-emerald-400 border-emerald-500/50' }
     case 'error':

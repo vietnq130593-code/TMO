@@ -363,7 +363,7 @@ describe('r99 · C — kinds obs.alert + cờ obs_alerts (TUNING_SPECS thứ 30)
   })
 
   test('C2 spec obs_alerts — default off, đủ trường, gắn node hist-feedback (soi obs_impact)', () => {
-    expect(TUNING_SPECS.length).toBe(30) // PIN UPDATE 26-BE: 29 → 30
+    expect(TUNING_SPECS.length).toBe(31) // PIN UPDATE R4: 30 → 31 (cờ auto_eval_kb xưởng nhãn Brain-A)
     const spec = getTuningSpec('obs_alerts')
     expect(spec).toBeDefined()
     expect(spec!.type).toBe('enum')
@@ -408,7 +408,11 @@ describe('r99 · D — runAlertChecks (3 rule + dedup + cờ)', () => {
 
     await runAlertChecks()
 
-    const alerts = await alertPayloads()
+    // R4-ĐIỀU TRA (lượt 4): DB test là BẢN COPY production — rule 5
+    // brain-label-starvation có thể phát THẬT cùng lúc (58 eval case thật
+    // + 0 EvalResult là điều kiện alert đúng!) → filter theo rule như D3
+    // thay vì assert tổng (chỉ stall rule được assert ở đây).
+    const alerts = (await alertPayloads()).filter(p => p.rule === 'stall')
     expect(alerts).toHaveLength(1) // chỉ stall — run_active_1 có event gần nên bỏ
     const a = alerts[0]
     expect(a.rule).toBe('stall')

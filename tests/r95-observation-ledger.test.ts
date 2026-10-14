@@ -351,7 +351,7 @@ describe('r95 · H — source-scan wiring đợt 1+2 (OBS-P1/P2 hooks)', () => {
   })
 
   test('H5 TUNING_SPECS đủ 5 cờ obs (26–30) đúng envKey/default/nodeId', () => {
-    expect(TUNING_SPECS.length).toBe(30) // PIN UPDATE Task 26-BE: 29 → 30 (cờ obs_alerts GAP-2)
+    expect(TUNING_SPECS.length).toBe(31) // PIN UPDATE R4: 30 → 31 (cờ auto_eval_kb — xưởng nhãn Brain-A)
     for (const key of OBS_FLAG_KEYS) {
       const spec = getTuningSpec(key)
       expect(spec, key).toBeDefined()

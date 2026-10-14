@@ -999,7 +999,9 @@ describe('r87 · H cờ P4 + kill-switch — TUNING_SPECS/NEURAL_NODES/route/reg
     // V2 (obs_ledger/obs_brain_trace/obs_impact/ui_observation).
     // PIN UPDATE (Task 26-BE 2026-10-14): 29 → 30 — thêm cờ obs_alerts (GAP-2
     // cảnh báo chủ động stall/token-burn/job-stale).
-    expect(TUNING_SPECS).toHaveLength(30)
+    // PIN UPDATE (R4-ĐIỀU TRA lượt 4): 30 → 31 — cờ auto_eval_kb (xưởng nhãn
+    // Brain-A — node hist-feedback).
+    expect(TUNING_SPECS).toHaveLength(31)
     const keys = TUNING_SPECS.map(s => s.key)
     for (const k of P4_FLAG_KEYS) expect(keys).toContain(k)
     for (const key of P4_FLAG_KEYS) {

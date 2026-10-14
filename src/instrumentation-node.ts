@@ -485,45 +485,61 @@ import('@/lib/db')
   .then(async ({ db }) => {
     const stale = await db.agentRunRecord.findMany({
       where: { status: 'running', startedAt: { lt: new Date(Date.now() - 15_000) } },
-      select: { id: true, runId: true },
+      select: {
+        id: true, runId: true, agentName: true, createdAt: true, sessionId: true,
+        model: true, cycles: true, tokensUsed: true, durationMs: true, toolCalls: true, toolFailures: true,
+      },
       take: 50,
     })
     let recoveredMetrics = 0
+    let salvaged = 0
+    // R4-ĐIỀU TRA (lượt 4) — salvage trọn vẹn từng run mồ côi từ process trước:
+    // complete=false + duration + CHAT TRACE (user thấy dấu vết gián đoạn) +
+    // verdict resolve/Q-learn — dùng chung salvageCrashedRun với runtime sweep.
+    const { salvageCrashedRun } = await import('@/lib/observation/alerts')
+    const now = Date.now()
     for (const row of stale) {
-      if (!row.runId) continue
       try {
-        const { existsSync, readFileSync } = await import('fs')
-        const tracePath = `agent-runs/${row.runId}.jsonl`
-        if (!existsSync(tracePath)) continue
-        const lines = readFileSync(tracePath, 'utf-8').trim().split('\n')
-        let toolCalls = 0
-        let lastIteration = 0
-        for (const ln of lines) {
+        // r70 BUG2-005 — hồi phục metrics từ trace jsonl trên đĩa (nguồn
+        // thật sống qua crash) TRƯỚC khi salvage (salvage giữ tokens trung thực
+        // từ checkpoint — không bịa số).
+        if (row.runId) {
           try {
-            const j = JSON.parse(ln) as { type?: string; tool?: string; iteration?: number }
-            if (j.type === 'tool' && j.tool) toolCalls++
-            if (typeof j.iteration === 'number' && j.iteration > lastIteration) lastIteration = j.iteration
-          } catch { /* dòng hỏng bỏ qua */ }
+            const { existsSync, readFileSync } = await import('fs')
+            const tracePath = `agent-runs/${row.runId}.jsonl`
+            if (existsSync(tracePath)) {
+              const lines = readFileSync(tracePath, 'utf-8').trim().split('\n')
+              let toolCalls = 0
+              let lastIteration = 0
+              for (const ln of lines) {
+                try {
+                  const j = JSON.parse(ln) as { type?: string; tool?: string; iteration?: number }
+                  if (j.type === 'tool' && j.tool) toolCalls++
+                  if (typeof j.iteration === 'number' && j.iteration > lastIteration) lastIteration = j.iteration
+                } catch { /* dòng hỏng bỏ qua */ }
+              }
+              if (toolCalls > 0 || lastIteration > 0) {
+                await db.agentRunRecord.update({
+                  where: { id: row.id },
+                  data: {
+                    toolCalls,
+                    cycles: lastIteration > 0 ? Math.max(1, lastIteration) : null,
+                  },
+                })
+                row.toolCalls = toolCalls
+                row.cycles = lastIteration > 0 ? Math.max(1, lastIteration) : row.cycles
+                recoveredMetrics++
+              }
+            }
+          } catch { /* fail-open — metrics là phần thưởng */ }
         }
-        if (toolCalls > 0 || lastIteration > 0) {
-          await db.agentRunRecord.update({
-            where: { id: row.id },
-            data: {
-              toolCalls,
-              cycles: lastIteration > 0 ? Math.max(1, lastIteration) : null,
-            },
-          })
-          recoveredMetrics++
-        }
-      } catch { /* fail-open — metrics là phần thưởng */ }
+        await salvageCrashedRun(row, now)
+        salvaged++
+      } catch { /* fail-open từng row */ }
     }
-    const res = await db.agentRunRecord.updateMany({
-      where: { status: 'running', startedAt: { lt: new Date(Date.now() - 15_000) } },
-      data: { status: 'failed', stopReason: 'crashed', completedAt: new Date() },
-    })
-    if (res.count > 0) {
+    if (salvaged > 0) {
       console.log(
-        `[instrumentation] Stale AgentRunRecord cleanup: ${res.count} run 'running' mồ côi từ process trước → đánh dấu failed/crashed (server restart giữa chừng)${recoveredMetrics > 0 ? ` · ${recoveredMetrics} run hồi phục metrics toolCalls/cycles từ trace jsonl (r70 BUG2-005)` : ''}`
+        `[instrumentation] Stale AgentRunRecord cleanup (R4 salvage): ${salvaged} run 'running' mồ côi từ process trước → failed/crashed + complete=false + duration + chat trace + verdict resolve${recoveredMetrics > 0 ? ` · ${recoveredMetrics} run hồi phục metrics toolCalls/cycles từ trace jsonl (r70 BUG2-005)` : ''}`
       )
     }
   })

@@ -912,7 +912,7 @@ describe('r92 · F cờ UI mặc định BRAIN-LIVE — TUNING_SPECS chống h�
     // (obs_ledger/obs_brain_trace/obs_impact/ui_observation — không đụng 3 cờ UI pin dưới).
     // PIN UPDATE (Task 26-BE 2026-10-14): 29 → 30 — thêm cờ obs_alerts (GAP-2
     // cảnh báo chủ động stall/token-burn/job-stale — không đụng 3 cờ UI pin dưới).
-    expect(TUNING_SPECS.length).toBe(30)
+    expect(TUNING_SPECS.length).toBe(31)
     // ui_synapse_fx — default 'on' (chỉ thị user 2026-10-12: tab BRAIN là
     // đài quan sát não, hiệu ứng lan truyền là NỘI DUNG CHÍNH)
     const fx = getTuningSpec('ui_synapse_fx')!

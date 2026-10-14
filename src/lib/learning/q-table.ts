@@ -81,6 +81,29 @@ export function agentRuntimeStateKey(): string {
   return qStateKey('agent', 1)
 }
 
+/**
+ * R4-ĐIỀU TRA (lượt 4) — TÍN HIỆU HỌC Q cho ngưỡng thức tỉnh Brain-C "Lệnh".
+ *
+ * GỐC RỂ DEADLOCK (đo thật 2026-10-14): Brain-C chờ "QEntry ≥ 30 ROW" nhưng
+ * Q-table theo thiết kế §P6 là KHÔNG GIAN TRẠNG THÁI NHỎ — 1 stateKey tổng
+ * hợp (mode-agent-tier-1) × ~3 model = TỐI ĐA ~3 row MÃI MÃI → Brain-C không
+ * bao giờ thức tỉnh. Ngưỡng 30 vốn mang tinh thần "đủ KINH NGHIỆM Q" — đếm
+ * SỐ LẦN UPDATE (SUM(visits) — mỗi updateQ tang 1) là phép đo đúng bản chất:
+ * 1 state × 3 model × 10 lần học mỗi model = 30 updates → thức tỉnh được.
+ *
+ * Trả về SUM(visits); DB lỗi/0 row → 0 (fail-open). r87 seed visits=1/row
+ * nên SUM = row count — hành vi test cũ bảo toàn.
+ */
+export async function countQLearningSignal(): Promise<number> {
+  try {
+    const agg = await db.qEntry.aggregate({ _sum: { visits: true } })
+    const sum = agg._sum.visits
+    return typeof sum === 'number' && Number.isFinite(sum) && sum > 0 ? sum : 0
+  } catch {
+    return 0
+  }
+}
+
 // ==================== THUẦN — TOÁN Q (test trực tiếp) ====================
 
 /**

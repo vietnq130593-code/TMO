@@ -43,9 +43,15 @@ Return ONLY a JSON array of 6 objects like:
   let llmInserted = 0
   for (const category of CATEGORIES) {
     try {
+      // R4-ĐIỀU TRA (lượt 4): EVAL_SEED_MODEL cho phép chỉ định model sinh case
+      // khi chuỗi utility Zen bị chặn theo IP (sandbox datacenter). Máy user
+      // không set → giữ nguyên hành vi cũ (utility chain space-bunny-free).
       const res = await callLLM(genPrompt.replace('{category}', category), undefined, 'eval-seed', {
         temperature: 0.7,
-        maxTokens: 2500,
+        // R4: 8000 — reasoning model (deepseek v4.1) đốt token suy luận trước
+        // khi trả JSON; 2500 cũ làm JSON bị cắt giữa chừng (parse fail toàn bộ).
+        maxTokens: 8000,
+        ...(process.env.EVAL_SEED_MODEL ? { model: process.env.EVAL_SEED_MODEL } : {}),
       })
       const jsonMatch = res.content?.match(/\[[\s\S]*\]/)
       if (!jsonMatch) {

@@ -3,10 +3,10 @@
  * BLUEPRINT-HYPERNAS-P1-P5 §4.2-2b) — CẢNH BÁO CHỦ ĐỘNG
  * ==========================================================================
  *
- * `runAlertChecks()` — 4 rule (3 cảnh báo + 1 dọn mồ côi Task 32) chạy trong
- * tick 10 phút của worker impact.ts (CÙNG setInterval — KHÔNG timer mới; gọi
- * NGAY SAU pass impact; static import an toàn vì alerts KHÔNG import ngược
- * impact):
+ * `runAlertChecks()` — 6 rule (4 cảnh báo + 1 dọn mồ côi Task 32 + 1 repair
+ * R4) chạy trong tick 10 phút của worker impact.ts (CÙNG setInterval —
+ * KHÔNG timer mới; gọi NGAY SAU pass impact; static import an toàn vì
+ * alerts KHÔNG import ngược impact):
  *
  *   1. STALL (D1.1 — phát stall trong ≤ 15 phút): AgentRunRecord
  *      status='running' mà mốc hoạt động cuối (createdAt — AgentRunRecord
@@ -28,7 +28,19 @@
  *   4. ORPHAN SWEEP (Task 32 — D1.2): AgentRunRecord 'running' > 30 phút mà
  *      runId KHÔNG còn sống trong bộ nhớ process (isRunIdActiveInMemory) →
  *      đánh dấu failed/crashed + obs.alert rule orphan-sweep. Đóng sổ mồ côi
- *      giữa phiên — boot sweeper chỉ lo lúc khởi động.
+ *      giữa phiên — boot sweeper chỉ lo lúc khởi động. R4-ĐIỀU TRA: sweep giờ
+ *      SALVAGE metadata (complete=false + duration + checkpoint tokens —
+ *      nhãn tiêu cực cho Brain-B) + viết CHAT TRACE vào phiên (user không
+ *      còn mất dấu vết tác vụ) + resolve verdict/Q-learn mirror goal-loop.
+ *   5. BRAIN-LABEL-STARVATION (R4-ĐIỀU TRA): "não chết đói nhãn" — (a) eval
+ *      case có sẵn mà không ai chạy eval (Brain-A ngủ mãi), (b) run kết thúc
+ *      mà không chốt metadata (xưởng nhãn Brain-B rò rỉ). Đây chính là lớp
+ *      giao thức quan sát TỪNG BỎ SÓT (user R4: "tại sao không thấy Brain-A
+ *      không tiến triển qua nhiều lượt").
+ *   6. CHAT-TRACE-LOSS (R4-ĐIỀU TRA — TỰ REPAIR): chatMessage mồ côi (session
+ *      row bị mất do crash giữa early-save và upsert) → tạo lại AgentSession
+ *      row — tin nhắn HIỆN LẠI trong khung chat (user R4: "quay lại không
+ *      còn thấy gì nữa, không có dấu vết").
  *
  * Cờ: `obs_alerts` (TUNING_SPECS thứ 30 — off mặc định) check MỖI vòng —
  * off → return ngay (rẻ); bật/tắt có hiệu lực NGAY, không restart.
@@ -428,7 +440,11 @@ async function sweepOrphanedRuns(now: number): Promise<void> {
   try {
     const stale = await db.agentRunRecord.findMany({
       where: { status: 'running', createdAt: { lt: new Date(now - ALERT_ORPHAN_AFTER_MS) } },
-      select: { id: true, runId: true, agentName: true, createdAt: true, sessionId: true },
+      select: {
+        id: true, runId: true, agentName: true, createdAt: true, sessionId: true, model: true,
+        // R4-ĐIỀU TRA — salvage: đọc metadata đã checkpoint giữa chừng (FIX-A)
+        cycles: true, tokensUsed: true, durationMs: true, toolCalls: true, toolFailures: true,
+      },
       take: SCAN_CAP_RUNS,
     })
     if (stale.length === 0) return
@@ -439,45 +455,362 @@ async function sweepOrphanedRuns(now: number): Promise<void> {
     for (const r of stale) {
       if (isRunIdActiveInMemory(r.runId)) continue // còn sống thật — không đụng
       try {
-        await db.agentRunRecord.update({
-          where: { id: r.id },
-          data: { status: 'failed', stopReason: 'crashed', completedAt: new Date() },
-        })
+        await salvageCrashedRun(r, now)
         swept++
-        const orphanMinutes = Math.round((now - r.createdAt.getTime()) / 60_000)
-        emitAlert(
-          {
-            rule: 'orphan-sweep',
-            targetId: r.runId ?? r.id,
-            runId: r.runId ?? null,
-            agentName: r.agentName ?? null,
-            sessionId: r.sessionId,
-            orphanMinutes,
-            startedAt: r.createdAt.toISOString(),
-            thresholdMinutes: ALERT_ORPHAN_AFTER_MS / 60_000,
-            action: 'AgentRunRecord → failed/crashed (đóng sổ mồ côi giữa phiên)',
-            protocol: 'GIAO_THUC_GIAM_SAT D1.2 (0 run kẹt quá hạn)',
-          },
-          `Dọn run mồ côi ${r.agentName ?? r.runId ?? r.id.slice(0, 8)} — kẹt 'running' ${orphanMinutes} phút (đã chết giữa chừng, bộ nhớ không còn run này) → đánh dấu failed/crashed`,
-          r.runId ?? null,
-        )
       } catch {
         // fail-open từng row — row khác vẫn được quét
       }
     }
     if (swept > 0) {
-      console.warn(`[OBS-ALERT] orphan-sweep: đóng sổ ${swept} run mồ côi (status 'running' > ${ALERT_ORPHAN_AFTER_MS / 60_000} phút, không còn sống trong bộ nhớ) → failed/crashed`)
+      console.warn(`[OBS-ALERT] orphan-sweep: đóng sổ ${swept} run mồ côi (status 'running' > ${ALERT_ORPHAN_AFTER_MS / 60_000} phút, không còn sống trong bộ nhớ) → failed/crashed + salvage + chat trace`)
     }
   } catch (err) {
     console.error('[OBS-ALERT] rule orphan-sweep thất bại (fail-open):', err instanceof Error ? err.message : String(err))
   }
 }
 
+// ==================== R4 — SALVAGE 1 RUN CHẾT GIỮA CHỪNG (export cho boot sweeper) ====================
+
+/** Shape tối thiểu salvageCrashedRun cần từ 1 row AgentRunRecord 'running' đã chết. */
+export interface SalvageRunRow {
+  id: string
+  runId: string | null
+  agentName: string | null
+  createdAt: Date
+  sessionId: string | null
+  model?: string | null
+  cycles?: number | null
+  tokensUsed?: number | null
+  durationMs?: number | null
+  toolCalls?: number | null
+  toolFailures?: number | null
+}
+
+/**
+ * R4-ĐIỀU TRA (lượt 4) — SALVAGE trọn vẹn 1 run chết giữa chừng (dùng chung:
+ * runtime orphan-sweep + boot sweeper instrumentation-node):
+ *   (1) UPDATE row: failed/crashed + complete=false (SỰ THẬT — run không xong)
+ *       + durationMs (checkpoint có thì giữ, thiếu → ước lượng startedAt→now)
+ *       — row thành nhãn usable (kết cục tiêu cực) cho Brain-B "Vọng";
+ *   (2) CHAT TRACE: assistant message vào session (tombstone-guard, idempotent
+ *       theo runId) — user luôn thấy dấu vết "tác vụ bị gián đoạn";
+ *   (3) VERDICT RESOLVE + Q-LEARN mirror goal-loop close (P6-M2).
+ * Mỗi bước fail-open riêng — salvage không được phép throw.
+ */
+export async function salvageCrashedRun(r: SalvageRunRow, now: number): Promise<void> {
+  // (1) UPDATE row + salvage metadata (dedup alert 1h — boot sweep + runtime
+  // sweep có thể cùng bắt 1 run trong cửa sổ restart: chỉ alert lần đầu)
+  try {
+    const durationMs =
+      typeof r.durationMs === 'number' && r.durationMs > 0
+        ? r.durationMs
+        : Math.max(0, now - r.createdAt.getTime())
+    const targetId = r.runId ?? r.id
+    const alreadyAlerted = await isDuplicated('orphan-sweep', targetId, now)
+    await db.agentRunRecord.update({
+      where: { id: r.id },
+      data: {
+        status: 'failed',
+        stopReason: 'crashed',
+        completedAt: new Date(),
+        complete: false,
+        durationMs,
+      },
+    })
+    const orphanMinutes = Math.round((now - r.createdAt.getTime()) / 60_000)
+    if (!alreadyAlerted) {
+      markAlerted('orphan-sweep', targetId, now)
+      emitAlert(
+      {
+        rule: 'orphan-sweep',
+        targetId: r.runId ?? r.id,
+        runId: r.runId ?? null,
+        agentName: r.agentName ?? null,
+        sessionId: r.sessionId,
+        orphanMinutes,
+        startedAt: r.createdAt.toISOString(),
+        thresholdMinutes: ALERT_ORPHAN_AFTER_MS / 60_000,
+        salvaged: {
+          complete: false,
+          cycles: r.cycles ?? null,
+          tokensUsed: r.tokensUsed ?? null,
+          durationMs,
+        },
+        action: 'AgentRunRecord → failed/crashed + salvage metadata (complete=false, duration, checkpoint tokens) — nhãn tiêu cực cho Brain-B',
+        protocol: 'GIAO_THUC_GIAM_SAT D1.2 (0 run kẹt quá hạn) + R4 salvage',
+      },
+      `Dọn run mồ côi ${r.agentName ?? r.runId ?? r.id.slice(0, 8)} — kẹt 'running' ${orphanMinutes} phút (đã chết giữa chừng) → đánh dấu failed/crashed + salvage ${r.tokensUsed != null ? `${r.tokensUsed} tokens/${r.cycles ?? '?'} chu kỳ checkpoint` : 'metadata tiêu cực'}`,
+      r.runId ?? null,
+      )
+    }
+  } catch {
+    /* fail-open bước 1 */
+  }
+  // (2) CHAT TRACE — user report: "thấy agent đang xử lý, quay lại không còn
+  // thấy gì nữa". Fire-and-forget, fail-open.
+  if (r.sessionId) {
+    await writeCrashedRunChatTrace(r.sessionId, {
+      runId: r.runId ?? r.id,
+      agentName: r.agentName ?? null,
+      orphanMinutes: Math.round((now - r.createdAt.getTime()) / 60_000),
+      cycles: r.cycles ?? null,
+      tokensUsed: r.tokensUsed ?? null,
+    }).catch(() => { /* fail-open */ })
+  }
+  // (3) VERDICT RESOLVE + Q-LEARN (mirror goal-loop close) — fire-and-forget.
+  if (r.sessionId) {
+    await resolveVerdictsAndQLearnForCrashedRun(r.sessionId, r.model ?? null).catch(() => { /* fail-open */ })
+  }
+}
+
+// ==================== R4 HELPERS — chat trace + verdict/Q cho run chết ====================
+
+/**
+ * R4-ĐIỀU TRA — viết assistant ChatMessage thông báo run bị gián đoạn, kèm
+ * metadata agentRun để UI render link/panel. Chỉ khi session chưa bị user
+ * xóa (tombstone deep check). Đảm bảo session row tồn tại (upsert create-if-
+ * missing — chống message mồ côi vô hình). Idempotent theo metadata.runId:
+ * không viết trùng khi sweep chạy lại.
+ */
+async function writeCrashedRunChatTrace(
+  sessionId: string,
+  info: { runId: string; agentName: string | null; orphanMinutes: number; cycles: number | null; tokensUsed: number | null },
+): Promise<void> {
+  try {
+    const { isSessionDeletedDeep } = await import('@/lib/session-tombstone')
+    if (await isSessionDeletedDeep(sessionId)) return
+    // Đã có trace cho run này chưa? (sweep chạy lại / boot sweep + runtime
+    // sweep cùng bắt 1 run) — metadataJson LIKE chạy trên index sessionId.
+    const dup = await db.chatMessage.findFirst({
+      where: { sessionId, role: 'assistant', metadata: { contains: `"runId":"${info.runId}"` } },
+      select: { id: true },
+    })
+    if (dup) return
+    await ensureSessionRow(sessionId, null)
+    const cyclesTxt = info.cycles != null ? ` ở chu kỳ ${info.cycles}` : ''
+    const tokensTxt = info.tokensUsed != null ? ` · đã dùng ~${info.tokensUsed.toLocaleString('vi-VN')} tokens` : ''
+    await db.chatMessage.create({
+      data: {
+        sessionId,
+        role: 'assistant',
+        content: `⚠️ **Tác vụ bị gián đoạn** — run \`${info.runId}\` của ${info.agentName ?? 'agent'} dừng bất thường (app restart / thiếu bộ nhớ) sau ${info.orphanMinutes} phút${cyclesTxt}${tokensTxt}. Tiến độ đã được lưu vào bộ nhớ hệ thống (agent-run + episodic). Bạn có thể gửi lại yêu cầu để agent tiếp tục — nó sẽ thấy bài học từ lần chạy này.`,
+        model: null,
+        provider: 'system',
+        metadata: JSON.stringify({
+          interrupted: true,
+          agentRun: { runId: info.runId, status: 'failed', stopReason: 'crashed' },
+          runId: info.runId,
+          salvaged: { cycles: info.cycles, tokensUsed: info.tokensUsed },
+        }),
+      },
+    })
+  } catch {
+    /* fail-open — trace không được phép làm hỏng sweep */
+  }
+}
+
+/**
+ * R4-ĐIỀU TRA — đảm bảo AgentSession row tồn tại cho sessionId (create-if-
+ * missing; bỏ qua tombstone). Dùng cho sweep trace + rule 6 repair: message/
+ * run mà session row bị mất (OOM giết request giữa early-save và upsert)
+ * sẽ HIỆN LẠI trong danh sách phiên của UI.
+ */
+async function ensureSessionRow(sessionId: string, agentProfileId: string | null): Promise<boolean> {
+  try {
+    const existing = await db.agentSession.findUnique({ where: { sessionId }, select: { sessionId: true } })
+    if (existing) return true
+    const { isSessionDeletedDeep } = await import('@/lib/session-tombstone')
+    if (await isSessionDeletedDeep(sessionId)) return false
+    const firstMsg = await db.chatMessage.findFirst({
+      where: { sessionId },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { content: true, createdAt: true },
+    })
+    const msgCount = await db.chatMessage.count({ where: { sessionId } })
+    await db.agentSession.create({
+      data: {
+        sessionId,
+        agentId: 'default',
+        title: (firstMsg?.content ?? 'Phiên đã khôi phục').slice(0, 50),
+        messageCount: msgCount,
+        agentProfileId,
+        ...(firstMsg ? { createdAt: firstMsg.createdAt, updatedAt: firstMsg.createdAt } : {}),
+      },
+    })
+    return true
+  } catch {
+    return false // đã tồn tại (race) hoặc DB lỗi — fail-open
+  }
+}
+
+/**
+ * R4-ĐIỀU TRA — mirror goal-loop close cho run chết: resolve verdicts treo
+ * theo runComplete=false + updateQ reward cùng công thức P6-M2. Chỉ chạy khi
+ * session KHÔNG còn run 'running' nào (verdict resolve theo sessionId —
+ * không chộp của run khác). Fire-and-forget từ sweep.
+ */
+async function resolveVerdictsAndQLearnForCrashedRun(sessionId: string, model: string | null): Promise<void> {
+  try {
+    const stillRunning = await db.agentRunRecord.findFirst({
+      where: { sessionId, status: 'running' },
+      select: { id: true },
+    })
+    if (stillRunning) return
+    const { resolveArbiterVerdictsDetailed } = await import('@/lib/metrics-db')
+    const { total, confirmed, refuted } = await resolveArbiterVerdictsDetailed(sessionId, false, 'crashed')
+    if (total === 0) return
+    // P6-M2: runComplete=false → confirmed KHÔNG cộng (+1 cần complete) — chỉ
+    // refuted mới trừ (verdict nói việc bị bác).
+    const reward = refuted > 0 ? -1 : 0
+    if (reward === 0) return
+    if (!model) return
+    const { updateQ, agentRuntimeStateKey } = await import('@/lib/learning/q-table')
+    const stateKey = agentRuntimeStateKey()
+    await updateQ(stateKey, model, reward, stateKey)
+    console.log(`[OBS-ALERT] salvage Q-learn (${sessionId.slice(0, 18)}): ${model} reward=${reward} (${confirmed}✓/${refuted}✗ từ run crashed)`)
+  } catch {
+    /* fail-open */
+  }
+}
+
+// ==================== RULE 5 (R4) — BRAIN-LABEL-STARVATION ====================
+
+/**
+ * R4-ĐIỀU TRA — "não chết đói nhãn" là lớp cảnh báo GIAO THỨC QUAN SÁT còn
+ * thiếu (user: "tại sao kích hoạt giao thức quan sát lại không thấy Brain-A
+ * không tiến triển"). 2 nhánh:
+ *   (a) Xưởng nhãn eval im lặng: EvalCase active > 0 nhưng EvalResult < 30
+ *       (ngưỡng thức tỉnh Brain-A) và không có EvalRun trong 24h → nhắc chạy
+ *       eval (auto-eval sẽ tự xử khi cờ auto_eval_kb bật).
+ *   (b) Run-close gap: ≥ 5 run kết thúc (terminal) trong 24h mà ≥ 50% không
+ *       chốt metadata (complete=null) → xưởng nhãn Brain-B rò rỉ (run chết
+ *       không salvage được — vd chết TRƯỚC checkpoint đầu tiên).
+ * Dedup 1h/(rule,targetId='brains') như mọi rule. Alert ONE-SHOT tổng hợp —
+ * không spam từng nhãn.
+ */
+async function checkBrainLabelStarvation(now: number): Promise<void> {
+  try {
+    const targetId = 'brains'
+    if (await isDuplicated('brain-label-starvation', targetId, now)) return
+    const dayAgo = new Date(now - 24 * 60 * 60_000)
+
+    const [activeCases, evalResults, recentEvalRun, terminalRuns, unfinalized] = await Promise.all([
+      db.evalCase.count({ where: { active: true } }),
+      db.evalResult.count(),
+      db.evalRun.findFirst({ where: { startedAt: { gte: dayAgo } }, select: { id: true } }),
+      db.agentRunRecord.count({
+        where: { status: { in: [...ALERT_TERMINAL_STATUSES] }, createdAt: { gte: dayAgo } },
+      }),
+      db.agentRunRecord.count({
+        where: {
+          status: { in: [...ALERT_TERMINAL_STATUSES] },
+          createdAt: { gte: dayAgo },
+          complete: null,
+        },
+      }),
+    ])
+
+    let summary: string | null = null
+    const payload: Record<string, unknown> = {
+      rule: 'brain-label-starvation',
+      targetId,
+      evalCases: activeCases,
+      evalResults,
+      terminalRuns24h: terminalRuns,
+      unfinalized24h: unfinalized,
+      brainAmin: 30,
+      brainBmin: 60,
+      protocol: 'R4-ĐIỀU TRA — não chết đói nhãn (giao thức quan sát lượt 4)',
+    }
+
+    if (activeCases > 0 && evalResults < 30 && !recentEvalRun) {
+      summary = `Não chết đói nhãn (A): ${activeCases} eval case sẵn sàng nhưng chỉ ${evalResults}/30 nhãn EvalResult và không có eval nào chạy trong 24h — Brain-A "V3" không bao giờ thức tỉnh nếu không chạy eval (auto_eval_kb sẽ tự bắn nếu bật)`
+    } else if (terminalRuns >= 5 && unfinalized / terminalRuns >= 0.5) {
+      summary = `Não chết đói nhãn (B): ${unfinalized}/${terminalRuns} run kết thúc 24h qua KHÔNG chốt metadata (complete=null) — run chết trước checkpoint đầu tiên, xưởng nhãn Brain-B "Vọng" (${Math.max(0, terminalRuns - unfinalized)} usable) đang rò rỉ dữ liệu train`
+    }
+    if (!summary) return
+
+    markAlerted('brain-label-starvation', targetId, now)
+    emitAlert(payload, summary, null)
+  } catch (err) {
+    console.error('[OBS-ALERT] rule brain-label-starvation thất bại (fail-open):', err instanceof Error ? err.message : String(err))
+  }
+}
+
+// ==================== RULE 6 (R4) — CHAT-TRACE-LOSS (repair) ====================
+
+/**
+ * R4-ĐIỀU TRA — user report: "tác vụ không hề được lưu lại hiển thị trong
+ * khung chat... quay lại không còn thấy gì nữa, không có dấu vết". Bằng
+ * chứng đo thật: session sess_1791918531965 bị MẤT row AgentSession (OOM
+ * giết request giữa early-save user message và agentSession.upsert) → user
+ * message mồ côi VÔ HÌNH (danh sách phiên đọc từ AgentSession). Rule quét
+ * chatMessage có sessionId không tồn tại trong AgentSession (bỏ tombstone —
+ * session do user chủ động xóa) → TỰ REPAIR (tạo lại row session, title từ
+ * message đầu) + obs.alert báo việc phục hồi. Cap 20 phiên/lần.
+ */
+async function checkChatTraceLoss(now: number): Promise<void> {
+  try {
+    const targetId = 'chat-trace'
+    if (await isDuplicated('chat-trace-loss', targetId, now)) return
+    // GroupBy sessionId trên chatMessage — cap quét 500 message gần nhất
+    const grouped = await db.chatMessage.groupBy({
+      by: ['sessionId'],
+      _count: true,
+      orderBy: { sessionId: 'asc' },
+      take: 50,
+    })
+    if (grouped.length === 0) return
+    const sessionIds = grouped.map(g => g.sessionId)
+    const existing = await db.agentSession.findMany({
+      where: { sessionId: { in: sessionIds } },
+      select: { sessionId: true },
+    })
+    const existingSet = new Set(existing.map(e => e.sessionId))
+    const orphans = grouped.filter(g => !existingSet.has(g.sessionId))
+    if (orphans.length === 0) return
+
+    // Repair từng phiên mồ côi — infer agentProfileId từ run gần nhất của phiên
+    let repaired = 0
+    const repairedIds: string[] = []
+    for (const o of orphans.slice(0, 20)) {
+      const run = await db.agentRunRecord.findFirst({
+        where: { sessionId: o.sessionId },
+        orderBy: { startedAt: 'desc' },
+        select: { agentId: true },
+      })
+      const ok = await ensureSessionRow(o.sessionId, run?.agentId ?? null)
+      if (ok) {
+        repaired++
+        repairedIds.push(o.sessionId)
+      }
+    }
+    if (repaired > 0) {
+      markAlerted('chat-trace-loss', targetId, now)
+      emitAlert(
+        {
+          rule: 'chat-trace-loss',
+          targetId,
+          orphanSessions: orphans.length,
+          repaired,
+          repairedIds,
+          action: 'Tự tạo lại AgentSession row cho phiên mồ côi — tin nhắn HIỆN LẠI trong khung chat',
+          protocol: 'R4-ĐIỀU TRA — chat trace loss repair (giao thức quan sát lượt 4)',
+        },
+        `Phục hồi ${repaired}/${orphans.length} phiên chat mất dấu vết (row AgentSession bị mất do crash giữa chừng — message vẫn nằm trong DB) — tin nhắn đã hiện lại trong danh sách phiên`,
+        null,
+      )
+    }
+  } catch (err) {
+    console.error('[OBS-ALERT] rule chat-trace-loss thất bại (fail-open):', err instanceof Error ? err.message : String(err))
+  }
+}
+
 // ==================== ENTRY (gọi từ tick impact.ts) ====================
 
 /**
- * Chạy toàn bộ 4 rule (3 cảnh báo + 1 dọn mồ côi) — gọi từ tick worker impact.ts
- * mỗi 10 phút.
+ * Chạy toàn bộ 6 rule (4 cảnh báo + 1 dọn mồ côi + 1 repair) — gọi từ tick
+ * worker impact.ts mỗi 10 phút.
  * Cờ obs_alerts off → return NGAY (rẻ). Cờ obs_ledger off → console.warn vẫn
  * phát; sự kiện obs.alert tự no-op ở ledger (xem header). Fail-open tuyệt
  * đối: KHÔNG throw, KHÔNG log spam (tối đa 1 dòng console.error mỗi rule khi
@@ -493,6 +826,13 @@ export async function runAlertChecks(): Promise<void> {
     // Task 32 — chạy SAU stall rule: stall alert (D1.1) phát hiện TRƯỚC cho
     // operator thấy, sweep đóng sổ (D1.2) SAU — đúng trình tự "phát hiện rồi xử lý".
     await sweepOrphanedRuns(now)
+    // R4-ĐIỀU TRA (lượt 4) — 2 rule mới: (5) não chết đói nhãn (chỗ giao thức
+    // quan sát từng BỎ SÓT — user: "tại sao không thấy Brain-A không tiến
+    // triển"), (6) chat-trace-loss TỰ REPAIR phiên mồ côi (user: "quay lại
+    // không còn thấy gì nữa"). Chạy SAU sweep để thấy việc dọn + repair
+    // ngay trong cùng tick.
+    await checkBrainLabelStarvation(now)
+    await checkChatTraceLoss(now)
     // alert vừa phát là fire-and-forget — flush để dedup query của TICK SAU
     // (và test) thấy ngay (an toàn: flush fail-open nội bộ ledger)
     await flushObservationQueue().catch(() => {})

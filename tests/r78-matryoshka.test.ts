@@ -26,7 +26,7 @@
  * nghiệm thu live probe sau deploy (không đưa Qdrant vào gate cô lập).
  */
 
-import { describe, test, expect, afterEach } from 'bun:test'
+import { describe, test, expect, afterEach, beforeEach } from 'bun:test'
 import {
   truncateMatryoshka,
   isMatryoshkaPilotEnabled,
@@ -34,6 +34,10 @@ import {
 } from '@/lib/embeddings'
 import { pcaTop2 } from '@/lib/stats/pca'
 import { isPilotCollection } from '@/lib/qdrant'
+// R4-ĐIỀU TRA (lượt 4): DB test là BẢN COPY production — TuningParam có thể
+// mang row matryoshka_pilot='on' lưu sẵn (STORE > ENV theo thiết kế) → test
+// "mặc định OFF" phải reset store trước khi asserted (tiền lệ r81 beforeEach).
+import { resetTuningValue } from '@/lib/learning/tuning-store'
 
 // ==================== A. truncateMatryoshka ====================
 
@@ -80,6 +84,10 @@ describe('A. truncateMatryoshka — MRL giữ đúng N phần tử đầu', () =
 
 describe('B. isMatryoshkaPilotEnabled — cờ pilot mặc định OFF', () => {
   const ORIG = process.env.MATRYOSHKA_PILOT
+  // R4: reset STORE layer (bản copy production có thể có row cũ — STORE > ENV)
+  beforeEach(async () => {
+    await resetTuningValue('matryoshka_pilot')
+  })
   afterEach(() => {
     if (ORIG === undefined) delete process.env.MATRYOSHKA_PILOT
     else process.env.MATRYOSHKA_PILOT = ORIG

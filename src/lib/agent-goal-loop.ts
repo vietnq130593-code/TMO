@@ -69,6 +69,7 @@ import {
   recordAgentRunTool,
   isSessionCancelled,
   stripInvisibleThoughtNoise,
+  checkpointAgentRun,
 } from '@/lib/agent-run-tracker'
 // ROUND 3 (R3-03) — CTO mode cho Opus (meta-agent không thi công). Static
 // import an toàn: opus-agent chỉ import db/fs (động tool-executor bên trong
@@ -442,6 +443,19 @@ const NO_PROGRESS_GRACE = intEnvPositive('GOAL_LOOP_NO_PROGRESS_GRACE', 2)
  */
 const VERDICT_STAGNATION_LIMIT = intEnvPositive('GOAL_LOOP_VERDICT_STAGNATION_CYCLES', 3)
 /**
+ * R4-ĐIỀU TRA (lượt 4) — CONF-TRAJECTORY STAGNATION (xem state var
+ * confStagnationStreak): số chu kỳ LIÊN TIẾP evaluator phán CHƯA ĐẠT mà
+ * confidence KHÔNG cải thiện đáng kể (≤ +CONF_IMPROVE_DELTA so với mức tốt
+ * nhất từng thấy). Trước khi dừng hẳn, chu kỳ REFLECT_AT bắn TỰ PHẢN CHIẾU
+ * (pivot: dừng mở rộng, tổng hợp giao ngay) — cơ hội cuối cho agent tự đổi
+ * cách tiếp cận. Dừng khi THẬT SỰ kẹt — không phải số đếm khô.
+ */
+const CONF_STAGNATION_LIMIT = intEnvPositive('GOAL_LOOP_CONF_STAGNATION_CYCLES', 4)
+/** Chu kỳ thứ mấy của streak bắn directive tự phản chiếu (1 trước limit). */
+const CONF_STAGNATION_REFLECT_AT = Math.max(1, CONF_STAGNATION_LIMIT - 1)
+/** Ngưỡng "cải thiện thật" — conf vượt mức tốt nhất từng thấy +0.05 mới reset streak. */
+const CONF_IMPROVE_DELTA = 0.05
+/**
  * r63 (F1) — LỜI KHAI BẾ TẮC của evaluator trong rootCause. Chủ đích chỉ bắt
  * KHAI BÁO RÕ RÀNG (kẹt / vòng lặp / bế tắc / không tiến triển / quay vòng /
  * stuck / looping) — KHÔNG bắt "lặp lại" đơn lẻ (evaluator viết "cần lặp lại
@@ -553,6 +567,15 @@ export type GoalStopReason =
    * trần không chạy.
    */
   | 'verdict_stagnation'
+  /**
+   * R4-ĐIỀU TRA (lượt 4 — "agent vẫn dễ rơi vào luẩn quẩn"): soft-loop —
+   * evaluator KHÔNG khai bế tắc, tool call vẫn thành công, nhưng confidence
+   * KHÔNG cải thiện (≤ +0.05 so với mức tốt nhất) N chu kỳ liên tiếp (đo
+   * thật: MEGATRON cy=31 / HAN cy=17 / Omega cy=16 đều chết vì OOM/cancel
+   * chứ không tự xong). Sau nhịp TỰ PHẢN CHIẾU (pivot) vẫn không tiến triển
+   * → dừng + wrap-up báo cáo cuối từ bằng chứng đã thu.
+   */
+  | 'conf_stagnation'
   | 'cancelled'
   | 'error'
   /**
@@ -3175,6 +3198,22 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
    * phán xét kết luận (không phải word-matching missing). ≥3 → VERDICT-
    * STAGNATION STOP khi cấu hình ∞ chu kỳ. */
   let evaluatorStuckStreak = 0
+  /**
+   * R4-ĐIỀU TRA (lượt 4 — "agent vẫn dễ rơi vào luẩn quẩn") — CONF-TRAJECTORY
+   * STAGNATION: bẫy SOFT-LOOP mà mọi phanh cũ bỏ sót — evaluator KHÔNG khai
+   * bế tắc (rootCause sạch), tool call liên tục thành công (stall-brake reset
+   * mỗi chu kỳ), missing list diễn giải lại mỗi chu kỳ (exact-sig reset) —
+   * nhưng CONFIDENCE KHÔNG TĂNG qua nhiều chu kỳ (bằng chứng đo thật: run
+   * MEGATRON cy=31, HAN cy=17, Omega cy=16 — tất cả bị giết bởi OOM/cancel,
+   * không run nào "tự xong"). Conf tăng ≤ CONF_IMPROVE_DELTA mỗi chu kỳ →
+   * streak++; đạt REFLECT_AT → bắn TỰ PHẢN CHIẾU directive (pivot chiến
+   * lược); đạt CONF_STAGNATION_LIMIT → dừng + wrap-up (đúng triết lý user
+   * 2026-10: "vấn đề là năng lực tự phản chiếu trong từng chu kỳ" — dừng khi
+   * THẬT SỰ không tiến triển, không dừng theo số đếm khô).
+   */
+  let confStagnationStreak = 0
+  let bestCycleConfidence = -1
+  let reflectionPivotArmed = false
   /** Task 21 — SHR: id mẩu CoT được truy hồi chu kỳ này (cha của mẩu chu kỳ sau — chuỗi nguồn gốc ≤3 thế hệ) */
   let cotParentSampleId: string | null = null
   /** TODO-COVERAGE (2026-10-22) — khối 📐 gần nhất đã stash vào RunContext
@@ -3671,7 +3710,20 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             console.log(`[GoalLoop] ${agentName} chu kỳ ${cycle} SHR directive: belief=${shrBeliefBlock ? 'yes' : 'no'} dataScope=${dataScopeBlock ? 'yes' : 'no'} uncertain=${uncertainBlock ? 'yes' : 'no'} priorCoT=${prior.matchedCount} mẩu khớp`)
           }
         } catch { /* fail-open — SHR không được phép làm hỏng directive */ }
-        const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev, effectiveMaxCycles, doneSummary, planningOnlyStreak) + similarErrorsBlock + runTodosBlock + cycleWorkDataBlock + regressionReminderBlock + todoStaleWarnBlock + dataScopeBlock + uncertainBlock + shrBeliefBlock + priorCotBlock
+        // R4-ĐIỀU TRA (lượt 4) — TỰ PHẢN CHIẾU PIVOT: conf-stagnation streak chạm
+        // REFLECT_AT chu kỳ trước → chu kỳ NÀY mở đầu bằng chỉ thị phản chiếu:
+        // dừng mở rộng phạm vi, đổi cách tiếp cận, tổng hợp hiện trạng thành
+        // kết quả giao được. One-shot: arm → bắn → disarm (không lặp lại mỗi
+        // chu kỳ — nếu pivot vẫn không cứu được conf thì CONF_STAGNATION_LIMIT
+        // sẽ dừng run ngay sau đó).
+        let reflectionPivotBlock = ''
+        if (reflectionPivotArmed) {
+          reflectionPivotArmed = false
+          reflectionPivotBlock = `\n\n🪞 TỰ PHẢN CHIẾU (R4 — BẮT BUỘC): confidence của trọng tài KHÔNG tăng qua ${CONF_STAGNATION_REFLECT_AT} chu kỳ liên tiếp dù tool call thành công — cách tiếp cận hiện tại KHÔNG HỘI TỤ. Chu kỳ này BẮT BUỘC: (1) KHÔNG mở rộng phạm vi / KHÔNG thu thập thêm dữ liệu trừ khi trực tiếp lấp missing lớn nhất; (2) ĐỔI chiến lược cho vấn đề cốt lõi còn kẹt (cách khác hẳn: đổi tool, đổi góc nhìn, đổi cấu trúc kết quả); (3) TỔNG HỢP những gì đã có thành kết quả giao được NGAY trong chu kỳ này (bản nháp hoàn chỉnh tốt hơn bản hoàn hảo không xong). Nếu chu kỳ này vẫn không kéo confidence lên, run sẽ dừng và giao báo cáo tổng hợp từ bằng chứng đã thu.`
+          evidence.push({ cycle, kind: 'directive', text: `TỰ PHẢN CHIẾU (R4): pivot chiến lược — dừng mở rộng, đổi cách tiếp cận missing lớn nhất, tổng hợp giao ngay` })
+          console.log(`[GoalLoop] ${agentName} chu kỳ ${cycle}: TỰ PHẢN CHIẾU (R4) — conf-stagnation streak ${confStagnationStreak} → pivot directive`)
+        }
+        const directive = buildContinuationDirective(lastVerdict, cycle, cutMidWorkPrev, effectiveMaxCycles, doneSummary, planningOnlyStreak) + similarErrorsBlock + runTodosBlock + cycleWorkDataBlock + regressionReminderBlock + todoStaleWarnBlock + dataScopeBlock + uncertainBlock + shrBeliefBlock + priorCotBlock + reflectionPivotBlock
         // ROUND-26 FIX E — advisory (tư vấn Omega + báo cáo AUTO-APPLY sub-agent)
         // thành message RIÊNG trước directive — không còn chìm giữa các khối.
         if (advisoryBlock) {
@@ -5142,6 +5194,51 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       }
     }
 
+    // ===== R4-ĐIỀU TRA (lượt 4) — RUN CHECKPOINT "HỘP ĐEN" =====
+    // Mỗi chu kỳ có verdict: ghi tiến độ thật (cycles/tokens/toolCalls/
+    // duration) vào row AgentRunRecord 'running'. Run bị giết giữa chừng
+    // (OOM/crash) vẫn để lại metadata → orphan-sweep lật complete=false là
+    // thành nhãn usable cho Brain-B + chat trace không mất dấu. Fire-and-
+    // forget, fail-open (bên trong checkpointAgentRun đã tự nuốt lỗi).
+    try {
+      checkpointAgentRun(agentSessionId, runId, {
+        cycles: cycle,
+        tokensUsed,
+        toolCalls: totalToolCalls,
+      })
+    } catch { /* fail-open — checkpoint không được phép fail loop */ }
+
+    // ===== R4-ĐIỀU TRA (lượt 4) — CONF-TRAJECTORY STAGNATION TRACKING =====
+    // Soft-loop tracker (xem state var): incomplete + conf không vượt mức tốt
+    // nhất +0.05 → streak. Chu kỳ REFLECT_AT → arm directive TỰ PHẢN CHIẾU
+    // cho chu kỳ kế (pivot chiến lược — đúng chỉ thị user "năng lực tự phản
+    // chiếu trong từng chu kỳ"). Đạt LIMIT → STOP + wrap-up báo cáo cuối từ
+    // bằng chứng đã thu (giá trị còn giữ được cho user thay vì đốt token vô
+    // hạn tới 12h budget).
+    if (!verdict.complete) {
+      const cycleConf = typeof verdict.confidence === 'number' ? verdict.confidence : 0
+      if (cycleConf > bestCycleConfidence + CONF_IMPROVE_DELTA) {
+        bestCycleConfidence = cycleConf
+        confStagnationStreak = 0 // cải thiện thật — cuộc săn tiếp tục
+      } else {
+        confStagnationStreak++
+        if (confStagnationStreak === CONF_STAGNATION_REFLECT_AT) {
+          reflectionPivotArmed = true
+          recordAgentThought(agentSessionId, `🪞 TỰ PHẢN CHIẾU (R4): confidence giữ nguyên ~${Math.round(cycleConf * 100)}% suốt ${confStagnationStreak} chu kỳ (mức tốt nhất ${Math.round(bestCycleConfidence * 100)}%) — chu kỳ kế được chỉ thị PIVOT: dừng mở rộng phạm vi, tổng hợp hiện trạng thành kết quả giao được`, totalIterations)
+        }
+        if (confStagnationStreak >= CONF_STAGNATION_LIMIT) {
+          stopReason = 'conf_stagnation'
+          recordAgentThought(agentSessionId, `🛑 CONF-STAGNATION (R4): ${confStagnationStreak} chu kỳ liên tiếp CHƯA ĐẠT và confidence không cải thiện (tốt nhất ${Math.round(bestCycleConfidence * 100)}%) dù đã qua nhịp tự phản chiếu → dừng; wrap-up tổng hợp báo cáo cuối từ bằng chứng đã thu`, totalIterations)
+          evidence.push({ cycle, kind: 'directive', text: `CONF-STAGNATION STOP (R4): confidence không tăng ${confStagnationStreak} chu kỳ liên tiếp (tốt nhất ${(bestCycleConfidence * 100).toFixed(0)}%) — dừng để tổng hợp báo cáo cuối trung thực thay vì luẩn quẩn đốt budget` })
+          console.warn(`[GoalLoop] ${agentName} CONF-STAGNATION (R4): conf không cải thiện ${confStagnationStreak} chu kỳ liên tiếp → dừng ở chu kỳ ${cycle} + wrap-up`)
+          break
+        }
+      }
+    } else {
+      confStagnationStreak = 0
+      bestCycleConfidence = -1
+    }
+
     // ===== 2026-10 — VERDICT STAGNATION TRACKING (điều kiện renewal) =====
     // Evaluator ra verdict GIỐNG HỆT chu kỳ trước (incomplete + cùng rootCause +
     // cùng missing) = bế tắc: agent đã thử mà không đổi được tình thế. ≥3 chu kỳ
@@ -5839,6 +5936,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         token_budget: `hết budget token (${TOKEN_BUDGET === 0 ? '∞' : TOKEN_BUDGET} — có thể tăng qua env GOAL_LOOP_TOKEN_BUDGET, hoặc đặt GOAL_LOOP_TOKEN_BUDGET=0 để chạy KHÔNG giới hạn)`,
         no_progress: 'phát hiện bế tắc không tiến triển (lặp lại hành động cũ theo fingerprint, hoặc 3 chu kỳ liên tiếp không có tool call thành công nào — stall brake CI-1)',
         verdict_stagnation: `trọng tài phán CHƯA ĐẠT và TỰ KHAI bế tắc ("Run bị kẹt trong vòng lặp…") ${evaluatorStuckStreak} chu kỳ liên tiếp — dừng sớm để tổng hợp báo cáo cuối trung thực từ bằng chứng đã thu`,
+        conf_stagnation: `confidence của trọng tài không cải thiện (${Math.round(Math.max(0, bestCycleConfidence) * 100)}% là mức tốt nhất) suốt ${confStagnationStreak} chu kỳ liên tiếp dù đã qua nhịp tự phản chiếu (R4) — dừng để tổng hợp báo cáo cuối thay vì luẩn quẩn đốt budget`,
         error: 'lỗi LLM',
         // TASK 48 — gap fix: chờ thông tin/ủy quyền CHỈ user cung cấp được
         needs_input: 'trọng tài xác định phần còn thiếu nằm NGOÀI hệ thống — cần thông tin/ủy quyền/phê duyệt của BẠN (người dùng) để tiếp tục',

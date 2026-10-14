@@ -574,8 +574,12 @@ async function trainBrainPolicyLocked(
   override?: BrainDraftSpec,
 ): Promise<PolicyTrainResult> {
   // ── Đếm 2 nguồn ngưỡng §2 (telemetry trung thực — đếm TRƯỚC khi chặn) ──
+  // R4-ĐIỀU TRA: Q signal = SUM(visits) (số lần updateQ) — không phải row
+  // count (deadlock: không gian trạng thái nhỏ 1 state × ~3 model ≈ 3 row
+  // mãi mãi < 30 — xem countQLearningSignal). Bối cảnh đủ kinh nghiệm học
+  // 30 lần là thức tỉnh được đúng tinh thần blueprint §2.
   const [qEntryCount, verdictCount] = await Promise.all([
-    db.qEntry.count(),
+    import('@/lib/learning/q-table').then(m => m.countQLearningSignal()),
     db.arbiterVerdict.count(),
   ])
 
@@ -1161,7 +1165,8 @@ export async function buildTuningProposals(): Promise<PolicyTuningProposal[]> {
   if (!isPolicyOrganEnabled('tuning')) return []
   const proposals: PolicyTuningProposal[] = []
   try {
-    const qCount = await db.qEntry.count()
+    // R4-ĐIỀU TRA — cùng signal SUM(visits) như train gate (nhất quán đề xuất)
+    const qCount = await import('@/lib/learning/q-table').then(m => m.countQLearningSignal())
     const modelPolicy = getTuningEnum('runtime_model_policy')
     if (modelPolicy !== 'softmax' && qCount >= POLICY_MIN_Q_ENTRIES) {
       proposals.push({

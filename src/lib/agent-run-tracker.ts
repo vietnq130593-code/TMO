@@ -628,6 +628,105 @@ export function endAgentRun(
   } catch { /* fail-open */ }
 }
 
+// ==================== CHECKPOINT (R4-ĐIỀU TRA — "hộp đen" run) ====================
+//
+// R4-ĐIỀU TRA (giao thức quan sát lượt 4): 104/111 AgentRunRecord kết thúc
+// complete=null + tokensUsed=null — run bị giết giữa chừng (OOM restart /
+// crash) KHÔNG bao giờ tới được endAgentRun → metadata mất trắng → Brain-B
+// "Vọng" đói nhãn (usable 6/111 vs cần 60) + chat không còn dấu vết + không
+// episode/lesson. CHECKPOINT mỗi chu kỳ: ghi tiến độ thật (cycles/tokens/
+// toolCalls/duration) vào row 'running' ngay TẠI CHỖ — khi run bị giết,
+// orphan-sweep chỉ cần lật complete=false + durationMs là đủ thành nhãn
+// usable (mẫu KẾT CỤC TIÊU CỰC — dữ liệu train quý nhất cho surrogate).
+// Thêm nhịp run.heart kèm tokensSoFar (paced 2' như heart sẵn có).
+
+export interface RunCheckpoint {
+  cycles?: number
+  tokensUsed?: number
+  toolCalls?: number
+  toolFailures?: number
+}
+
+/**
+ * Checkpoint giữa chừng run đang 'running': UPDATE row AgentRunRecord theo
+ * (sessionId, runId, status='running') với tiến độ thật + phát run.heart
+ * kèm tokensSoFar/cycle. Fire-and-forget, fail-open tuyệt đối — KHÔNG bao
+ * giờ được phép làm hỏng goal loop. Trả về false khi run không tìm thấy
+ * (đã kết thúc / session khác) — caller bỏ qua.
+ */
+export function checkpointAgentRun(
+  sessionId: string | null | undefined,
+  runId: string | null | undefined,
+  progress: RunCheckpoint,
+): boolean {
+  try {
+    if (!sessionId || !runId) return false
+    const run = runsOf(sessionId).find(r => r.runId === runId)
+    if (!run || run.status !== 'running') return false
+    // Cập nhật in-memory trước (nguồn sự thật cho endAgentRun sau này)
+    if (typeof progress.tokensUsed === 'number' && progress.tokensUsed > 0) {
+      run.tokensUsed = progress.tokensUsed
+    }
+    // DB checkpoint — update row 'running' (giữ startedAt nguyên bản để
+    // durationMs tính đúng toàn bộ đời run, kể cả phần trước resume)
+    void (async () => {
+      try {
+        const { db } = await import('@/lib/db')
+        const durationMs = Math.max(0, Date.now() - run.startedAt)
+        await db.agentRunRecord.updateMany({
+          where: { sessionId, runId, status: 'running' },
+          data: {
+            ...(typeof progress.cycles === 'number' && progress.cycles > 0
+              ? { cycles: progress.cycles }
+              : {}),
+            ...(typeof progress.tokensUsed === 'number' && progress.tokensUsed > 0
+              ? { tokensUsed: progress.tokensUsed }
+              : {}),
+            ...(typeof progress.toolCalls === 'number' && progress.toolCalls >= 0
+              ? { toolCalls: progress.toolCalls }
+              : {}),
+            ...(typeof progress.toolFailures === 'number' && progress.toolFailures >= 0
+              ? { toolFailures: progress.toolFailures }
+              : {}),
+            durationMs,
+          },
+        })
+      } catch {
+        /* fail-open — checkpoint không được phép fail loop */
+      }
+    })()
+    // Nhịp sống kèm tiến độ (paced như emitRunHeart — chia sẻ map state)
+    try {
+      const hearts = runHeartState()
+      const last = hearts.get(run.runId) ?? 0
+      if (Date.now() - last >= RUN_HEART_MIN_INTERVAL_MS) {
+        hearts.set(run.runId, Date.now())
+        void import('@/lib/observation/ledger')
+          .then(m =>
+            m.observeEvent({
+              actor: `agent:${run.agentName}`,
+              kind: 'run.heart',
+              runId: run.runId,
+              sessionId,
+              summary: `Nhịp CHECKPOINT: chu kỳ ${progress.cycles ?? '?'} · ${progress.tokensUsed ?? 0} tokens · ${progress.toolCalls ?? 0} tool calls`,
+              payload: {
+                checkpoint: true,
+                cycle: progress.cycles ?? null,
+                tokensSoFar: progress.tokensUsed ?? null,
+                toolCalls: progress.toolCalls ?? null,
+                sessionId,
+              },
+            }),
+          )
+          .catch(() => {})
+      }
+    } catch { /* fail-open */ }
+    return true
+  } catch {
+    return false
+  }
+}
+
 // ==================== CANCEL (user request 2026-08-31) ====================
 
 /**

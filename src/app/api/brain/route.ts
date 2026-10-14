@@ -76,10 +76,12 @@ function parseTrainMeta(raw: string): BrainModelSummary['meta'] {
 export async function GET() {
   try {
     // ── Đếm nguồn thức tỉnh (mỗi nguồn fail-open độc lập) ──
+    // R4-ĐIỀU TRA: qEntries dùng SUM(visits) (số lần updateQ — thoát deadlock
+    // không gian trạng thái nhỏ; nhất quán gate train policy.ts).
     const [evalResults, agentRuns, qEntries, verdicts] = await Promise.all([
       safeCount(() => db.evalResult.count()),
       safeCount(() => db.agentRunRecord.count()),
-      safeCount(() => db.qEntry.count()),
+      safeCount(() => import('@/lib/learning/q-table').then(m => m.countQLearningSignal())),
       safeCount(() => db.arbiterVerdict.count()),
     ])
     const counts: Record<string, number | null> = {

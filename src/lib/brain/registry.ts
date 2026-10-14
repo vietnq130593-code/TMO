@@ -256,9 +256,13 @@ export const BRAIN_REGISTRY: readonly BrainSpec[] = [
       {
         key: 'qEntries',
         table: 'QEntry',
-        label: 'Q-entry đã học',
+        // R4-ĐIỀU TRA — đếm SỐ LẦN UPDATE Q (SUM(visits)) thay vì row count:
+        // không gian trạng thái nhỏ (1 stateKey × ~3 model ≈ 3 row mãi mãi)
+        // làm ngưỡng 30 row là deadlock cấu trúc — 30 LẦN HỌC mới là "đủ kinh
+        // nghiệm" đúng tinh thần blueprint §2 (xem countQLearningSignal).
+        label: 'Q-updates đã học (số lần updateQ)',
         min: 30,
-        source: 'BLUEPRINT-BRAIN §2 — policy head',
+        source: 'BLUEPRINT-BRAIN §2 — policy head (R4: SUM(visits))',
       },
       {
         key: 'verdicts',

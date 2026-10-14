@@ -41,7 +41,12 @@ import { type ExpectedEntity, normalizeForEntityMatch, buildRelevanceVector } fr
  *  nhận theo directive "space-bunny-free cũng được").
  *  User directive (giữ nguyên): nemotron-3-ultra-550b là extraction-ONLY —
  *  KHÔNG dùng cho eval answers. deepseek-v4-flash cũ đã EOL 410 (2026-09-21). */
-const ANSWER_MODEL = 'space-bunny-free'
+const ANSWER_MODEL = process.env.EVAL_ANSWER_MODEL?.trim() || 'space-bunny-free'
+// R4-ĐIỀU TRA (lượt 4 — xưởng nhãn Brain-A phải sống ở MỌI môi trường):
+// EVAL_ANSWER_MODEL cho phép đổi model sinh câu trả lời khi đường Zen bị
+// chặn theo IP (sandbox datacenter — Task 30). Sandbox đặt
+// deepseek-ai/deepseek-v4.1-flash (NIM xoay key — sống); máy user giữ
+// default space-bunny-free (đúng pipeline chat thật).
 
 /** Pace-limit between cases (ms) — gentle on the shared 4-key NVIDIA budget. */
 const CASE_PACE_MS = 300

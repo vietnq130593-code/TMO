@@ -54,12 +54,15 @@ export interface JudgeVerdict {
 // ==================== JUDGE CONFIGURATION ====================
 
 /** Judge primary — NVIDIA NIM kimi-k3 (user directive 2026-11-30: "nếu
- *  kimi-k3 sống thì dùng k3"). Chậm (~120s/call live-probe 2026-11-30). */
-const JUDGE_PRIMARY_MODEL = 'moonshotai/kimi-k3'
+ *  kimi-k3 sống thì dùng k3"). Chậm (~120s/call live-probe 2026-11-30).
+ *  R4-ĐIỀU TRA (lượt 4): EVAL_JUDGE_MODEL cho phép override khi cần (vd môi
+ *  trường NIM khác) — default giữ nguyên chỉ thị user. */
+const JUDGE_PRIMARY_MODEL = process.env.EVAL_JUDGE_MODEL?.trim() || 'moonshotai/kimi-k3'
 
 /** Judge fallback — OpenCode Zen space-bunny-free (user directive 2026-11-30:
- *  "còn không thì dùng space-bunny-free cũng được"). */
-const JUDGE_FALLBACK_MODEL = 'space-bunny-free'
+ *  "còn không thì dùng space-bunny-free cũng được"). EVAL_JUDGE_FALLBACK_MODEL
+ *  override khi đường Zen bị chặn theo IP (R4 — mirror EVAL_ANSWER_MODEL). */
+const JUDGE_FALLBACK_MODEL = process.env.EVAL_JUDGE_FALLBACK_MODEL?.trim() || 'space-bunny-free'
 
 interface JudgeConfig {
   /** Primary model for this judge slot (NIM kimi-k3). */

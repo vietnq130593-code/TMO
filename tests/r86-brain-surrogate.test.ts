@@ -978,7 +978,7 @@ describe('r86 · F cờ replay_eval + registry pins', () => {
     // BLUEPRINT-OBSERVATION §C.3, neural-types.ts block 'OBS-P1').
     // PIN UPDATE (Task 26-BE 2026-10-14): 29 → 30 — thêm cờ obs_alerts (GAP-2
     // cảnh báo chủ động — neural-types.ts block Task 26-BE).
-    expect(TUNING_SPECS.length).toBe(30) // 19 BRAIN-P4 + 6 BRAIN-UX §9 + 4 OBS-P1 + 1 obs_alerts
+    expect(TUNING_SPECS.length).toBe(31) // 19 BRAIN-P4 + 6 BRAIN-UX §9 + 4 OBS-P1 + 1 obs_alerts + 1 auto_eval_kb (R4)
   })
 
   test('F2 NEURAL_NODES softmax-policy paramKeys gồm replay_eval (gắn đúng node)', () => {

@@ -314,6 +314,12 @@ async function tick(): Promise<void> {
     // obs.alert tự no-op ở ledger). Tự check cờ obs_alerts bên trong (off →
     // return ngay — rẻ).
     await runAlertChecks()
+    // R4-ĐIỀU TRA (lượt 4) — XƯỞNG NHÃN Brain-A: auto-eval KB (cờ
+    // auto_eval_kb tự gate bên trong; no-op khi đủ nhãn / trong chu kỳ nghỉ /
+    // chưa seed case). Fail-open tuyệt đối — KHÔNG throw làm chết tick.
+    await import('@/lib/eval/auto-eval')
+      .then(m => m.maybeRunAutoKbEval())
+      .catch(() => { /* fail-open */ })
   } catch {
     // fail-open — worker không bao giờ throw làm chết interval
   } finally {

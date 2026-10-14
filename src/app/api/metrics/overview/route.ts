@@ -299,9 +299,10 @@ export async function GET(request: NextRequest) {
     const runRows = allRunRows.filter(r => (r.createdAt ?? new Date(0)).getTime() <= runUpperMs)
     // r64 (A1 lượt 5) — đếm ĐỦ họ bế tắc: goal-loop dừng 'no_progress' (stall
     // brake chu kỳ), delegation dừng 'stall_brake' (r60.2 C7 persist nhãn thật),
-    // goal-loop ∞ dừng 'verdict_stagnation' (r63 F1) — trước đây chỉ đếm
-    // no_progress → under-report run kẹt cho operator (2/3 họ bị bỏ sót).
-    noProgressCount = runRows.filter(r => r.stopReason === 'no_progress' || r.stopReason === 'stall_brake' || r.stopReason === 'verdict_stagnation').length
+    // goal-loop ∞ dừng 'verdict_stagnation' (r63 F1) + 'conf_stagnation'
+    // (R4 lượt 4 — soft-loop conf không cải thiện) — trước đây chỉ đếm
+    // no_progress → under-report run kẹt cho operator.
+    noProgressCount = runRows.filter(r => r.stopReason === 'no_progress' || r.stopReason === 'stall_brake' || r.stopReason === 'verdict_stagnation' || r.stopReason === 'conf_stagnation').length
     const byStopReason: Record<string, number> = {}
     for (const r of runRows) {
       if (r.stopReason) byStopReason[r.stopReason] = (byStopReason[r.stopReason] || 0) + 1

@@ -660,6 +660,27 @@ export const TUNING_SPECS: readonly TuningSpec[] = [
     },
     appliesTo: 'runAlertChecks (src/lib/observation/alerts.ts) — gọi từ tick worker impact.ts',
   },
+  // R4-ĐIỀU TRA (lượt 4 — "xưởng nhãn" Brain-A): EvalResult=0 vì eval KB chỉ
+  // chạy khi user bấm tay + EvalCase chưa seed → Brain-A "V3" ngủ mãi mãi dù
+  // pipeline train + auto-train-after-eval đã sẵn sàng. Cờ thứ 31: tick quan
+  // sát 10 phút tự chạy eval NHẸ (8 case) khi nhãn dưới ngưỡng và hết chu kỳ
+  // nghỉ — Brain-A thức tỉnh dần theo đúng thiết kế BRAIN-P2.
+  {
+    key: 'auto_eval_kb',
+    label: 'AUTO_EVAL_KB',
+    description:
+      'Bật xưởng nhãn tự động cho Brain-A "V3" (calibration): trong tick quan sát 10 phút, khi (a) EvalCase active > 0, (b) tổng EvalResult < 60 nhãn, (c) eval gần nhất đã cũ ≥ 12h → chạy eval KB NHẸ (8 case, deepseek NIM — ~1-2 phút) fire-and-forget. Eval runner tự auto-train calibration V2 + V3 (MLP) ngay sau khi đủ ≥ 10 nhãn usable — Brain-A thức tỉnh theo đúng BRAIN-P2 mà không cần user bấm "Chạy đánh giá" tay. Tắt để hoàn toàn thủ công.',
+    nodeId: 'hist-feedback',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'on',
+    envKey: 'AUTO_EVAL_KB',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' || v === '1' || v === 'true' ? 'on' : v === 'off' || v === '0' || v === 'false' ? 'off' : undefined
+    },
+    appliesTo: 'maybeRunAutoKbEval (src/lib/eval/auto-eval.ts) — gọi từ tick worker impact.ts',
+  },
 ] as readonly TuningSpec[]
 
 /** Tra spec theo key (O(1) qua Map dựng sẵn). */
@@ -936,7 +957,7 @@ export const NEURAL_NODES: readonly NeuralNode[] = [
     functions: [
       { name: 'TRUST_MIN_N / TRUST_MAX_CI_WIDTH', file: 'src/lib/learning/historical-feedback.ts', line: 25 },
     ],
-    paramKeys: ['obs_ledger', 'obs_brain_trace', 'obs_impact', 'ui_observation', 'obs_alerts'],
+    paramKeys: ['obs_ledger', 'obs_brain_trace', 'obs_impact', 'ui_observation', 'obs_alerts', 'auto_eval_kb'],
   },
   {
     id: 'anomaly',

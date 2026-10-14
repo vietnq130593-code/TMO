@@ -442,6 +442,30 @@ export async function POST(request: NextRequest) {
     let savedUserMessageId: string | null = null
     if (sessionId && lastUserContent && !(await isSessionDeletedDeep(sessionId))) {
       try {
+        // R4-ĐIỀU TRA (lượt 4 — chat mất dấu vết): ĐẢM BẢO session row tồn tại
+        // NGAY TẠI early-save. Bằng chứng đo thật: session sess_1791918531965
+        // (MEGATRON 19:08, cy=31) MẤT row AgentSession — app OOM-restart giết
+        // request giữa early-save user message (✓ lưu) và agentSession.upsert
+        // (✗ chưa tới) → user message mồ côi VÔ HÌNH (danh sách phiên đọc từ
+        // AgentSession — user: "quay lại không còn thấy gì nữa"). Upsert với
+        // update RỖNG (no-op khi đã có — không double-increment messageCount;
+        // các nhánh upsert phía sau vẫn chịu trách nhiệm increment theo path).
+        try {
+          await db.agentSession.upsert({
+            where: { sessionId },
+            create: {
+              sessionId,
+              model: agentModel || model || null,
+              provider: agentProvider || null,
+              title: lastUserContent.slice(0, 50) || 'New Chat',
+              messageCount: 0,
+              agentProfileId: agentProfileId || null,
+              teamMode: teamMode || null,
+              teamName: teamName || null,
+            },
+            update: {},
+          })
+        } catch { /* fail-open — không chặn early-save */ }
         // DEDUPE (fix E2E 2026-09-08): user bấm Dừng rồi GỬI LẠI cùng nội dung
         // (hoặc cancel giữa chừng rồi retry) → request cũ đã early-save user
         // message này rồi → KHÔNG lưu bản trùng (E2E thấy 2 rows y hệt nhau).

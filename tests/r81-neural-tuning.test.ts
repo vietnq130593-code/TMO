@@ -53,8 +53,10 @@ describe('r81 · TUNING_SPECS integrity', () => {
     // (obs_ledger/obs_brain_trace/obs_impact/ui_observation — gắn node hist-feedback).
     // PIN UPDATE (Task 26-BE 2026-10-14): 29 → 30 — thêm cờ obs_alerts (GAP-2
     // cảnh báo chủ động — node hist-feedback).
-    expect(keys.length).toBe(30)
-    expect(new Set(keys).size).toBe(30)
+    // PIN UPDATE (R4-ĐIỀU TRA lượt 4): 30 → 31 — thêm cờ auto_eval_kb (xưởng
+    // nhãn Brain-A tự động — node hist-feedback).
+    expect(keys.length).toBe(31)
+    expect(new Set(keys).size).toBe(31)
     for (const k of keys) expect(getTuningSpec(k)?.key).toBe(k)
     expect(getTuningSpec('khong-ton-tai')).toBeUndefined()
   })
@@ -176,6 +178,10 @@ describe('r81 · resolve STORE > ENV > DEFAULT', () => {
     await resetTuningValue('episodic_epsilon')
     await resetTuningValue('adaptation_stats_gate')
     await resetTuningValue('matryoshka_pilot')
+    // R4-ĐIỀU TRA (lượt 4): production từng lưu runtime_model_policy='softmax'
+    // (TuningParam thật) → 2 test dưới đây assert default/env-fallback phải
+    // reset key này như các key khác (source='store' phá cả 2 assertion).
+    await resetTuningValue('runtime_model_policy')
   })
 
   test('default khi không có store + không có env', () => {
@@ -272,7 +278,8 @@ describe('r81 · resolve STORE > ENV > DEFAULT', () => {
     const state = await getTuningState()
     // PIN UPDATE (Task 23 OBS-P1): 25 → 29 — 4 cờ quan sát V2 (node hist-feedback)
     // PIN UPDATE (Task 26-BE): 29 → 30 — cờ obs_alerts (GAP-2)
-    expect(state.length).toBe(30)
+    // PIN UPDATE (R4-ĐIỀU TRA lượt 4): 30 → 31 — cờ auto_eval_kb (xưởng nhãn Brain-A)
+    expect(state.length).toBe(31)
     const iqr = state.find(s => s.key === 'anomaly_iqr_k')!
     expect(iqr.source).toBe('store')
     expect(iqr.storeValue).toBe('2.5')
@@ -446,7 +453,8 @@ describe('r81 · API /api/neural-architecture', () => {
     // PIN UPDATE (r88-r91 task, Task 11 worklog): 19 → 25 (BRAIN-UX §9 +6 key)
     // PIN UPDATE (Task 23 OBS-P1): 25 → 29 — 4 cờ quan sát V2
     // PIN UPDATE (Task 26-BE): 29 → 30 — cờ obs_alerts (GAP-2)
-    expect(json.tuning.length).toBe(30)
+    // PIN UPDATE (R4-ĐIỀU TRA lượt 4): 30 → 31 — cờ auto_eval_kb (xưởng nhãn Brain-A)
+    expect(json.tuning.length).toBe(31)
     expect(typeof json.live).toBe('object')
     expect(json.live['q-table'][0].label).toBe('Q entries')
     expect(json.generatedAt).toBeTruthy()
