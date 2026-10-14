@@ -749,6 +749,46 @@ export function getWorkspaceManager(): WorkspaceManager {
 }
 
 /**
+ * R11 (F1 — lượt quan sát thứ 5): rootPath hợp lệ cho nền tảng ĐANG CHẠY?
+ * DB Workspace có thể chứa đường dẫn từ MÁY KHÁC (backup/restore — bằng chứng
+ * 14/10: active rootPath "E:\APP\TMO-clone" trên Linux sandbox; existsSync()
+ * trả TRUE oan vì resolve thành thư mục literal rạc "E:\APP\TMO-clone" trong
+ * app dir → mọi tool file resolve theo root vô nghĩa → bão path-escape +
+ * receipt ghi nhầm chỗ). Windows path trên POSIX (và ngược lại) = invalid.
+ */
+export function isRootPathSaneForPlatform(p: string): boolean {
+  if (!p || typeof p !== 'string') return false;
+  if (process.platform === 'win32') {
+    // Windows: drive-letter (C:\ hoặc C:/) hoặc UNC (\\server\share)
+    return /^([a-zA-Z]:[\\/]|\\\\)/.test(p);
+  }
+  // POSIX: không chấp nhận drive-letter prefix hoặc backslash (dấu vết Windows)
+  return !/^[a-zA-Z]:/.test(p) && !p.includes('\\');
+}
+
+/**
+ * R11 (F1): tự chữa khi active workspace vô hiệu trên nền tảng này —
+ * deactivate row lỗi + upsert workspace lành mạnh trỏ về app dir (cwd).
+ * Fail-open tuyệt đối (lỗi DB không được làm hỏng tool call — caller đã có
+ * fallback env/cwd).
+ */
+async function healInvalidActiveWorkspace(badId: string, badRoot: string): Promise<void> {
+  try {
+    const { db } = await import('@/lib/db');
+    await db.workspace.update({ where: { id: badId }, data: { isActive: false } }).catch(() => {});
+    const saneRoot = process.cwd();
+    const existing = await db.workspace.findUnique({ where: { rootPath: saneRoot } }).catch(() => null);
+    const ws = existing
+      ? await db.workspace.update({ where: { id: existing.id }, data: { isActive: true } })
+      : await db.workspace.create({ data: { name: 'TMO (auto-heal R11)', rootPath: saneRoot, isActive: true } });
+    await db.workspace.updateMany({ where: { isActive: true, id: { not: ws.id } }, data: { isActive: false } }).catch(() => {});
+    console.warn(`[WORKSPACE] 🛠️ R11 auto-heal: active workspace "${badRoot}" vô hiệu trên ${process.platform} → deactivate + kích hoạt "${saneRoot}"`);
+  } catch (err) {
+    console.warn('[WORKSPACE] R11 auto-heal lỗi (fail-open — fallback env/cwd):', err instanceof Error ? err.message : String(err));
+  }
+}
+
+/**
  * Phase 6 (rebuild) — Convenience accessor: rootPath of the ACTIVE workspace.
  * Never throws — returns null when the workspace layer is unavailable
  * (DB down, no active record and auto-create failed, ...).
@@ -756,11 +796,20 @@ export function getWorkspaceManager(): WorkspaceManager {
  * Used by code-team tool executor (start_preview/stop_preview) and the
  * workspace-root resolver so AI tools operate on the USER's active workspace
  * instead of the TMO process cwd.
+ *
+ * R11 (F1): active rootPath vô hiệu trên nền tảng này (Windows-path-on-POSIX
+ * từ DB máy khác) → coi như KHÔNG có active (fallback env/cwd) + heal async.
  */
 export async function getActiveWorkspaceRoot(): Promise<string | null> {
   try {
     const ws = await getWorkspaceManager().getActiveWorkspace();
-    return ws?.rootPath ?? null;
+    const root = ws?.rootPath ?? null;
+    if (root && !isRootPathSaneForPlatform(root)) {
+      console.warn(`[WORKSPACE] ⚠️ R11: active workspace rootPath "${root}" không hợp lệ trên ${process.platform} (DB từ máy khác?) — bỏ qua, fallback env/cwd`);
+      if (ws?.id) void healInvalidActiveWorkspace(ws.id, root).catch(() => {});
+      return null;
+    }
+    return root;
   } catch {
     return null;
   }

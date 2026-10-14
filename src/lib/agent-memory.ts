@@ -18,7 +18,7 @@
  *   - Each point corresponds to one AgentMemory record
  */
 
-import { db } from '@/lib/db'
+import { db, withSqliteRetry } from '@/lib/db'
 import { qdrant, ensurePilotCollection, COLLECTION_AGENT_MEMORY_PILOT } from '@/lib/qdrant'
 import { generateEmbedding, generateQueryEmbedding, getEmbeddingDimension, generateEmbeddingBatch, truncateMatryoshka, isMatryoshkaPilotEnabled, MATRYOSHKA_PILOT_DIMS } from '@/lib/embeddings'
 import { callUtilityLLM } from '@/lib/llm'
@@ -1080,16 +1080,19 @@ export async function saveChatMessages(
       if (await isSessionDeletedDeep(sessionId)) return 0
     } catch { /* fail-open */ }
 
-    const result = await db.chatMessage.createMany({
-      data: messages.map(msg => ({
-        sessionId,
-        role: msg.role,
-        content: msg.content,
-        model: msg.model || null,
-        provider: msg.provider || null,
-        metadata: msg.metadata ? JSON.stringify(msg.metadata) : null,
-      })),
-    })
+    const result = await withSqliteRetry(
+      () => db.chatMessage.createMany({
+        data: messages.map(msg => ({
+          sessionId,
+          role: msg.role,
+          content: msg.content,
+          model: msg.model || null,
+          provider: msg.provider || null,
+          metadata: msg.metadata ? JSON.stringify(msg.metadata) : null,
+        })),
+      }),
+      { retries: 3, baseDelayMs: 400, label: 'saveChatMessages' },
+    )
 
     return result.count
   } catch (err) {

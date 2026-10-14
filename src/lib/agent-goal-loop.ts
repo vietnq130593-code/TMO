@@ -245,7 +245,7 @@ const MAX_CYCLE_RENEWALS = Math.max(0, intEnv('GOAL_LOOP_MAX_CYCLE_RENEWALS', 10
  * (stall-brake + time budget + cancel vẫn cắt như thường); 0 = không chạy
  * debt cycle nào (chỉ ghi nợ Todo).
  */
-const MAX_DEBT_CYCLES = Math.max(0, intEnv('GOAL_LOOP_MAX_DEBT_CYCLES', 100))
+const MAX_DEBT_CYCLES = Math.max(0, intEnv('GOAL_LOOP_MAX_DEBT_CYCLES', 10)) // R11 (F10 — Giáo thức Thầy #4): hạ 100 → 10 — nợ infra không được phép biến chat của user thành vòng lặp 100 đợt (bằng chứng 14/10: DEBT CYCLE đợt 1/100 cho tác vụ "trả lời OK")
 /** Số vòng ReAct tối đa MỖI chu kỳ (mặc định 10 → tổng tối đa 40 vòng; 0 = ∞ — CI-1) */
 const ITER_PER_CYCLE = intEnv('GOAL_LOOP_ITERATIONS_PER_CYCLE', 10)
 /**
@@ -601,6 +601,10 @@ export interface GoalLoopResult {
    * persist vào ChatMessage.metadata.taskSummary (merge, không đè field cũ).
    */
   taskSummary?: string
+  /** R11 (F5 — trung thực model): model THỰC TẾ phục vụ call chính cuối cùng
+   *  (≠ model cấu hình khi failover — vd chọn exo-free 410 → SBF phục vụ).
+   *  Chat route merge vào ChatMessage.metadata.servedModel + response JSON. */
+  servedModel?: string
   /** Goal-loop metadata — response JSON + todo auto-close quyết định theo complete */
   goalLoop?: {
     cycles: number
@@ -3036,6 +3040,12 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
   let totalIterations = resumeState?.counters.totalIterations ?? 0
   let totalToolCalls = resumeState?.counters.totalToolCalls ?? 0
   let tokensUsed = resumeState?.counters.tokensUsed ?? 0
+  /** R11 (F5 — trung thực model): model THỰC TẾ phục vụ call chính cuối cùng
+   *  (sau softmax/failover — vd user chọn exo-free nhưng SBF phục vụ). Trả về
+   *  caller qua GoalLoopResult.servedModel → ChatMessage.metadata + response
+   *  JSON hiển thị đúng cho user (bằng chứng 14/10: user chọn model nào cũng
+   *  chỉ thấy model cấu hình, còn model phục vụ thật chỉ agent tự biết). */
+  let lastServedModel: string | undefined
   /** P3-M3 — 3-judge runtime gate đã chạy trong run-segment này chưa (chi phí
    *  guard: tối đa 1 lần/run — spec §P3-M3). Không persist qua resume: mỗi
    *  segment được cấp phát lại 1 lần (kích hoạt hiếm — chỉ khi RUNTIME_JUDGES
@@ -3875,6 +3885,8 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       // modelsUsedThisRun; result.model là model callLLMForAgent THỰC dùng
       // sau softmax/failover, không phải model cấu hình ban đầu)
       if (result?.model) modelsUsedThisRun.set(result.model, (modelsUsedThisRun.get(result.model) ?? 0) + 1)
+      // R11 (F5): bám model phục vụ THẬT của call chính (credit hiển thị user)
+      if (result?.model) lastServedModel = result.model
       // FIX 2026-10-20 TASK 20 (E2E t20d lộ bug): PARTIAL-ON-TIMEOUT của CLI
       // spawn (content='' + error='timeout...' + executed_tool_calls≠rỗng)
       // bị coi là LLM fatal error → run abort ở chu kỳ 1 + VỨT toàn bộ bằng
@@ -6265,6 +6277,9 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
     iterations: totalIterations,
     toolCallsExecuted: totalToolCalls,
     runId,
+    /** R11 (F5 — trung thực model): model THỰC TẾ phục vụ call chính cuối cùng
+     *  (≠ model cấu hình khi failover — vd chọn exo-free 410 → SBF phục vụ). */
+    servedModel: lastServedModel || undefined,
     /** CI-3 B4 (Task 13-c) — chat route merge vào ChatMessage.metadata.taskSummary */
     taskSummary: taskSummary || undefined,
     goalLoop: {

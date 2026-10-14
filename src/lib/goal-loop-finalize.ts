@@ -424,6 +424,10 @@ export async function finalizeGoalLoopRun(args: { job: GoalLoopJob; result: Goal
             agentRun: agentRunSummary,
             goalLoop: result.goalLoop,
             taskSummary: result.taskSummary,
+            /** R11 (F5 — trung thực model): model THỰC TẾ phục vụ call chính
+             *  cuối cùng (≠ agentModel cấu hình khi failover — vd chọn
+             *  exo-free 410 → space-bunny-free phục vụ). */
+            servedModel: result.servedModel,
           },
         },
       ])

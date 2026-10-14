@@ -21,7 +21,10 @@ import { isOpenCodeOnline, createOpenCodeSession, opencodeFetch } from '@/lib/op
 import { enrichCodeContext, isCodeQuery as isCodeQueryAdvanced, detectCodeConfidence } from '@/lib/opencode-knowledge-context'
 import { generateOpenCodeSystemPrompt } from '@/lib/opencode-system-prompt'
 import { db } from '@/lib/db'
-import { addTokensUsed, addTokensUsedByAgent } from '@/lib/llm'
+import { addTokensUsed, addTokensUsedByAgent, callLLMForAgent } from '@/lib/llm'
+// R11 (F4 — Giáo thức Thầy truyền lại, Bước 1 TRIAGE): phân loại yêu cầu tại cửa API
+import { classifyChatRequest } from '@/lib/execution/triage'
+import { observeEvent } from '@/lib/observation/ledger'
 import { autoLearnFromAnswer, shouldAutoLearn } from '@/lib/auto-learn'
 import { recallMemories, extractMemoriesFromConversation, saveChatMessages, getUserProfile, ensureAgentMemoryCollection, decayMemories } from '@/lib/agent-memory'
 // WORKING MEMORY (HOT) — user request 2026-08-28: ghi user/assistant exchange +
@@ -1046,6 +1049,126 @@ export async function POST(request: NextRequest) {
           )
         }
         const goalLoopUserMessage = directiveGuard.directive
+
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        // R11 (F4 — GIÁO THỨC THẦY TRUYỀN LẠI, Bước 1 TRIAGE + FAST-PATH):
+        // Bằng chứng cần fix (lượt quan sát 5): "1+1=?" mất 36s; "bạn là model
+        // gì" 500.891 tokens / 4.5 phút / 9 tool calls; câu hỏi Brain 646K+
+        // 751K tokens × 3 run chết vì crash bộ nhớ — MỌI tin nhắn đều đi nguyên
+        // vào goal loop đa chu kỳ (trọng tài + nợ + subagent + khai thác bài học).
+        // Giờ: câu hỏi/hội thoại đơn giản (Loại A) → 1 lượt gọi LLM trả lời trực
+        // tiếp, KHÔNG goal loop/todo/trọng tài/subagent. Việc thật (Loại C) →
+        // bộ máy đầy đủ như cũ. Fail-safe 1 chiều: triage lỗi/không chắc →
+        // 'task'. Model TỰ THOÁT bằng marker NEEDS_FULL_PIPELINE khi nhận ra
+        // việc cần khảo sát thật (self-escalation — không kẹt fast-path sai).
+        // Env: ENABLE_CHAT_TRIAGE=0 → tắt toàn bộ (rollback 1 biến).
+        // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+        try {
+          const triage = await classifyChatRequest({
+            userMessage: lastUserContent || '',
+            hasAttachments: attachmentIdList.length > 0,
+            agentName: agentProfileName || undefined,
+          })
+          if (triage.kind === 'simple_question') {
+            console.log(`[OpenClaw Chat] 🎯 TRIAGE fast-path (${triage.via}: ${triage.reason}) — 1-call trả lời trực tiếp, bỏ goal loop`)
+            const recentTurns = messages
+              .filter((m: { role: string; content?: string }) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+              .slice(-6)
+              .map((m: { role: string; content: string }) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.slice(0, 500)}`)
+              .join('\n')
+            const fastSystemPrompt = `${systemPrompt}\n\n═══ 🎯 FAST-PATH — GIÁO THỨC THẦY (trả lời trực tiếp) ═══\nYêu cầu dưới đây là câu hỏi/hội thoại đơn giản. Trả lời TRỰC TIẾP trong 1 lượt: đầy đủ, chính xác, đúng trọng tâm, bằng TIẾNG VIỆT, văn xuôi sạch (markdown tối thiểu — nhấn mạnh bằng CHỮ IN HOA, không bọc ** hay \`).\nNgữ cảnh phiên: model cấu hình = ${agentModel} (${agentProvider}). Nếu được hỏi "bạn là model gì / đang chạy model nào" — trả lời đúng theo metadata này, và lưu ý hệ thống có thể tự failover sang model dự phòng (space-bunny-free) khi model chính không khả dụng (metadata kèm response ghi rõ model thực tế đã phục vụ).\nKHÔNG gọi tool. KHÔNG lập kế hoạch. KHÔNG viết todo.\nNếu nhận ra câu hỏi thật sự CẦN khảo sát hệ thống/file/DB mới trả lời được — viết dòng đầu tiên đúng là NEEDS_FULL_PIPELINE rồi nêu ngắn cần khảo sát gì; hệ thống sẽ chuyển sang bộ máy đầy đủ.`
+            const fastResult = await callLLMForAgent(
+              `${recentTurns ? `Ngữ cảnh hội thoại gần đây:\n${recentTurns}\n\n` : ''}Câu hỏi hiện tại của user: ${lastUserContent}`,
+              { provider: agentProvider, model: agentModel },
+              fastSystemPrompt,
+              {
+                agentId: agentProfileId || undefined,
+                agentName: agentProfileName || 'Agent',
+                sessionId: sessionId || undefined,
+                temperature: agentTemperature,
+                maxTokens: agentMaxTokens,
+              },
+            )
+            const fastContent = (fastResult?.content || '').trim()
+            const needsFull = fastContent.startsWith('NEEDS_FULL_PIPELINE')
+            if (fastResult && fastContent && !needsFull && !fastResult.error) {
+              // (a) Track session — mirror đường durable (TOMBSTONE GUARD)
+              if (sessionId && !(await isSessionDeletedDeep(sessionId))) {
+                try {
+                  await db.agentSession.upsert({
+                    where: { sessionId },
+                    create: {
+                      sessionId,
+                      model: agentModel,
+                      provider: agentProvider,
+                      title: messages[0]?.content?.slice(0, 50) || 'New Chat',
+                      messageCount: messages.length + 1,
+                      agentProfileId: agentProfileId || null,
+                      teamMode: teamMode || null,
+                      teamName: teamName || null,
+                    },
+                    update: { messageCount: { increment: 1 } },
+                  })
+                } catch {}
+              }
+              // (c) Persist assistant message — ƯU TIÊN SỚM + RETRY KÉO DÀI
+              // (R11: E2E lộ "Socket timeout" transient SQLite — contention
+              // đúng lúc response khi các background writer (memory extraction,
+              // ledger, token tracker) dồn cục; process ngoài ghi cùng lúc chỉ
+              // 2ms. Thử lại +2s/+8s/+20s bảo đảm eventual persistence.)
+              const persistAssistant = async (attempt: number): Promise<void> => {
+                const saved = await saveChatMessages(sessionId, [
+                  { role: 'assistant', content: fastContent, model: agentModel, provider: agentProvider, metadata: { fastPath: true, triageVia: triage.via, triageReason: triage.reason, servedModel: fastResult.model, configuredModel: agentModel } },
+                ]).catch(() => 0)
+                if (saved > 0) return
+                if (attempt < 3) {
+                  setTimeout(() => { void persistAssistant(attempt + 1) }, [2000, 8000, 20000][attempt])
+                } else {
+                  console.error('[OpenClaw Chat] Fast-path persist assistant THẤT BẠI sau 4 lần thử (content đã trả user qua response — mất metadata persist)')
+                }
+              }
+              if (agentProfileId && sessionId) void persistAssistant(0)
+              // (b) Working memory HOT (mirror đường inline — sau persist chính)
+              if (agentProfileId && sessionId) {
+                addToWorkingMemory({ agentId: agentProfileId, sessionId, content: fastContent.slice(0, 2500), role: 'assistant' }).catch(() => {})
+              }
+              // (d) Observation ledger — giao thức quan sát phải THẤY fast-path
+              try {
+                observeEvent({
+                  actor: agentProfileName || 'Agent',
+                  kind: 'chat.fastpath',
+                  summary: `Fast-path trả lời trực tiếp (${triage.via}: ${triage.reason}) — servedModel=${fastResult.model || agentModel}, ${fastResult.tokensUsed ?? 0} tokens, 0 tool, 0 chu kỳ goal-loop`,
+                  payload: { via: triage.via, reason: triage.reason, servedModel: fastResult.model, configuredModel: agentModel, tokensUsed: fastResult.tokensUsed ?? 0 },
+                  runId: null,
+                  sessionId: sessionId || null,
+                })
+              } catch { /* fail-open */ }
+              return NextResponse.json({
+                content: fastContent,
+                model: fastResult.model || agentModel,
+                servedModel: fastResult.model,
+                configuredModel: agentModel,
+                provider: fastResult.provider || agentProvider,
+                sessionId: sessionId || `session-${Date.now()}`,
+                agentProfileId: agentProfileId || undefined,
+                sources: [],
+                kbResults: 'fast-path',
+                reactIterations: 0,
+                toolCallsExecuted: 0,
+                fastPath: true,
+                triage: { via: triage.via, reason: triage.reason },
+                memoriesRecalled: recalledMemories.length || undefined,
+                intent,
+                kbConfidence: kbSearchResult?.confidence || undefined,
+              })
+            }
+            if (needsFull) {
+              console.log('[OpenClaw Chat] 🎯 TRIAGE: model tự báo NEEDS_FULL_PIPELINE → chuyển bộ máy goal loop đầy đủ')
+            }
+          }
+        } catch (triageErr) {
+          console.warn('[OpenClaw Chat] TRIAGE lỗi (fail-open → goal loop như cũ):', triageErr instanceof Error ? triageErr.message : String(triageErr))
+        }
 
         // GOAL-DRIVEN LOOP (2026-09-01): thay ReAct loop 8 vòng — chạy nhiều chu kỳ
         // PLAN → EXECUTE → VERIFY → EVALUATE (trọng tài độc lập) → DIAGNOSE+REPLAN

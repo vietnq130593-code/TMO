@@ -31,12 +31,14 @@
  * (globalThis guard chống HMR double-run).
  */
 
+import { sanitizeEnvPath } from '@/lib/workspace/sanitize-env-path'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
 import path from 'path'
 import fs from 'fs/promises'
 import { existsSync } from 'fs'
 import { db } from '@/lib/db'
+import { isRootPathSaneForPlatform } from '@/lib/workspace/workspace-manager'
 
 const execFileAsync = promisify(execFile)
 
@@ -49,7 +51,12 @@ function stripEmbeddedToken(url: string): string {
 }
 
 export async function ensureDefaultWorkspace(): Promise<void> {
-  const rootPath = (process.env.TMO_DEFAULT_WORKSPACE || '').trim()
+  // FIX 2026-10-14 (spawn ENOENT): chuẩn hóa + kiểm định giá trị từ biến môi
+  // trường TRƯỚC khi dùng. Nếu cấu hình là Windows path (E:\APP\...), trên Linux
+  // path.resolve() sẽ tạo thư mục LITERAL và spawn(/bin/bash, { cwd }) ném ENOENT.
+  const sanitizedDefault = sanitizeEnvPath(process.env.TMO_DEFAULT_WORKSPACE, 'TMO_DEFAULT_WORKSPACE')
+  for (const w of sanitizedDefault.warnings) console.log('[WORKSPACE] ' + w)
+  const rootPath = sanitizedDefault.path || ''
   if (!rootPath) {
     console.log('[WORKSPACE] TMO_DEFAULT_WORKSPACE chưa cấu hình — bỏ qua bootstrap')
     return
@@ -68,7 +75,12 @@ export async function ensureDefaultWorkspace(): Promise<void> {
     //       deactivate/hủy sẽ tự bootstrap lại)
     //   (c) không active / thư mục biến mất → bootstrap env workspace
     const active = await db.workspace.findFirst({ where: { isActive: true } })
-    if (active && existsSync(active.rootPath)) {
+    // R11 (F1 — bổ sung cho sanitizeEnvPath của agent bên trên): sanity cho cả
+    // row ACTIVE trong DB — đường dẫn từ máy khác (Windows-path-on-POSIX) coi
+    // như vô hiệu (existsSync trước đây trả TRUE oan qua thư mục literal rác
+    // "E:\APP\TMO-clone" trong app dir → active giữ mãi root vô nghĩa).
+    const activeOk = !!(active && existsSync(active.rootPath) && isRootPathSaneForPlatform(active.rootPath))
+    if (active && activeOk) {
       const activeResolved = path.resolve(active.rootPath)
       const envResolved = path.resolve(rootPath)
       if (activeResolved === envResolved) {
@@ -80,8 +92,8 @@ export async function ensureDefaultWorkspace(): Promise<void> {
       )
       return
     }
-    if (active && !existsSync(active.rootPath)) {
-      console.log(`[WORKSPACE] Workspace active cũ biến mất trên đĩa (${active.rootPath}) — deactivating, bootstrap lại từ env`)
+    if (active && !activeOk) {
+      console.log(`[WORKSPACE] R11: workspace active cũ vô hiệu trên ${process.platform} hoặc biến mất trên đĩa (${active.rootPath}) — deactivating, bootstrap lại từ env`)
       await db.workspace.update({ where: { id: active.id }, data: { isActive: false } }).catch(() => {})
     }
 

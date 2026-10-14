@@ -26,6 +26,11 @@ import type { Dirent } from 'node:fs'
 // Phase 1a.2 — DB-backed Todo store (replaces globalThis.__devTasks)
 // Both Code Team agents AND independent agents share this table; sessionId scopes each list.
 import { db } from '@/lib/db'
+// R11 (fix-tức-thời): agent Omega đã thêm call resolveCwd() (devRun:3436,
+// devShell:3687) nhưng thiếu import — shell tool chết "resolveCwd is not
+// defined" ×5, chặn run đang trả lời user. Bổ sung import (bản edit của agent
+// giữ nguyên — 2 nguồn sửa không đè nhau).
+import { resolveCwd } from '@/lib/workspace/resolve-cwd'
 import { isFlagEnabled } from '@/lib/feature-flags'
 import { quoteSqlIdentifier, redactSqlForLog } from '@/lib/sql-policy'
 import { getActiveRunId } from '@/lib/agent-run-tracker'
@@ -189,6 +194,18 @@ export async function fileRead(args: {
   }
 }
 
+/** Scratch roots phụ — R11 (F2, theo dossier ESCALATION-path-escape lớp 1):
+ *  file tạm/script kiểm thử của agents đặt dưới /tmp/opencode (quy ước
+ *  convention đã tồn tại — agents hay thử ghi đó rồi bị DENIED). env
+ *  TMO_SCRATCH_ROOTS (comma-separated) để mở rộng. Auto mkdir khi dùng lần
+ *  đầu (fail-open). */
+function scratchRoots(): string[] {
+  return (process.env.TMO_SCRATCH_ROOTS || '/tmp/opencode')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean)
+}
+
 /** Resolve a path within the workspace root, rejecting traversal escapes. */
 async function resolveWithinWorkspace(filePath: string): Promise<string> {
   const root = await resolveWorkspaceRoot()
@@ -203,10 +220,23 @@ async function resolveWithinWorkspace(filePath: string): Promise<string> {
   const absRoot = path.resolve(root)
   const resolved = path.resolve(absRoot, filePath)
   // Allow the root itself OR anything nested under it
-  if (resolved !== absRoot && !resolved.startsWith(absRoot + path.sep)) {
-    throw new Error(`Access denied: path escapes workspace root (${filePath})`)
+  if (resolved === absRoot || resolved.startsWith(absRoot + path.sep)) {
+    return resolved
   }
-  return resolved
+  // R11 (F2): scratch roots phụ — cho phép /tmp/opencode/** (file tạm/script
+  // kiểm thử; dossier lớp 1). Auto-mkdir root khi dùng lần đầu (fail-open).
+  for (const sr of scratchRoots()) {
+    const absSr = path.resolve(sr)
+    if (resolved === absSr || resolved.startsWith(absSr + path.sep)) {
+      try { await fs.mkdir(absSr, { recursive: true }) } catch { /* fail-open — ghi sẽ tự báo lỗi nếu thật sự hỏng */ }
+      return resolved
+    }
+  }
+  // R11 (F2): thông báo lỗi LIỆT KÊ root hợp lệ — agent hết đoán mò đường
+  // nào được phép (dossier: agent bị DENIED rồi spawn subagent chẩn đoán).
+  throw new Error(
+    `Access denied: path escapes workspace root (${filePath}) — root hợp lệ: workspace ${absRoot} (dùng đường dẫn RELATIVE) · scratch: ${scratchRoots().join(', ')} (R11)`,
+  )
 }
 
 /**
@@ -479,16 +509,28 @@ export async function fileWrite(args: {
     let fileSize = 0
     try { fileSize = (await fs.stat(resolvedPath)).size } catch { /* just-wrote — ignore */ }
 
+    // R11 (F3 — Giáo thức Thầy Bước 4 "KHÔNG TIN RECEIPT CHƯA VERIFY"): kiểm
+    // chứng ĐỘC LẬP rằng file thật sự tồn tại ở absPath đã resolve — bằng chứng
+    // dossier ESCALATION mục (e): receipt success:true nhưng file KHÔNG có trên
+    // disk (ghi vào root khác) → agent tin receipt → lặp tool call. Giờ receipt
+    // nói kèm absPath + verified — agent đối chiếu được ngay trong cùng kết quả.
+    let verified = false
+    try { await fs.access(resolvedPath); verified = true } catch { verified = false }
+
     return {
       success: true,
       path: args.path,
+      absPath: resolvedPath,
+      verified,
       mode,
       bytesWritten: Buffer.byteLength(content, 'utf-8'),
       fileExistedBefore: existed,
       fileSize,
-      hint: mode === 'append' && fileSize > 0
-        ? 'Đã nối tiếp. Tiếp tục append phần kế tiếp, hoặc file_read để kiểm tra.'
-        : undefined,
+      hint: !verified
+        ? '⚠ File vừa ghi KHÔNG kiểm chứng được trên đĩa (verified:false) — KHÔNG tin receipt này, báo lỗi hệ thống thay vì lặp lại ghi.'
+        : mode === 'append' && fileSize > 0
+          ? 'Đã nối tiếp (verified trên đĩa). Tiếp tục append phần kế, hoặc file_read để kiểm tra.'
+          : undefined,
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -3396,7 +3438,10 @@ export async function runBg(args: { command: string; cwd?: string }): Promise<un
   if (!args.command) return { error: 'command is required' }
   const { processManager } = await import('@/lib/execution/process-manager')
   const root = await resolveWorkspaceRoot()
-  const cwd = args.cwd ? await resolveWithinWorkspace(args.cwd) : root
+  const cwdRes0 = resolveCwd({ requested: args.cwd, base: root, label: 'dev-tools.run' })
+  const cwd = cwdRes0.ok
+    ? await resolveWithinWorkspace(cwdRes0.cwd)
+    : root
   const info = await processManager.startProcess({
     command: args.command,
     name: args.command.slice(0, 40),
@@ -3637,7 +3682,30 @@ export async function shell(args: {
   // cwd: mặc định workspace root (tiện cho relative paths); absolute path ở đâu
   // cũng được (user request 2026-08-29 — không khóa cwd trong root).
   const root = await resolveWorkspaceRoot()
-  const cwd = args.cwd ? path.resolve(args.cwd) : root
+  // FIX 2026-10-14 (spawn /bin/bash ENOENT lặp): path.resolve(args.cwd) trần
+  // CHẤP NHẬN mọi chuỗi — kể cả "E:\APP\TMO-clone" (path Windows lọt vào
+  // POSIX) vì trên Linux đó chỉ là tên thư mục literal hợp lệ, nên resolve
+  // không lỗi + existsSync trả TRUE ⇒ spawn vào cwd sai. Nay đi qua
+  // resolveCwd: chuẩn hóa + kiểm định chặn (NUL/traversal/drive-letter/
+  // separator lạ/tồn tại/isDirectory/allowlist), sai thì fallback về root
+  // an toàn + log [CWD-GUARD] có cấu trúc, KHÔNG spawn với cwd lỗi.
+  const cwdRes = resolveCwd({ requested: args.cwd, base: root, label: 'dev-tools.shell' })
+  const cwd = cwdRes.cwd
+  if (!cwdRes.ok) {
+    return {
+      success: false,
+      exit_code: -1,
+      stdout: '',
+      stderr:
+        `TỪ CHỐI cwd "${String(args.cwd)}" — ${cwdRes.message} ` +
+        `[reason=${cwdRes.reason}] Đã fallback về "${cwd}".`,
+      duration_ms: 0,
+      truncated: false,
+      cwd,
+      cwdRejected: true,
+      cwdReason: cwdRes.reason,
+    }
+  }
 
   // INFRA GUARD (Task 24, 2026-10-21; cập nhật chính sách 2026-10-27 phiên 4):
   // chặn lệnh chạm hạ tầng VẪN ĐƯỢC BẢO VỆ khi chạy trong TMO workspace; task ở

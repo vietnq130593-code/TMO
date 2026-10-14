@@ -4936,6 +4936,14 @@ async function callZenProvider(
         // CÓ THỂ còn credit riêng → thử session trước khi bỏ cuộc.
         const sessionResult = await tryZenHttpWithSession(body, model, options, `${taskLabel} [session]`, timeoutMs, zenInputChars)
         if (sessionResult) return sessionResult
+      } else if (response.status === 410 || errBody.includes('ModelDeprecated') || /has been deprecated/i.test(errBody)) {
+        // R11 (F6 — Giáo thức Thầy #1 "token là tiền"): model bị Zen KHAI TỬ
+        // (410 ModelDeprecated) là chết VĨNH VIỄN — chặn permanent CẢ 2 transport.
+        // Bằng chứng 14/10: exo-free 410 được retry lại ở MỌI call của run Brain
+        // (mỗi lần: 1s HTTP + 1 spawn CLI ~600MB + 5-10s) chỉ để rồi failover SBF.
+        const PERMANENT_MS = 365 * 24 * 3600 * 1000
+        markZenFreeTierBlocked('http', model, 'HTTP 410 ModelDeprecated — model đã bị Zen khai tử vĩnh viễn (R11 F6: chặn permanent, không retry)', PERMANENT_MS)
+        markZenFreeTierBlocked('cli', model, 'HTTP 410 ModelDeprecated — model đã bị Zen khai tử vĩnh viễn (R11 F6: chặn permanent, không retry)', PERMANENT_MS)
       }
       console.warn(`[ZEN] ${taskLabel} HTTP ${response.status}: ${errBody.slice(0, 200)}`)
       return { content: '', provider: 'zen', model, error: `Zen HTTP ${response.status}: ${errBody.slice(0, 150)}` }
@@ -5458,6 +5466,39 @@ You are running inside TMO (The Magnum Opus). For ALL file operations and shell 
 `
 
 /**
+ * ━━━ R11 (F7 — Giáo thức Thầy #2 "bộ nhớ là của chung"): OC-CLI SPAWN SEMAPHORE ━━━
+ * Mỗi `opencode run` là 1 process ~600MB. Bằng chứng crash loop 14/10
+ * (11:30 + 11:35, PM2 restart #7/#8): 2 spawn đồng thời + next-server 917MB
+ * → MemAvailable toàn cục 364MB < 450MB → MemWatchdog self-exit → run đang
+ * sống bị giết. Giải pháp: giới hạn spawn ĐỒNG THỜI (mặc định 1 = serialize;
+ * env OC_CLI_MAX_CONCURRENT để nâng trên máy nhiều RAM). globalThis-guard
+ * chống Next dev nạp llm.ts đa instance.
+ */
+const OC_CLI_MAX_CONCURRENT = Math.max(1, parseInt(process.env.OC_CLI_MAX_CONCURRENT || '1', 10) || 1)
+interface OcCliGateState { active: number; queue: Array<() => void> }
+const gForOcCli = globalThis as unknown as { __tmoOcCliGate?: OcCliGateState }
+function ocCliGate(): OcCliGateState {
+  if (!gForOcCli.__tmoOcCliGate) gForOcCli.__tmoOcCliGate = { active: 0, queue: [] }
+  return gForOcCli.__tmoOcCliGate
+}
+async function acquireOcCliSlot(taskLabel: string): Promise<() => void> {
+  const s = ocCliGate()
+  if (s.active < OC_CLI_MAX_CONCURRENT) {
+    s.active++
+    return () => { s.active--; const next = s.queue.shift(); if (next) next() }
+  }
+  if (s.queue.length === 0) {
+    console.warn(`[OC-CLI] 🚦 ${taskLabel}: chờ slot spawn — đang có ${s.active}/${OC_CLI_MAX_CONCURRENT} process opencode chạy (R11 F7 chống crash bộ nhớ)`) 
+  }
+  return new Promise((resolve) => {
+    s.queue.push(() => {
+      s.active++
+      resolve(() => { s.active--; const next = s.queue.shift(); if (next) next() })
+    })
+  })
+}
+
+/**
  * Call OpenCode Zen model via CLI subprocess (prompt truyền qua STDIN — Task 34).
  * Spawns `opencode run --model <prefix>/<model> --format json` + stdin prompt.
  * Returns LLMResult with content + tokens. On failure → null (caller falls back
@@ -5535,7 +5576,11 @@ async function callOpenCodeCLIProvider(
   const cliModel = `${cliProviderPrefix}/${model}`
 
   console.log(`[OC-CLI] ${taskLabel} — spawn opencode run --model ${cliModel} (bin: ${cliBin})`)
-  return new Promise<LLMResult | null>((resolve) => {
+  // R11 (F7): acquire slot TRƯỚC khi spawn — release khi promise kết thúc
+  // (mọi đường đều về 1 resolve: close/timeout/error — không leak slot).
+  const releaseSlot = await acquireOcCliSlot(taskLabel)
+  try {
+  return await new Promise<LLMResult | null>((resolve) => {
     // TASK 34 — PROMPT QUA STDIN (verified opencode v1.18.32 đọc stdin khi
     // không có message arg — test exit 0 trả lời đúng): (a) Windows giới hạn
     // command line ~32K chars — prompt TMO thường 30-100KB → truyền argv fail;
@@ -5874,6 +5919,9 @@ async function callOpenCodeCLIProvider(
       })
     })
   })
+  } finally {
+    releaseSlot() // R11 (F7) — trả slot cho call kế tiếp trong queue
+  }
 }
 
 /** Health/status info for Zen provider (used by /api/health + Database module UI). */

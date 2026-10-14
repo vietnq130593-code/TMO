@@ -261,7 +261,18 @@ export async function recordEpisodeFromRun(input: RecordEpisodeInput): Promise<R
     })
 
     // ── Bước 5: Lỗi đã resolve → sinh/merge Lesson (TAUGHT giờ match node) ──
+    // R11 (F9 — Giáo thức Thầy #5 "bài học chỉ đúc từ kinh nghiệm thật"): goal
+    // trivia/test KHÔNG đúc bài học — bài học rác ("Khi dùng tool X trong task
+    // kiểu 'Trả lời đúng một chữ: OK' conf 0.85") bị PRE-ACT ép vào prompt của
+    // MỌI agent sau (bằng chứng 14/10 11:28:46: ~35 bài học shallow từ lịch sử
+    // gồm cả phiên test; V-1 tái phát ở tầng episode). Episode vẫn ghi (nhật ký
+    // trung thực) — chỉ chặn phần ĐÚC BÀI HỌC.
+    const goalTextForHygiene = (input.goal || '').trim()
+    const isTrivialGoal =
+      goalTextForHygiene.length < 40 ||
+      /^(ok|okay|test\b|trả lời|chỉ trả lời|reply|yes\b|no\b|hello|hi\b)/i.test(goalTextForHygiene)
     const yieldedLessonIds: string[] = []
+    if (!isTrivialGoal) {
     for (const err of errors.slice(0, 5)) {
       if (!err.resolved || !err.fixSummary) continue
       const consolidated = await consolidateLesson({
@@ -277,6 +288,9 @@ export async function recordEpisodeFromRun(input: RecordEpisodeInput): Promise<R
         if (consolidated.status === 'created') result.lessonsCreated++
         if (consolidated.status === 'merged') result.lessonsMerged++
       }
+    }
+    } else {
+      console.log(`[Episodic] R11 F9: goal trivia (${JSON.stringify(goalTextForHygiene.slice(0, 40))}) — ghi episode nhưng KHÔNG đúc bài học (chống ô nhiễm kho lesson)`)
     }
 
     // (Episode)-[:YIELDED]->(Lesson) — sau khi lesson đã tồn tại

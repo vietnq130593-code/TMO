@@ -17,6 +17,7 @@
  * và KHÔNG còn khóa cwd trong workspace root — user tự chịu trách nhiệm.
  */
 
+import { sanitizeEnvPath } from '@/lib/workspace/sanitize-env-path'
 import { readdirSync, statSync } from 'fs'
 import { join } from 'path'
 import { getActiveWorkspaceRoot } from '@/lib/workspace/workspace-manager'
@@ -120,7 +121,9 @@ export async function buildWorkspaceContext(): Promise<WorkspaceContext> {
   // báo rõ workspace đang thao tác là thư mục clone AN TOÀN để chỉnh sửa;
   // hệ thống đang vận hành chỉ cập nhật qua push GitHub → pull (riêng).
   // Không hardcode path — đọc từ env (user local: E:\APP\TMO-clone...).
-  const cloneDir = (process.env.TMO_CLONE_DIR || '').trim()
+  // FIX 2026-10-14 (spawn ENOENT): chỉ nêu clone dir khi là path POSIX hợp lệ,
+  // tồn tại và là directory — chặn Windows path lọt vào prompt agent.
+  const cloneDir = sanitizeEnvPath(process.env.TMO_CLONE_DIR, 'TMO_CLONE_DIR').path || ''
   const cloneNote = cloneDir
     ? `\n🔐 CLONE-FIRST WORKFLOW: workspace này là THƯ MỤC CLONE của TMO chính thức — AN TOÀN để đọc/sửa/commit (${cloneDir}). Quy trình nâng cấp hệ thống: (1) sửa code + chạy kiểm định (lint/type_check/run_tests) TRÊN CLONE → (2) TOÀN BỘ PASS + không còn vấn đề mới git_push lên GitHub → (3) hệ thống TMO đang vận hành cập nhật bằng git_pull riêng. TUYỆT ĐỐI không sửa trực tiếp hệ thống đang chạy; không kết luận "nâng cấp thành công" khi pipeline kiểm định chưa PASS.`
     : ''
