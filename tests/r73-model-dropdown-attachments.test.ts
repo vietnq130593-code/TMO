@@ -231,8 +231,15 @@ describe('r73-3 — last-resort failover chéo model trong free tier (BUG2-018 k
 // ==================== (4) PHÂN LOẠI MODEL FREE — battery 2 tầng ====================
 
 describe('r73-4 — phân loại model free theo coding/agentic/reasoning (battery thật)', () => {
-  test('8 model sống = đúng matrix r73 (14 ứng viên test, 6 chết bị loại)', () => {
-    expect(PROVIDER_MODELS.zen).toHaveLength(8)
+  test('8 model battery r73 + 4 model R5 đồng bộ = 12 model free (đúng models.dev 2026-10-14)', () => {
+    // PIN UPDATE R5 (2026-10-14 — user request "xác định lại list các model miễn
+    // phí hiện tại của opencode... 1 số model free đang không có tên"): đối
+    // chiếu `opencode models --verbose --refresh` + models.dev cho 12 model
+    // free (cost 0/0, status != deprecated) — catalog cũ 8/12. 3 model từng
+    // bị loại ở matrix r73 (2026-10-09) được đưa TRỞ LẠI vì metadata đã đổi
+    // (nói thật — live blockedTransports từ /api/agents/models hiển thị thực
+    // tế từng model); cat-jam-free là model MỚI phát hành 2026-10-12 (sau r73).
+    expect(PROVIDER_MODELS.zen).toHaveLength(12)
     const ids = PROVIDER_MODELS.zen.map(m => m.id)
     expect(ids).toEqual([
       'space-bunny-free',
@@ -243,16 +250,20 @@ describe('r73-4 — phân loại model free theo coding/agentic/reasoning (batte
       'nemotron-3-ultra-free',
       'nemotron-3.5-lightning-free',
       'step-5-preview-free',
+      'cat-jam-free',
+      'exo-free',
+      'ling-3.0-flash-fin-free',
+      'muse-spark-1.3-contributor-free',
     ])
   })
 
-  test('battery 2 tầng: TẤT CẢ 8 model PASS coding-hard (romanToInt 6/6 case chạy bun thật)', () => {
+  test('battery 2 tầng: 8 model r73 PASS coding-hard + 4 model R5 caps từ metadata (romanToInt 6/6 case chạy bun thật)', () => {
     for (const m of PROVIDER_MODELS.zen) {
       expect(m.caps?.coding).toBe(true)
     }
   })
 
-  test('battery 2 tầng: reasoning PASS cả 8 (bài vòi hồ bơi = 140 phút — space-bunny đúng số nhưng nhiều chữ, năng lực vẫn đạt)', () => {
+  test('battery 2 tầng: reasoning PASS (bài vòi hồ bơi = 140 phút — space-bunny đúng số nhưng nhiều chữ, năng lực vẫn đạt)', () => {
     for (const m of PROVIDER_MODELS.zen) {
       expect(m.caps?.reasoning).toBe(true)
     }

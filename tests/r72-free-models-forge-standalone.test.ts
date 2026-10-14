@@ -116,15 +116,32 @@ describe('r72/r73 — danh sách model zen = đúng thực nghiệm matrix 2026-
     expect(ids).toContain('nemotron-3.5-lightning-free')
   })
 
-  test('model CHẾT (matrix r73) bị loại — không cho agent chọn rồi treo/lỗi', () => {
+  test('model CHẾT (matrix r73) — PIN UPDATE R5: 3 model free được đưa TRỞ LẠI vì metadata models.dev đã đổi; model TRẢ PHÍ/vô hiệu hóa vẫn bị loại', () => {
     const ids = PROVIDER_MODELS.zen.map(m => m.id)
+    // R5 (2026-10-14 — user request "1 số model free đang không có tên"): đối
+    // chiếu models.dev + CLI (`opencode models --verbose --refresh`) cho 12
+    // model free (cost 0/0, status != deprecated). 3 model dưới đây từng bị
+    // loại ở matrix r73 (2026-10-09) nhưng metadata hiện tại đã đổi (exo-free
+    // active trở lại / ling-3.0-flash-fin vẫn trong danh sách free / muse-
+    // spark vẫn trong danh sách free) → đưa trở lại catalog với label nói
+    // thật (ghi rõ lý do r73 + chưa probe lại) — trạng thái vận hành sống do
+    // blockedTransports (r74) hiển thị, KHÔNG XÓA catalog nữa (policy Zen
+    // lật nhiều lần — xoá sẽ lại phải thêm).
+    expect(ids).toContain('muse-spark-1.3-contributor-free') // R5 trở lại — r73 geo-block, models.dev 2026-10-14 vẫn liệt kê free
+    expect(ids).toContain('exo-free') // R5 trở lại — r73 deprecated, models.dev 2026-10-14 active trở lại
+    expect(ids).toContain('ling-3.0-flash-fin-free') // R5 trở lại — r73 không phản hồi, models.dev 2026-10-14 vẫn liệt kê free
+    // Model TRẢ PHÍ / vô hiệu hóa tài khoản — KHÔNG phải model free, vẫn bị
+    // loại đúng (không cho agent chọn rồi treo/lỗi)
     expect(ids).not.toContain('jev-1.13-free') // r72: UnknownError — đã rời catalog
-    expect(ids).not.toContain('muse-spark-1.3-contributor-free') // geo-block "not available in your country"
-    expect(ids).not.toContain('exo-free') // r73: deprecated
-    expect(ids).not.toContain('ling-3.0-flash-fin-free') // r73: không phản hồi
-    expect(ids).not.toContain('claude-fable-5') // r73: Model access disabled
-    expect(ids).not.toContain('claude-fable-5-1') // r73: Insufficient account funds
-    expect(ids).not.toContain('grok-build-0.1') // r73: không phản hồi
+    expect(ids).not.toContain('claude-fable-5') // r73: Model access disabled (model trả phí)
+    expect(ids).not.toContain('claude-fable-5-1') // r73: Insufficient account funds (model trả phí)
+    expect(ids).not.toContain('grok-build-0.1') // r73: không phản hồi (model trả phí)
+    // Label 3 model R5 phải NÓI THẬT lý do lịch sử r73 (không phát bành năng lực)
+    const byId = new Map(PROVIDER_MODELS.zen.map(m => [m.id, m.label || '']))
+    expect(byId.get('exo-free')).toContain('r73 loại vì deprecated')
+    expect(byId.get('ling-3.0-flash-fin-free')).toContain('r73 loại vì không phản hồi')
+    expect(byId.get('muse-spark-1.3-contributor-free')).toContain('r73 loại vì geo-block')
+    expect(byId.get('cat-jam-free')).toContain('MỚI phát hành 2026-10-12')
   })
 
   test('r73 — mỗi model free có caps phân loại (coding/reasoning/agentic từ battery thật)', () => {

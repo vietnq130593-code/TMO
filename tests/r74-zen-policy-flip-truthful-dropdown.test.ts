@@ -93,13 +93,17 @@ describe('r74 — zenModelBlockSummary: hợp đồng pure-read trên block-cach
 })
 
 describe('r74 — route /api/agents/models gắn blockedTransports (source-scan)', () => {
-  test('route import zenModelBlockSummary + augmentZenModels cho cả 2 nhánh', () => {
+  test('route import zenModelBlockSummary + augmentZenModels cho cả 2 nhánh (PIN UPDATE R5: nhánh zen đi qua catalog merge đồng bộ)', () => {
     const src = read('src/app/api/agents/models/route.ts')
     expect(src).toContain("import { zenModelBlockSummary } from '@/lib/llm'")
     expect(src).toContain('function augmentZenModels')
-    expect(src).toContain("provider === 'zen' ? augmentZenModels(PROVIDER_MODELS[provider])")
+    // R5 (2026-10-14): catalog zen = getZenFreeModelCatalog() (overlay đồng bộ
+    // tự động models.dev/CLI LÊN catalog tĩnh) — thay PROVIDER_MODELS[provider]
+    expect(src).toContain("provider === 'zen' ? augmentZenModels(getZenFreeModelCatalog())")
+    expect(src).toContain("import { getZenFreeModelCatalog, getSyncStatus } from '@/lib/free-models-sync'")
     expect(src).toContain('p.key === \'zen\'') // nhánh all-providers cũng gắn
     expect(src).toContain('blockedTransports')
+    expect(src).toContain('freeModelsSync: getSyncStatus()') // R5: trạng thái sync kèm response
   })
 })
 
@@ -146,8 +150,12 @@ describe('r74 — đính chính chẩn đoán r73 (chống diễn giải lỗi t
     expect(src).toContain('GIỮ NGUYÊN 8 model trong catalog')
   })
 
-  test('catalog vẫn đủ 8 model + caps battery r73 (năng lực model ≠ trạng thái vận hành)', () => {
-    expect(PROVIDER_MODELS.zen).toHaveLength(8)
+  test('catalog đủ 12 model (PIN UPDATE R5: 8 battery r73 + 4 đồng bộ models.dev 2026-10-14) + caps battery r73 (năng lực model ≠ trạng thái vận hành)', () => {
+    // R5: 8 → 12 — đối chiếu `opencode models --verbose --refresh` cho 12
+    // model free (cost 0/0, status != deprecated); 3 model r73 trở lại +
+    // cat-jam-free mới 2026-10-12. Catalog được giữ tươi tự động bởi
+    // src/lib/free-models-sync.ts (TTL 6h — overlay qua getZenFreeModelCatalog).
+    expect(PROVIDER_MODELS.zen).toHaveLength(12)
     const sbf = PROVIDER_MODELS.zen.find(m => m.id === 'space-bunny-free')
     expect(sbf?.caps).toEqual({ coding: true, reasoning: true, agentic: false })
   })

@@ -2044,7 +2044,27 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
     label?: string
     caps?: { coding?: boolean; reasoning?: boolean; agentic?: boolean }
     blockedTransports?: string[]
+    // R5 (2026-10-14 — đồng bộ tự động danh sách model free):
+    //   source: 'manual' (chỉ catalog tĩnh) | 'sync' (chỉ từ đồng bộ models.dev) | 'both'
+    //   justAdded: true → badge "⇄ mới" (vừa thêm ở lần sync gần nhất)
+    //   noLongerListed: true → "đã rời danh sách free" (nói thật — KHÔNG xoá)
+    source?: 'manual' | 'sync' | 'both'
+    justAdded?: boolean
+    noLongerListed?: boolean
+    syncedAt?: number
   }>>([])
+  // R5: trạng thái đồng bộ danh sách model free (lastSyncAt / nguồn / diff)
+  // — hiển thị trong dropdown model + nút "Đồng bộ ngay" (POST
+  // /api/agents/models/sync).
+  const [freeModelsSync, setFreeModelsSync] = useState<{
+    syncedAt: number | null
+    source: 'cli' | 'modelsdev' | null
+    total: number | null
+    lastDiff: { added: string[]; removed: string[] } | null
+    lastError: string | null
+    syncing: boolean
+  } | null>(null)
+  const [syncingModels, setSyncingModels] = useState(false)
   // 2026-11-30 (user directive): dropdown model agent = các model ZEN (như cũ)
   // + kimi-k3 (NVIDIA NIM — lựa chọn tạm thời "bấm chọn k3 sẽ chuyển qua dùng
   // k3"). Lõi embed (id chứa '/embed-') bị lọc ra — không phải LLM chat.
@@ -2056,7 +2076,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   const fetchZenModelOptions = useCallback(() => {
     fetch('/api/agents/models')
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((data: { providers?: Array<{ key?: string; models?: Array<{ id: string; label?: string; caps?: { coding?: boolean; reasoning?: boolean; agentic?: boolean }; blockedTransports?: string[] }> }>; advice?: { stateKey: string; top: Array<{ model: string; q: number; visits: number }> } }) => {
+      .then((data: { providers?: Array<{ key?: string; models?: Array<{ id: string; label?: string; caps?: { coding?: boolean; reasoning?: boolean; agentic?: boolean }; blockedTransports?: string[]; source?: 'manual' | 'sync' | 'both'; justAdded?: boolean; noLongerListed?: boolean; syncedAt?: number }> }>; advice?: { stateKey: string; top: Array<{ model: string; q: number; visits: number }> }; freeModelsSync?: { syncedAt: number | null; source: 'cli' | 'modelsdev' | null; total: number | null; lastDiff: { added: string[]; removed: string[] } | null; lastError: string | null; syncing: boolean } }) => {
         const providers = data?.providers || []
         const zen = providers.find(p => p.key === 'zen')?.models || []
         const nvidiaChat = (providers.find(p => p.key === 'nvidia')?.models || [])
@@ -2064,6 +2084,8 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         const merged = [...zen, ...nvidiaChat]
         if (merged.length > 0) setZenModelOptions(merged)
         setQAdvice(data?.advice ?? null)
+        // R5: trạng thái sync kèm theo response — hiển thị ở dropdown + nút sync
+        if (data?.freeModelsSync) setFreeModelsSync(data.freeModelsSync)
       })
       .catch(() => { /* im lặng — giữ danh sách cũ; dropdown hiện câu "chưa tải được" nếu trống */ })
   }, [])
@@ -6461,6 +6483,77 @@ ${manifest}` : rawText
                             </div>
                           )}
                         </div>
+                        {/* ===== R5 (2026-10-14) — ĐỒNG BỘ DANH SÁCH MODEL FREE =====
+                            Trạng thái sync tự động (nền TTL 6h — instrumentation
+                            tick 30') + nút "Đồng bộ ngay" (POST
+                            /api/agents/models/sync — bỏ TTL). User request:
+                            "mỗi khi thay đổi model miễn phí là tự cập nhập". */}
+                        <div className="px-3 py-1.5 border-b border-stone-700/30 flex items-center justify-between gap-2">
+                          <span className="text-[9px] text-stone-500 leading-tight">
+                            ⇄ Đồng bộ model free:{' '}
+                            {freeModelsSync?.total != null ? `${freeModelsSync.total} model` : '—'}
+                            {freeModelsSync?.syncedAt
+                              ? ` · ${new Date(freeModelsSync.syncedAt).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} (${freeModelsSync.source === 'cli' ? 'CLI opencode' : 'models.dev'})`
+                              : ' · chưa chạy lần nào'}
+                            {freeModelsSync?.lastDiff && (freeModelsSync.lastDiff.added.length > 0 || freeModelsSync.lastDiff.removed.length > 0) && (
+                              <span className="text-cyan-400/80" title={`Thêm: ${freeModelsSync.lastDiff.added.join(', ') || 'không'} · Bỏ: ${freeModelsSync.lastDiff.removed.join(', ') || 'không'}`}>
+                                {' '}· đổi: {[
+                                  freeModelsSync.lastDiff.added.length > 0 ? `+${freeModelsSync.lastDiff.added.length}` : null,
+                                  freeModelsSync.lastDiff.removed.length > 0 ? `-${freeModelsSync.lastDiff.removed.length}` : null,
+                                ].filter(Boolean).join(' ')}
+                              </span>
+                            )}
+                            {freeModelsSync?.lastError && (
+                              <span className="text-amber-400/80" title={freeModelsSync.lastError}> · lỗi sync gần nhất</span>
+                            )}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={syncingModels || freeModelsSync?.syncing}
+                            onClick={() => {
+                              setSyncingModels(true)
+                              fetch('/api/agents/models/sync', { method: 'POST' })
+                                .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+                                .then((d: { ok?: boolean; result?: { added?: string[]; removed?: string[]; total?: number; error?: string } }) => {
+                                  fetchZenModelOptions()
+                                  if (d?.ok) {
+                                    const added = d.result?.added ?? []
+                                    const removed = d.result?.removed ?? []
+                                    if (added.length > 0 || removed.length > 0) {
+                                      toast({
+                                        title: '⇄ Đồng bộ model free: có thay đổi',
+                                        description: `${added.length ? `Thêm ${added.length}: ${added.join(', ')}` : ''}${added.length && removed.length ? ' · ' : ''}${removed.length ? `Bỏ ${removed.length}: ${removed.join(', ')}` : ''} — danh sách model đã cập nhật.`,
+                                      })
+                                    } else {
+                                      toast({
+                                        title: '⇄ Đồng bộ model free hoàn tất',
+                                        description: `${d.result?.total ?? '—'} model free — không đổi so với lần trước (nguồn ${freeModelsSync?.source === 'modelsdev' ? 'models.dev' : 'CLI opencode'}).`,
+                                      })
+                                    }
+                                  } else {
+                                    toast({
+                                      title: 'Đồng bộ model free thất bại',
+                                      description: d?.result?.error || 'Giữ danh sách cũ — thử lại sau.',
+                                      variant: 'destructive',
+                                    })
+                                  }
+                                })
+                                .catch((err: unknown) => {
+                                  toast({
+                                    title: 'Đồng bộ model free thất bại',
+                                    description: err instanceof Error ? err.message : String(err),
+                                    variant: 'destructive',
+                                  })
+                                })
+                                .finally(() => setSyncingModels(false))
+                            }}
+                            className="text-[10px] px-1.5 py-px border border-cyan-400/40 text-cyan-300 hover:bg-cyan-500/10 transition-colors disabled:opacity-50 flex items-center gap-1 shrink-0"
+                            aria-label="Đồng bộ ngay danh sách model free từ models.dev"
+                            title="Kéo danh sách model free mới nhất từ opencode CLI / models.dev (bỏ TTL 6h)"
+                          >
+                            {syncingModels || freeModelsSync?.syncing ? <Loader2 className="h-3 w-3 animate-spin" /> : '⟳'} Đồng bộ ngay
+                          </button>
+                        </div>
                         {zenModels.map((m) => {
                           // r74 (BUG2-033): model bị Zen chặn free-tier trên CẢ
                           // http LẪN cli → chọn model này agent sẽ tự chuyển tiếp
@@ -6513,6 +6606,25 @@ ${manifest}` : rawText
                             <span className="truncate flex-1">{m.id}</span>
                             {allBlocked && (
                               <span className="text-[10px] text-amber-400/90 flex-shrink-0" title="Bị chặn free-tier — sẽ fallback về space-bunny-free">⚠</span>
+                            )}
+                            {/* R5 (2026-10-14): badge đồng bộ — model vừa thêm ở
+                                lần sync gần nhất (⇄ mới) / model đã rời danh sách
+                                free (nói thật — KHÔNG xoá khỏi catalog). */}
+                            {m.justAdded && !allBlocked && !m.noLongerListed && (
+                              <span
+                                className="text-[9px] text-emerald-400 border border-emerald-400/40 rounded px-1 flex-shrink-0"
+                                role="img"
+                                aria-label="Model mới từ đồng bộ models.dev"
+                                title="Vừa được thêm ở lần đồng bộ gần nhất (models.dev) — chưa battery r73"
+                              >⇄ mới</span>
+                            )}
+                            {m.noLongerListed && !m.justAdded && (
+                              <span
+                                className="text-[9px] text-stone-500 border border-stone-700/60 rounded px-1 flex-shrink-0"
+                                role="img"
+                                aria-label="Model đã rời danh sách free"
+                                title="Không còn trong danh sách free models.dev ở lần đồng bộ gần nhất — giữ để tham chiếu"
+                              >đã rời</span>
                             )}
                             {/* P6-M4 — badge "Q học được đề xuất" trên model top-Q
                                 (tương tự badge blockedTransports r74 — advisory).

@@ -365,11 +365,15 @@ describe('r95 · H — source-scan wiring đợt 1+2 (OBS-P1/P2 hooks)', () => {
     expect(getTuningSpec('obs_alerts')?.envKey).toBe('OBS_ALERTS') // 26-BE — cờ thứ 30
   })
 
-  test('H6 kinds.ts — 18 kind chuẩn + obs.alert nhóm alert (Task 26-BE GAP-2) + run.heart nhóm run (Task 33) + kind HyperNAS search.* đặt trước (single-source §9 HyperNAS)', () => {
-    expect(OBS_KINDS.length).toBe(18) // PIN UPDATE Task 33: 17 → 18 (run.heart — nhịp sống EXECUTE nuôi rule stall D1.1)
+  test('H6 kinds.ts — 19 kind chuẩn + obs.alert nhóm alert (Task 26-BE GAP-2) + run.heart nhóm run (Task 33) + model.sync nhóm tuning (R5) + kind HyperNAS search.* đặt trước (single-source §9 HyperNAS)', () => {
+    expect(OBS_KINDS.length).toBe(19) // PIN UPDATE R5: 18 → 19 (model.sync — đồng bộ danh sách model free, Đài quan sát thấy diff catalog)
     expect(OBS_KINDS.map(k => k.kind)).toContain('search.session')
     expect(OBS_KINDS.map(k => k.kind)).toContain('impact.estimate')
     expect(OBS_KINDS.map(k => k.kind)).toContain('brain.infer-ref')
+    // R5 — đồng bộ model free (kind mới nhóm tuning)
+    const syncDef = OBS_KINDS.find(k => k.kind === 'model.sync')
+    expect(syncDef?.group).toBe('tuning')
+    expect(syncDef?.label).toBe('Đồng bộ model free')
     // 26-BE — cảnh báo quan sát (nhóm alert, chip amber — hợp đồng 26-RESTORE)
     const alertDef = OBS_KINDS.find(k => k.kind === 'obs.alert')
     expect(alertDef?.group).toBe('alert')

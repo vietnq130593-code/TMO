@@ -122,6 +122,37 @@ export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string; 
       label: 'step-5-preview-free (đủ 3 năng lực · coding chậm nhất)',
       caps: { coding: true, reasoning: true, agentic: true },
     },
+    // R5 (2026-10-14 — user request "xác định lại list các model miễn phí
+    // hiện tại của opencode... 1 số model free đang không có tên"): đối chiếu
+    // models.dev + CLI `opencode models --verbose --refresh` cho 12 model
+    // free (cost 0/0, status != deprecated) — catalog cũ chỉ có 8/12. Bổ sung
+    // 4 model còn thiếu. 3 model từng bị loại ở matrix r73 được đưa TRỞ LẠI
+    // vì trạng thái metadata đã đổi (nói thật — live blockedTransports từ
+    // /api/agents/models sẽ hiển thị thực tế từng model; r73 đo ở thời điểm
+    // 2026-10-09, policy Zen/models.dev lật nhiều lần từ đó). cat-jam-free
+    // là model MỚI phát hành 2026-10-12 (sau r73) — chưa battery.
+    // Danh sách này được giữ tươi tự động bởi src/lib/free-models-sync.ts
+    // (TTL 6h, nguồn CLI opencode / models.dev — diff vào Đài quan sát).
+    {
+      id: 'cat-jam-free',
+      label: 'cat-jam-free (MỚI phát hành 2026-10-12 — models.dev; ctx 262k/ra 131k; reasoning+toolcall; chưa battery r73)',
+      caps: { coding: true, reasoning: true, agentic: true },
+    },
+    {
+      id: 'exo-free',
+      label: 'exo-free (r73 loại vì deprecated — models.dev 2026-10-14 hiện active trở lại; ctx 1M/ra 131k; chưa probe lại từ IP này)',
+      caps: { coding: true, reasoning: true, agentic: true },
+    },
+    {
+      id: 'ling-3.0-flash-fin-free',
+      label: 'ling-3.0-flash-fin-free (r73 loại vì không phản hồi — vẫn trong danh sách free models.dev 2026-10-14; chưa probe lại)',
+      caps: { coding: true, reasoning: true, agentic: true },
+    },
+    {
+      id: 'muse-spark-1.3-contributor-free',
+      label: 'muse-spark-1.3-contributor-free (r73 loại vì geo-block — vẫn trong danh sách free models.dev 2026-10-14; chưa probe lại)',
+      caps: { coding: true, reasoning: true, agentic: true },
+    },
   ],
   nvidia: [
     // 2026-11-30 — KIMI-K3 là lựa chọn model agent NIM TẠM THỜI (user

@@ -213,9 +213,11 @@ describe('r96 · D — GET /api/observation/timeline', () => {
     }
     // traces CHỈ join khi có runId (C.4) — không filter → rỗng
     expect(json.traces).toEqual([])
-    // kinds catalog single-source (kinds.ts — 18 kind; PIN UPDATE Task 33:
-    // 17 → 18 thêm run.heart nhóm run — nhịp sống EXECUTE nuôi rule stall D1.1)
-    expect(json.kinds.length).toBe(18)
+    // kinds catalog single-source (kinds.ts — 19 kind; PIN UPDATE Task 33:
+    // 17 → 18 thêm run.heart nhóm run — nhịp sống EXECUTE nuôi rule stall D1.1;
+    // PIN UPDATE R5 2026-10-14: 18 → 19 thêm model.sync — Đài quan sát thấy
+    // diff đồng bộ danh sách model free)
+    expect(json.kinds.length).toBe(19)
   })
 
   test('D2 filter kind + actor', async () => {

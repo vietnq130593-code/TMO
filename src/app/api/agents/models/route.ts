@@ -17,6 +17,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { PROVIDER_DATA, PROVIDER_MODELS } from '@/lib/agent-constants'
 import { zenModelBlockSummary } from '@/lib/llm'
 import { getTopQAdvice, agentRuntimeStateKey } from '@/lib/learning/q-table'
+// R5 (2026-10-14): catalog zen = overlay đồng bộ tự động (models.dev/CLI)
+// LÊN catalog tĩnh — model free mới xuất hiện sẽ vào dropdown ngay không
+// cần đợi sửa code; kèm trạng thái sync (lastSyncAt/diff) cho UI.
+import { getZenFreeModelCatalog, getSyncStatus } from '@/lib/free-models-sync'
 
 export const dynamic = 'force-dynamic'
 
@@ -66,23 +70,29 @@ export async function GET(request: NextRequest) {
       }
       return NextResponse.json({
         provider: providerData,
-        models: provider === 'zen' ? augmentZenModels(PROVIDER_MODELS[provider]) : PROVIDER_MODELS[provider],
+        // R5: zen đi qua catalog merge (tĩnh + đồng bộ tự động); provider khác giữ nguyên
+        models: provider === 'zen' ? augmentZenModels(getZenFreeModelCatalog()) : PROVIDER_MODELS[provider],
         // P6-M4 — advice kèm response provider-specific (dropdown zen là nơi dùng)
         ...(provider === 'zen' ? { advice: await buildQAdvice() } : {}),
+        ...(provider === 'zen' ? { freeModelsSync: getSyncStatus() } : {}),
       })
     }
 
     // Return all providers with their models — zen được gắn live block state (r74)
     // + Q advice (P6-M4) cho dropdown badge "Q học được đề xuất"
+    // R5 (2026-10-14): danh sách model zen = catalog merge (đồng bộ tự động)
+    // + trạng thái sync freeModelsSync cho UI (nút Đồng bộ ngay / lastSyncAt).
+    const zenCatalog = augmentZenModels(getZenFreeModelCatalog())
     return NextResponse.json({
       providers: PROVIDER_DATA.map(p =>
         p.key === 'zen'
-          ? { ...p, models: augmentZenModels(p.models) }
+          ? { ...p, models: zenCatalog }
           : p
       ),
       totalProviders: PROVIDER_DATA.length,
-      totalModels: PROVIDER_DATA.reduce((sum, p) => sum + p.models.length, 0),
+      totalModels: PROVIDER_DATA.reduce((sum, p) => sum + (p.key === 'zen' ? zenCatalog.length : p.models.length), 0),
       advice: await buildQAdvice(),
+      freeModelsSync: getSyncStatus(),
     })
   } catch (err) {
     return NextResponse.json(

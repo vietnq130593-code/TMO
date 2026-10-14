@@ -9,6 +9,10 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+// R5 (2026-10-14): validateModel zen đi qua catalog merge (tĩnh + đồng bộ tự
+// động models.dev) — agent tạo với model free mới xuất hiện (chưa kịp sửa code
+// tĩnh) không bị chặn validation.
+import { getZenFreeModelCatalog } from '@/lib/free-models-sync'
 import {
   PROVIDER_MODELS,
   VALID_PROVIDERS,
@@ -84,7 +88,9 @@ function validateProvider(provider: string): string | null {
 }
 
 function validateModel(provider: string, model: string): string | null {
-  const models = PROVIDER_MODELS[provider]
+  // R5 (2026-10-14): zen dùng catalog merge (đồng bộ tự động) — model mới từ
+  // models.dev hợp lệ ngay; provider khác giữ danh sách tĩnh.
+  const models = provider === 'zen' ? getZenFreeModelCatalog() : PROVIDER_MODELS[provider]
   if (!models) return `Provider "${provider}" không có models`
   if (!models.some(m => m.id === model)) {
     return `Model "${model}" không thuộc provider "${provider}". Các models khả dụng: ${models.map(m => m.id).join(', ')}`

@@ -46,6 +46,10 @@ export const OBS_KINDS: readonly ObsKindDef[] = [
   { kind: 'brain.infer-ref', group: 'brain', label: 'Não suy diễn' },
   { kind: 'tuning.change', group: 'tuning', label: 'Đổi tham số' },
   { kind: 'flag.flip', group: 'tuning', label: 'Bật/tắt cờ' },
+  // R5 (2026-10-14): đồng bộ danh sách model free opencode/zen — mọi lần sync
+  // (thêm/bớt/không đổi/thất bại) vào Đài quan sát để thay đổi catalog KHÔNG
+  // thể âm thầm (bài học R4: giao thức quan sát phải THẤY cả nguồn cung cấp).
+  { kind: 'model.sync', group: 'tuning', label: 'Đồng bộ model free' },
   { kind: 'reward.log', group: 'reward', label: 'Reward (log-only)' },
   // search.* — reserved HyperNAS §9 (chưa có call-site — HN-P2 xếp hàng kế tiếp)
   { kind: 'search.session', group: 'search', label: 'Search session' },

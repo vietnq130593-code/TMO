@@ -15,6 +15,11 @@ import { resolve, join } from 'path'
 import { readFileSync, readdirSync, statSync, rmSync } from 'fs'
 import { ensureTmoApiToken } from './lib/tmo-token'
 import { isOnDemandEnabled, initOnDemandWatchdog } from './lib/openclaw-ondemand'
+// R5 (2026-10-14 — user request "tự cập nhật mỗi khi thay đổi model miễn
+// phí"): đồng bộ danh sách model free opencode/zen (nguồn CLI opencode /
+// models.dev, TTL 6h) — boot +90s chạy sớm, tick 30' chỉ sync khi due.
+// Mỗi lần chạy ghi observation event 'model.sync' (Đài quan sát).
+import { maybeSyncZenFreeModels } from './lib/free-models-sync'
 // DB SELF-HEALING (fix user report 2026-09-09 "local không load agents"):
 // user pull code mới có thay đổi schema (cột/bảng mới) nhưng chưa chạy
 // `bun run db:push` trên local → Prisma client mới query DB cũ → mọi API
@@ -394,6 +399,16 @@ function sweepOcCliOrphans(): void {
 }
 setTimeout(() => sweepOcCliOrphans(), 10_000).unref?.()
 setInterval(() => sweepOcCliOrphans(), 5 * 60_000).unref?.()
+
+// ==================== FREE MODELS SYNC (R5 — 2026-10-14) ====================
+// Đồng bộ danh sách model free opencode/zen: `opencode models --verbose
+// --refresh` (chính chủ — refresh kéo models.dev) → fallback GET models.dev.
+// TTL 6h (env FREE_MODELS_SYNC_TTL_MIN); tick 30' kiểm tra (maybeSync tự
+// guard TTL — không đốt models.dev mỗi tick); sync lỗi KHÔNG crash app.
+// Kết quả overlay lên PROVIDER_MODELS.zen qua /api/agents/models — dropdown
+// model tự có model mới, Đài quan sát thấy diff (kind 'model.sync').
+setTimeout(() => { void maybeSyncZenFreeModels() }, 90_000).unref?.()
+setInterval(() => { void maybeSyncZenFreeModels() }, 30 * 60_000).unref?.()
 
 // WARM-UP ROUTES (fix "load danh sách agents lâu sau khi khởi động lại" —
 // user report 2026-09-08): trong next dev, route đầu tiên được gọi phải chịu
