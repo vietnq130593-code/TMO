@@ -100,9 +100,9 @@ export function TrainingConsole({
   // giá trị trên màn hình — bug 13-a R1-03).
   const useDraft = editorOn && hasSavedDraft && !draftDirty
   const draftBlockReason = !hasSavedDraft
-    ? 'Chưa có nháp đã lưu — bấm "Lưu nháp" trước'
+    ? 'Chưa có cấu hình đã lưu — bấm "Lưu & áp dụng" trước'
     : draftDirty
-      ? 'Bản nháp đang sửa chưa lưu — nút này train bản ĐÃ LƯU; bấm "Lưu nháp" trước'
+      ? 'Cấu hình đang sửa chưa lưu — nút này train bản ĐÃ LƯU; bấm "Lưu & áp dụng" trước'
       : null
   const lrExp = Math.log10(draft.hyper.lr)
 
@@ -398,26 +398,26 @@ export function TrainingConsole({
             className="min-h-[44px] md:min-h-[28px] border-amber-500/50 bg-amber-500/15 px-2.5 text-[10.5px] text-amber-300 hover:bg-amber-500/25"
             title={canTrain
               ? (editorOn
-                ? (draftBlockReason ?? 'Train batch ngoài request path (A7) — bản active chỉ xuất hiện khi thắng đối chứng CV ngặt · THEO BẢN NHÁP đã lưu')
-                : 'Train batch ngoài request path (A7) — bản active chỉ xuất hiện khi thắng đối chứng CV ngặt')
+                ? (draftBlockReason ?? 'Train batch ngoài request path (A7) — R7: bản xong ÁP DỤNG NGAY thành active thật (kể cả chưa thắng CV) + tự bật cờ runtime · THEO BẢN ĐÃ LƯU')
+                : 'Train batch ngoài request path (A7) — R7: bản xong ÁP DỤNG NGAY thành active thật (kể cả chưa thắng CV) + tự bật cờ runtime')
               : 'Chưa đủ mẫu thức tỉnh (ngưỡng §2) — ngủ an toàn'}
           >
             <Play className="mr-1 h-3 w-3" />
             {training
               ? 'Đang huấn luyện…'
               : editorOn
-                ? <>Huấn luyện theo nháp{draftDirty && <span className="text-[8.5px] text-stone-500"> • chưa lưu</span>}</>
-                : 'Huấn luyện lại'}
+                ? <>Huấn luyện & áp dụng{draftDirty && <span className="text-[8.5px] text-stone-500"> • chưa lưu</span>}</>
+                : 'Huấn luyện & áp dụng lại'}
           </Button>
           {editorOn && (
             <Button
               size="sm" variant="outline" onClick={onDraftSave} disabled={!draftDirty || !validation.ok}
               className="min-h-[44px] md:min-h-[28px] border-stone-700 px-2 text-[10px] text-stone-300"
-              title="Lưu nháp (cùng nút ở Brain Studio)"
-            ><Save className="mr-1 h-3 w-3" /> Lưu nháp{draftDirty ? ' •' : ''}</Button>
+              title="R7: lưu cấu hình rồi TỰ ĐỘNG train + áp dụng NGAY vào runtime thật (cùng nút ở Brain Studio)"
+            ><Save className="mr-1 h-3 w-3" /> Lưu & áp dụng{draftDirty ? ' •' : ''}</Button>
           )}
           <span className="text-[9px] text-stone-600">
-            mỗi lần chạy sinh version+1 — thua đối chứng = bỏ, active giữ nguyên (fail-open)
+            R7: mỗi lần chạy sinh version+1 và ÁP DỤNG NGAY (active thật + bật cờ) — metrics CV vẫn hiển thị minh bạch
           </span>
         </div>
 
@@ -427,9 +427,9 @@ export function TrainingConsole({
               <span className="font-semibold text-amber-400">v{outcome.version}</span>
               {' '}
               {outcome.active
-                ? <span className="text-emerald-400">ACTIVE — thắng CV</span>
-                : <span className="text-stone-400">không thắng CV — giữ hành vi cũ (bản vết audit đã ghi)</span>}
-              {outcome.useDraft && <span className="text-stone-500"> · train theo nháp</span>}
+                ? <span className="text-emerald-400">ĐANG VẬN HÀNH{outcome.improved ? ' — thắng CV' : ' — áp dụng theo chỉ định (CV chưa thắng)'}</span>
+                : <span className="text-stone-400">chưa áp dụng được (thiếu dữ liệu — xem toast) · bản vết audit đã ghi</span>}
+              {outcome.useDraft && <span className="text-stone-500"> · train theo cấu hình đã lưu</span>}
             </p>
             <p className="font-mono text-[10px] text-stone-300">
               {outcome.cvText} vs đối chứng {outcome.baselineText}

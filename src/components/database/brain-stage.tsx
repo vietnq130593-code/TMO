@@ -468,10 +468,33 @@ export function BrainStage({
   }, [brain, draft, editorOn, weights, activityInputUnits])
 
   // ── Layout + cạnh (LOD) — vẽ ĐÚNG từng unit: display = min(units, 256) ──
-  const layout = useMemo(() => buildStageLayout(columns.map(c => ({
-    ...c,
-    display: Math.min(c.units, STAGE_LIMITS.maxDisplayNeurons),
-  }))), [columns])
+  // R7 (user report "trong ô Đài quan sát não, 2 bên lại có 2 khoảng không
+  // gian tối... gây lãng phí không gian hiển thị"): trước đây viewBox giữ
+  // aspect tự nhiên (clamp n×130) rồi fit vào khung RỘNG hơn → letterbox
+  // trái/phải (2 dải đen — đồ thị không bao giờ dùng được). Giờ: khi khung
+  // chứa rộng hơn tỉ lệ tự nhiên của đồ thị, DÃN width viewBox sao cho tỉ
+  // lệ viewBox ≡ tỉ lệ khung → SVG lấp FULL khung — cột nơ-ron dàn trải
+  // rộng hơn, mọi thứ to lên cùng scale, HẾT dải đen. height nội dung
+  // KHÔNG phụ thuộc width (buildStageLayout chỉ dùng width cho colX) nên
+  // việc dãn không đổi chiều cao. Mobile (khung hẹp hơn tỉ lệ đồ thị) giữ
+  // width tự nhiên — letterbox đứng nhỏ như cũ (không thể né). Đệm 1 lần
+  // build layout phụ (thuần, vài trăm nơ-ron — rẻ) lấy height trước.
+  const layout = useMemo(() => {
+    const cols = columns.map(c => ({
+      ...c,
+      display: Math.min(c.units, STAGE_LIMITS.maxDisplayNeurons),
+    }))
+    const natural = buildStageLayout(cols)
+    if (tall && boxSize && boxSize.w > 0 && boxSize.h > 0) {
+      const baseH = Math.max(natural.height, 96) + VIEW_PAD // ≡ baseView.h
+      const fitW = Math.round((baseH * boxSize.w) / boxSize.h)
+      // Chỉ dãn (fitW > natural.width); trần 3600 chống absurd ultrawide
+      if (fitW > natural.width && fitW <= 3600) {
+        return buildStageLayout(cols, fitW)
+      }
+    }
+    return natural
+  }, [columns, tall, boxSize])
 
   // Task 26 B1 — cạnh THẲNG: (x1,y1)→(x2,y2) giữa tâm 2 nơ-ron, lùi đầu/cuối
   // theo bán kính R1/R2 của 2 cột (giữ logic né lõi BRAIN-TAB-3PHAN).
@@ -731,7 +754,9 @@ export function BrainStage({
 
   // ── Kích thước SVG fit container giữ aspect (BRAIN-TAB-3PHAN): scale =
   //    min(boxW/viewW, boxH/viewH) → SVG luôn nằm GỌN trong stageBox (flex
-  //    center căn giữa — letterbox quanh SVG, KHÔNG preserveAspectRatio).
+  //    center căn giữa — KHÔNG preserveAspectRatio). R7: layout.width đã
+  //    khớp tỉ lệ khung → 2 scale BẰNG NHAU → SVG lấp FULL box (hết dải đen
+  //    letterbox trái/phải; zoom/pan vẫn giữ aspect nên cũng full).
   //    Đơn vị px — element rect ≡ viewBox rect nên mọi phép ratio zoom/pan
   //    (onWheel rX/rY, pan scale=startView.w/rect.width) vẫn ĐÚNG. boxSize
   //    null (chưa đo / !tall) → null → className cũ h-auto w-full. ──
@@ -743,7 +768,9 @@ export function BrainStage({
 
   // Cấu trúc layout đổi (đổi brain/head/draft/train/units) → về vừa khung.
   // (queueMicrotask defer — không setState đồng bộ trong body effect.)
-  const baseKey = `${columns.map(c => c.units).join('-')}@${baseView.h}`
+  // R7: thêm width vào key — resize khung (boxSize đổi → layout.width đổi)
+  // cũng reset view để luôn fit khung mới (aspect đã khớp → không letterbox).
+  const baseKey = `${columns.map(c => c.units).join('-')}@${baseView.w}x${baseView.h}`
   useEffect(() => { queueMicrotask(() => { setView(null) }) }, [baseKey])
 
   const zoomBy = (factor: number) => {

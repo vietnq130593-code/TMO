@@ -340,6 +340,13 @@ export function fmtRunDuration(ms?: number): string {
 }
 
 
+/** R7 — chip trạng thái run (helper module-scope: KHÔNG viết template-literal
+ *  lồng 3 cấp inline trong JSX — bài học R6 parser derail vùng 6866, cùng
+ *  lỗi "Expected '</', got 'ident'" lặp lại; JSX chỉ gọi hàm). */
+function runStatusChipCls(stalled: boolean): string {
+  return `flex items-center gap-1 text-[11px] flex-shrink-0 ${stalled ? 'text-orange-400' : 'text-amber-300'}`
+}
+
 /** Panel Thought Process — render bên trong message flow (role 'agent_run') */
 export function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: RunTodoData[] }) {
   // Mặc định ĐÓNG — bấm tiêu đề mới mở (user request: như Claude Code)
@@ -372,6 +379,16 @@ export function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: RunTod
     ? `${runToolIcon(lastTool.tool)} ${lastTool.argsSummary || lastTool.tool || ''}`
     : lastThought?.text
 
+  // R7 (user report "timer vẫn chạy sau khi agent lỗi bước cuối"): trung
+  // thực hiển thị khi run ghi 'running' nhưng KHÔNG còn sự kiện mới — LLM call
+  // dài thường < 5'; quá ngưỡng này gần chắc run đã chết thật (crash-path đã
+  // được vá đóng tracker + reconcile từ DB, chip này là lớp hiển thị cuối cho
+  // trường hợp DB không có row). elapsed vẫn đếm (thời gian thật trôi) nhưng
+  // user thấy ngay dấu hiệu "không còn nhịp" thay vì tưởng agent đang làm.
+  const lastEventTs = run.events.length > 0 ? run.events[run.events.length - 1].ts : run.startedAt
+  const silentMinutes = running ? Math.floor((Date.now() - lastEventTs) / 60000) : 0
+  const stalled = running && silentMinutes >= 5
+
   const agentColor = AGENT_COLORS[run.agentName]?.text
     || (run.agentPosition ? POSITION_COLORS[run.agentPosition]?.text : undefined)
     || 'text-stone-200'
@@ -392,9 +409,12 @@ export function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: RunTod
 
         {/* Trạng thái */}
         {running ? (
-          <span className="flex items-center gap-1 text-[11px] text-amber-300 flex-shrink-0">
-            <Loader2 className="h-3 w-3 animate-spin" />
-            Đang chạy · {fmtRunDuration(elapsed)}
+          <span className={runStatusChipCls(stalled)}>
+            {stalled
+              ? <AlertTriangle className="h-3 w-3" />
+              : <Loader2 className="h-3 w-3 animate-spin" />}
+            {stalled ? 'Không còn nhịp' : 'Đang chạy'} · {fmtRunDuration(elapsed)}
+            {stalled && <span className="text-stone-500">({silentMinutes}′ im lặng)</span>}
           </span>
         ) : run.status === 'done' ? (
           <span className="flex items-center gap-1 text-[11px] text-emerald-400 flex-shrink-0">

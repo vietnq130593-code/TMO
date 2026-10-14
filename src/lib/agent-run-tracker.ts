@@ -1180,3 +1180,92 @@ export function isRunIdActiveInMemory(runId: string | null | undefined): boolean
     return true // fail-open: lỗi registry → không dám kết luận mồ côi
   }
 }
+
+// ==================== RECONCILE TỪ DB (R7 — user report "timer vẫn chạy
+// sau khi agent lỗi bước cuối") ====================
+//
+// ROOT CAUSE: exception văng ra NGOÀI runGoalDrivenLoop (chat route catch +
+// worker markFailed chỉ đóng todos/regression snapshot — KHÔNG gọi
+// endAgentRun) → run kẹt 'running' trong memory VĨNH VIỄN: panel Thought
+// Process hiện "Đang chạy · <đồng hồ tăng>" + hasActiveRun=true (chấm xanh
+// session) dù DB AgentRunRecord đã bị orphan-sweeper lật failed/crashed.
+//
+// Lưới an toàn 2 lớp:
+//  (1) các crash-path giờ TRỰC TIẾP gọi endAgentRun (chat route + worker);
+//  (2) hàm NÀY — GET /api/agent-run mỗi nhịp poll đối chiếu run 'running'
+//      in-memory với DB: row DB đã terminal (completed/failed/cancelled/
+//      incomplete) → lật in-memory theo DB. Tự chữa cả run kẹt từ TRƯỚC
+//      bản vá (tiền lệ orphan-sweeper chỉ sửa DB, không ai sửa ngược về
+//      memory). KHÔNG re-persist DB (DB đã đúng — nguồn của reconcile).
+
+/**
+ * Map AgentRunRecord.status (DB) → tracker status. 'running' → null (chưa
+ * terminal — không reconcile). 'incomplete' = run kết thúc vì budget
+ * (max_cycles/time_budget/…) — goal-loop endRun() nhánh này là 'done'.
+ */
+function recordStatusToTrackerStatus(dbStatus: string): AgentRun['status'] | null {
+  switch (dbStatus) {
+    case 'completed': return 'done'
+    case 'cancelled': return 'cancelled'
+    case 'incomplete': return 'done'
+    case 'failed': return 'error'
+    default: return null // 'running' / giá trị lạ → coi như chưa terminal
+  }
+}
+
+/**
+ * Lật 1 run in-memory 'running' → trạng thái terminal theo DB (reconcile —
+ * KHÔNG ghi lại DB). Trả về true nếu đã lật. Fail-open tuyệt đối: mọi lỗi →
+ * false (run giữ nguyên — thà chậm chân còn hơn giết nhầm run đang sống).
+ */
+export function reconcileRunEndedFromDb(
+  sessionId: string,
+  runId: string,
+  dbStatus: string,
+  dbCompletedAt: Date | null,
+  dbStopReason: string | null,
+): boolean {
+  try {
+    const trackerStatus = recordStatusToTrackerStatus(dbStatus)
+    if (trackerStatus === null) return false
+    const reg = registry()
+    const runs = reg.runsBySession.get(sessionId) || []
+    const run = runs.find(r => r.runId === runId)
+    if (!run || run.status !== 'running') return false
+    run.status = trackerStatus
+    run.endedAt = dbCompletedAt ? dbCompletedAt.getTime() : Date.now()
+    if (dbStopReason && dbStopReason.trim() !== '') {
+      run.stopReasonFinal = dbStopReason.trim().slice(0, 40)
+    }
+    pushEvent(run, {
+      id: nextEventId(),
+      ts: Date.now(),
+      type: 'run_end',
+      success: trackerStatus === 'done',
+      cancelled: trackerStatus === 'cancelled',
+      text: `Đã đồng bộ trạng thái từ DB (${dbStatus}${dbStopReason ? ` · ${dbStopReason}` : ''}) — run thật sự đã kết thúc`,
+    })
+    // Con trỏ active của session trỏ run này → dọn (mirror endAgentRun)
+    if (reg.activeRunBySession.get(sessionId) === run.runId) {
+      reg.activeRunBySession.delete(sessionId)
+      const remaining = runs.filter(r => r.status === 'running')
+      const next = remaining[remaining.length - 1]
+      if (next) reg.activeRunBySession.set(sessionId, next.runId)
+    }
+    console.log(`[AgentRun] 🔁 Reconcile: run ${runId} (${run.agentName}) in-memory 'running' → '${trackerStatus}' theo DB (status=${dbStatus}) — đóng đồng hồ Thought Process`)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Danh sách runId đang 'running' in-memory của session (cho route sweep). */
+export function getRunningRunIds(sessionId: string): string[] {
+  try {
+    return (registry().runsBySession.get(sessionId) || [])
+      .filter(r => r.status === 'running')
+      .map(r => r.runId)
+  } catch {
+    return []
+  }
+}

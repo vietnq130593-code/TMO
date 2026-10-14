@@ -1064,6 +1064,39 @@ class GoalLoopWorker {
     // P-E (2026-10-06): crash cũng là gián đoạn — snapshot việc dở TRƯỚC khi
     // close (in_progress→failed, pending→archived) để run kế hồi quy tiếp.
     if (crashContext?.sessionId) {
+      // R7 (user report "timer vẫn chạy sau khi agent lỗi bước cuối"):
+      // markFailed TRƯỚC ĐÂY chỉ đánh dấu job DB + đóng todos — KHÔNG đóng
+      // run in-memory của tracker → run kẹt 'running' vĩnh viễn (đồng hồ
+      // Thought Process cứ tăng dù agent đã dừng thật). Đóng tracker NGAY
+      // (fail-open — không được phép che lỗi gốc đã log).
+      try {
+        const { endAgentRun } = await import('@/lib/agent-run-tracker')
+        if (crashContext.runId) {
+          endAgentRun(crashContext.sessionId, crashContext.runId, 'error', `Job ${jobId} crash: ${error.slice(0, 160)}`)
+        } else {
+          // runId không có (đường parse-input lỗi) — đóng run ACTIVE của session
+          const { getActiveRunId } = await import('@/lib/agent-run-tracker')
+          const activeId = getActiveRunId(crashContext.sessionId)
+          if (activeId) endAgentRun(crashContext.sessionId, activeId, 'error', `Job ${jobId} crash (active run): ${error.slice(0, 160)}`)
+        }
+        // Row AgentRunRecord 'running' của run này (dbPersistBy='caller' —
+        // goal-loop chết trước lúc tự update) → lật failed NGAY thay vì đợi
+        // orphan-sweep 30'. Idempotent — update theo (sessionId, runId).
+        const { updateLatestAgentRunRecord } = await import('@/lib/metrics-db')
+        if (crashContext.runId) {
+          await updateLatestAgentRunRecord(
+            crashContext.sessionId,
+            {
+              status: 'failed',
+              stopReason: 'crashed',
+              completedAt: new Date(),
+            },
+            crashContext.runId,
+          ).catch(() => { /* fail-open — sweeper vẫn là lưới sau */ })
+        }
+      } catch (endErr) {
+        console.warn(`[GoalLoopWorker] job ${jobId}: endAgentRun (crash-close tracker) lỗi (fail-open):`, endErr instanceof Error ? endErr.message : String(endErr))
+      }
       try {
         const { recordRegressionSnapshot } = await import('@/lib/goal-loop-finalize')
         await recordRegressionSnapshot({

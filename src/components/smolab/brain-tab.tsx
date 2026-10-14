@@ -442,54 +442,27 @@ export function BrainTabContent() {
     setDirtyBrains(prev => new Set(prev).add(d.brain))
   }, [])
 
-  /// Lưu nháp (PUT /api/brain/spec-draft) — validate local bằng single-source
-  /// spec-schema trước khi PUT (server validate lại lần nữa — không tin client)
-  const saveDraft = useCallback(async (key: BrainKey) => {
-    const spec = draftsByBrain[key] ?? defaultDraftFor(key)
-    const inputDim = brainData?.brains.find(b => b.key === key)?.inputDim ?? null
-    const v = validateBrainDraft({ ...spec, brain: key }, inputDim)
-    if (!v.ok) {
-      setSaveErrors(v.errors)
-      return
-    }
-    setSavingDraft(true)
-    try {
-      const res = await fetch('/api/brain/spec-draft', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brain: key, spec: v.normalized }),
-      })
-      const json = (await res.json().catch(() => ({}))) as { error?: string; errors?: string[] }
-      if (!res.ok) {
-        setSaveErrors(json.errors ?? [json.error ?? `HTTP ${res.status}`])
-        return
-      }
-      setSavedDrafts(prev => ({ ...prev, [key]: v.normalized }))
-      setDraftsByBrain(prev => ({ ...prev, [key]: v.normalized }))
-      setDirtyBrains(prev => { const n = new Set(prev); n.delete(key); return n })
-      setSaveErrors([])
-    } catch (err) {
-      setSaveErrors([err instanceof Error ? err.message : String(err)])
-    } finally {
-      setSavingDraft(false)
-    }
-  }, [draftsByBrain, brainData])
-
+  // ==================== TRAIN (R7 — HIỆU LỰC THẬT, không còn chế độ nháp) ====================
   // BRAIN-P2: train xong (nút Huấn luyện) cũng fetchBrainData tươi.
   // BRAIN-UX §9.3 (UX-2): useDraft=true → POST /api/brain/train đọc bản nháp
-  // ĐÃ LƯU từ DB (server validate lại — bất biến A1 §9.1-1: draft vẫn đi đủ
-  // cổng train → thắng đối chứng CV → thăng cấp, không có đường tắt).
+  // ĐÃ LƯU từ DB (server validate lại).
+  // R7 (chỉ thị user 2026-10-31 "tôi không muốn bản nháp mà muốn tất cả đều
+  // hiệu lực thật và vận hành thật"): MỌI lệnh train từ tab này gửi force=true
+  // → bản train active NGAY (kể cả chưa thắng CV — metrics vẫn hiển thị minh
+  // bạch) + server tự bật cờ runtime tương ứng → model VẬN HÀNH thật trong
+  // chuỗi runtime. Định nghĩa TRƯỚC saveDraft vì saveDraft gọi nó (auto-apply).
   const [trainingBrains, setTrainingBrains] = useState<Set<string>>(new Set())
-  const trainBrain = useCallback(async (key: BrainKey, useDraft: boolean) => {
+  const trainBrain = useCallback(async (key: BrainKey, useDraft: boolean, force = true) => {
     setTrainingBrains(prev => new Set(prev).add(key))
     try {
       const res = await fetch('/api/brain/train', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brain: key, useDraft: useDraft || undefined }),
+        body: JSON.stringify({ brain: key, useDraft: useDraft || undefined, force: force || undefined }),
       })
       const json = (await res.json().catch(() => ({}))) as {
         error?: string; version?: number; active?: boolean; improved?: boolean; sampleSize?: number
+        forced?: boolean; flagOn?: boolean
         cvBrier?: number; brierV2?: number
         heads?: { success?: { cvBrier?: number; brierBaseline?: number; improved?: boolean } }
         cv?: { ceMixture?: number; ceBaselineQ?: number; improved?: boolean }
@@ -514,9 +487,13 @@ export function BrainTabContent() {
           : `V2 ${json.brierV2?.toFixed(4) ?? '—'}`
       const brainName = key === 'surrogate' ? 'Brain-B "Vọng" (surrogate)' : key === 'policy' ? 'Brain-C "Lệnh" (policy)' : 'Brain-A "V3"'
       const flagName = key === 'surrogate' ? 'REPLAY_EVAL' : key === 'policy' ? 'RUNTIME_POLICY' : 'CALIBRATION_V3'
+      // R7 — verdict nói thật 3 trường hợp: thắng CV / áp dụng theo ý chỉ /
+      // không áp dụng được (thiếu dữ liệu)
       const verdict = json.active
-        ? `v${json.version} ACTIVE — thắng CV (cờ ${flagName} mới có tác dụng khi bật)`
-        : `v${json.version} không thắng CV — giữ hành vi cũ (bản vết audit đã ghi)`
+        ? (json.improved
+            ? `v${json.version} ĐANG VẬN HÀNH — thắng CV${json.flagOn ? ` · cờ ${flagName} đã bật` : ''}`
+            : `v${json.version} ĐANG VẬN HÀNH theo chỉ định của bạn (CV chưa thắng: ${cvText} vs ${baselineText})${json.flagOn ? ` · cờ ${flagName} đã bật` : ` · ⚠ bật cờ ${flagName} ở tab Tham số runtime`}`)
+        : `v${json.version} chưa áp dụng được — ${json.error ?? 'xem lỗi'} (bản vết audit đã ghi)`
       toast.success(
         `${brainName} huấn luyện xong · ${cvText} vs ${baselineText}`,
         { description: `${verdict} · ${json.sampleSize ?? '?'} mẫu` },
@@ -542,6 +519,51 @@ export function BrainTabContent() {
       })
     }
   }, [fetchBrainData])
+
+  /// Lưu nháp (PUT /api/brain/spec-draft) — validate local bằng single-source
+  /// spec-schema trước khi PUT (server validate lại lần nữa — không tin client).
+  /// R7 (chỉ thị user 2026-10-31 "không muốn bản nháp — muốn hiệu lực thật"):
+  /// sau khi lưu NHÁP thành công, TỰ ĐỘNG train + ÁP DỤNG NGAY (force) — kiến
+  /// trúc/hyper mới trở thành bản ACTIVE vận hành thật (kèm bật cờ runtime,
+  /// server lo). Nếu thiếu dữ liệu train → toast nói rõ cần thêm mẫu (đó là
+  /// giới hạn DỮ LIỆU, không phải chế độ nháp nữa).
+  const saveDraft = useCallback(async (key: BrainKey) => {
+    const spec = draftsByBrain[key] ?? defaultDraftFor(key)
+    const inputDim = brainData?.brains.find(b => b.key === key)?.inputDim ?? null
+    const v = validateBrainDraft({ ...spec, brain: key }, inputDim)
+    if (!v.ok) {
+      setSaveErrors(v.errors)
+      return
+    }
+    setSavingDraft(true)
+    try {
+      const res = await fetch('/api/brain/spec-draft', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brain: key, spec: v.normalized }),
+      })
+      const json = (await res.json().catch(() => ({}))) as { error?: string; errors?: string[] }
+      if (!res.ok) {
+        setSaveErrors(json.errors ?? [json.error ?? `HTTP ${res.status}`])
+        return
+      }
+      setSavedDrafts(prev => ({ ...prev, [key]: v.normalized }))
+      setDraftsByBrain(prev => ({ ...prev, [key]: v.normalized }))
+      setDirtyBrains(prev => { const n = new Set(prev); n.delete(key); return n })
+      setSaveErrors([])
+      // R7 — ÁP DỤNG NGAY: train theo nháp vừa lưu + force (active thật +
+      // bật cờ runtime). Toast kết quả do trainBrain lo (success lẫn lỗi
+      // thiếu dữ liệu) — không lặng lẽ bỏ dở việc áp dụng.
+      toast.info('Đã lưu cấu hình — đang huấn luyện & áp dụng ngay…', {
+        description: 'Hiệu chỉnh sẽ lên runtime THẬT (bản active + cờ bật) ngay khi train xong.',
+      })
+      await trainBrain(key, true, true)
+    } catch (err) {
+      setSaveErrors([err instanceof Error ? err.message : String(err)])
+    } finally {
+      setSavingDraft(false)
+    }
+  }, [draftsByBrain, brainData, trainBrain])
 
   // ==================== TUNING ACTIONS (copy panel cũ) ====================
 
@@ -995,9 +1017,11 @@ export function BrainTabContent() {
                 training={activity?.training ?? null}
               />
               <p className="text-[9.5px] leading-relaxed text-stone-500">
-                ⚠ Bản nháp KHÔNG tự lên runtime — chỉ qua train thắng đối chứng CV (bất biến A1); runtime chỉ
-                đổi khi cờ bật (STORE › ENV › DEFAULT=off); Brain-B có POST /api/brain/replay (replay-eval
-                READ-ONLY); 3 organ steering của Brain-C mỗi cái kill-switch riêng.
+                ✓ R7: hiệu chỉnh lưu ở tab này ÁP DỤNG NGAY vào runtime thật — train xong bản mới thành ACTIVE
+                (kể cả khi chưa thắng đối chứng CV — theo chỉ định của bạn) và cờ runtime tương ứng tự bật;
+                auto-retrain sau eval/agent run vẫn giữ cổng CV an toàn. Thiếu dữ liệu train thì chưa áp dụng
+                được (cần thêm mẫu — chạy eval/agent). Brain-B có POST /api/brain/replay (replay-eval READ-ONLY);
+                3 organ steering của Brain-C mỗi cái kill-switch riêng.
               </p>
             </div>
           </CardContent>

@@ -116,17 +116,31 @@ export const STAGE_LIMITS = {
  *     ≤ ~24 → 6.1–6.5 (giữ diện mạo v2); 64 → ≈2.29; 256 → 0.72.
  *  4. width ĐỘNG theo số cột: clamp(n × 130, 340, 900) — tab BRAIN mới
  *     full-width (layout 3 phần BRAIN-TAB-3PHAN) thay hằng 340 cứng v2.
+ *     R7 (user report "2 bên đài quan sát có 2 khoảng đen lãng phí"):
+ *     widthOverride — caller truyền width khớp TỈ LỆ khung chứa (boxW/boxH)
+ *     → viewBox aspect ≡ stageBox aspect → SVG lấp FULL khung, HẾT letterbox
+ *     trái/phải (cột dàn trải rộng hơn — nơ-ron/cạnh to lên cùng scale).
+ *     height KHÔNG phụ thuộc width nên override không đổi chiều cao nội dung.
  *
  * height = topY + contentSpan + 50 (50 = chỗ 2 dòng nhãn dưới đáy — vẽ tại
  * height−18/height−28 do component). BRAIN-LIVE (giữ): vẽ ĐÚNG units từng
  * lớp (display = min(units, 256)); nén đại diện units > 256 giữ nguyên thuật
  * toán cũ (đầu 0, cuối units−1, đơn điệu).
  */
-export function buildStageLayout(columns: readonly StageColumn[]): {
+/**
+ * R7 — widthOverride: độ rộng viewBox mong muốn (đơn vị viewBox). > 0 thì
+ * DÙNG thay cho clamp(n×130, 340, 900) — để BrainStage tính width sao cho
+ * tỉ lệ viewBox ≡ tỉ lệ khung chứa (SVG fill full box, không còn 2 dải đen
+ * hai bên). Thuần + backward-compatible (không truyền → đúng giá trị cũ).
+ */
+export function buildStageLayout(
+  columns: readonly StageColumn[],
+  widthOverride?: number,
+): {
   neurons: StageNeuron[]
   colX: number[]
   height: number
-  /** Rộng viewBox — động theo số cột: clamp(n×130, 340, 900) */
+  /** Rộng viewBox — động theo số cột: clamp(n×130, 340, 900) — hoặc widthOverride (R7) */
   width: number
   /** Khoảng cách nơ-ron dọc TỪNG CỘT (thích ứng độ dày) */
   rowStep: number[]
@@ -135,7 +149,9 @@ export function buildStageLayout(columns: readonly StageColumn[]): {
 } {
   const n = columns.length
   if (n === 0) return { neurons: [], colX: [], height: 100, width: 340, rowStep: [], radius: [] }
-  const width = Math.min(900, Math.max(340, n * 130))
+  const width = typeof widthOverride === 'number' && Number.isFinite(widthOverride) && widthOverride > 0
+    ? widthOverride
+    : Math.min(900, Math.max(340, n * 130))
   const marginX = 34
   const stepX = n > 1 ? (width - 2 * marginX) / (n - 1) : 0
   const colX = Array.from({ length: n }, (_, i) => marginX + i * stepX)

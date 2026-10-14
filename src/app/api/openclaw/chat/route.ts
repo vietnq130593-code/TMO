@@ -42,7 +42,7 @@ import { isSessionDeleted, isSessionDeletedDeep } from '@/lib/session-tombstone'
 // buildAgentRunSummaryForMessage (goal-loop-finalize.ts, Task 14-c pure-move).
 // CI-2 (Task 11-a): getActiveRunId dùng ở crash-path để đóng todo của run
 // đang chạy dở khi goal loop văng exception.
-import { getActiveRunId } from '@/lib/agent-run-tracker'
+import { getActiveRunId, endAgentRun } from '@/lib/agent-run-tracker'
 // CI-2 (Task 11-a) — PER-TASK TODO ISOLATION: 2 helper vòng đời todo theo
 // runId (dev-tools TODO section): archive todo của run trước khi run mới bắt
 // đầu + đóng per-item trung thực khi run kết thúc (thay bulk-close cũ).
@@ -1409,6 +1409,21 @@ export async function POST(request: NextRequest) {
         if (sessionId) {
           try {
             const crashRunId = getActiveRunId(sessionId)
+            // R7 (user report "timer vẫn chạy sau khi agent lỗi bước cuối"):
+            // crash-path TRƯỚC ĐÂY thiếu endAgentRun → run kẹt 'running'
+            // in-memory vĩnh viễn (đồng hồ Thought Process cứ tăng, chấm xanh
+            // session không tắt) dù agent đã chết thật. Đóng tracker NGAY tại
+            // đây — cùng tinh thần "honest close" todos bên dưới. Fail-open.
+            if (crashRunId) {
+              try {
+                endAgentRun(
+                  sessionId,
+                  crashRunId,
+                  'error',
+                  `Run văng exception (crash-path): ${err instanceof Error ? err.message : String(err)}`,
+                )
+              } catch { /* fail-open — không che lỗi gốc */ }
+            }
             // P-E (2026-10-06): crash cũng là gián đoạn — snapshot việc dở
             // TRƯỚC khi close để run kế hồi quy tiếp.
             try {

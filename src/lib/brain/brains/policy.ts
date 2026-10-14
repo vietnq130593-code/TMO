@@ -480,8 +480,11 @@ export interface PolicyTrainResult {
   /** true khi đã ghi BrainModel (kể cả bản thua CV — vết audit). */
   trained: boolean
   version: number | null
-  /** CHỈ true khi thắng π_Q CV (ngặt) — bản ghi active. */
+  /** true khi thắng π_Q CV (ngặt) HOẶC force (R7 — hiệu chỉnh chủ đích từ
+   * tab BRAIN áp dụng NGAY theo ý chỉ, audit trainMeta.appliedBy='user-force'). */
   active: boolean
+  /** R7 — true khi bản active theo Ý CHỈ (force) chứ không vì thắng CV */
+  forced?: boolean
   sampleSize: number
   improved: boolean
   /** CV chi tiết — null khi không train. */
@@ -521,6 +524,7 @@ function standardizeRow(row: (number | null)[], means: number[], stds: number[])
 export async function trainBrainPolicy(
   inputMode: string = POLICY_INPUT_MODE,
   override?: BrainDraftSpec,
+  opts?: { force?: boolean },
 ): Promise<PolicyTrainResult> {
   if (!acquireTrainLock('policy')) {
     return {
@@ -537,7 +541,7 @@ export async function trainBrainPolicy(
   trainProgressStart('policy', null)
   const t0 = Date.now()
   try {
-    const result = await trainBrainPolicyLocked(inputMode, override)
+    const result = await trainBrainPolicyLocked(inputMode, override, opts)
     observeBrainTrain('policy', 'end', {
       inputMode, useDraft: override != null, durationMs: Date.now() - t0, result,
     })
@@ -572,6 +576,7 @@ export async function trainBrainPolicy(
 async function trainBrainPolicyLocked(
   inputMode: string,
   override?: BrainDraftSpec,
+  opts?: { force?: boolean },
 ): Promise<PolicyTrainResult> {
   // ── Đếm 2 nguồn ngưỡng §2 (telemetry trung thực — đếm TRƯỚC khi chặn) ──
   // R4-ĐIỀU TRA: Q signal = SUM(visits) (số lần updateQ) — không phải row
@@ -694,7 +699,10 @@ async function trainBrainPolicyLocked(
   // Bất biến A1: tắt active cũ TRƯỚC khi ghi bản active mới (không
   // $transaction BUG2-119; gãy giữa chừng → không còn active → mixture rơi
   // nhánh π_Q thuần — hướng an toàn)
-  if (cv.improved) {
+  // R7: force → active theo Ý CHỈ chủ nhân (appliedBy audit trong trainMeta).
+  const force = opts?.force === true
+  const willActivate = cv.improved || force
+  if (willActivate) {
     await db.brainModel.updateMany({
       where: { brain: 'policy', active: true },
       data: { active: false },
@@ -730,6 +738,8 @@ async function trainBrainPolicyLocked(
     cvScoreCiHigh: round5(cv.cvCeMixtureCiHi),
     brierBaseline: round5(cv.ceBaseline),
     improved: cv.improved,
+    // R7 — phân biệt bản active vì THẮNG CV vs theo Ý CHỈ force
+    appliedBy: willActivate ? (cv.improved ? 'cv-win' : 'user-force') : 'cv-lose',
     vocab,
     actionVocab,
     featureNames: policyFeatureNames(vocab),
@@ -789,7 +799,7 @@ async function trainBrainPolicyLocked(
       specJson: JSON.stringify(specDoc),
       weightsJson: JSON.stringify(weightsDoc),
       trainMetaJson: JSON.stringify(trainMeta),
-      active: cv.improved,
+      active: willActivate,
     },
   })
 
@@ -799,7 +809,8 @@ async function trainBrainPolicyLocked(
   return {
     trained: true,
     version,
-    active: cv.improved,
+    active: willActivate,
+    forced: force && !cv.improved,
     sampleSize: rows.length,
     improved: cv.improved,
     cv,

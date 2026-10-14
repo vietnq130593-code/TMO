@@ -257,8 +257,13 @@ export interface V3TrainResult {
   trained: boolean
   /** Version vừa ghi (null khi không train) */
   version: number | null
-  /** Trạng thái active của bản vừa ghi — CHỈ true khi CV thắng V2 */
+  /** Trạng thái active của bản vừa ghi — true khi CV thắng V2 HOẶC force
+   * (R7 — chỉ thị user "không muốn bản nháp, muốn hiệu lực thật": hiệu chỉnh
+   * chủ đích từ tab BRAIN giờ áp dụng NGAY dù CV chưa thắng — audit
+   * trainMeta.appliedBy='user-force'). */
   active: boolean
+  /** R7 — true khi bản active theo Ý CHỈ (force) chứ không vì thắng CV */
+  forced?: boolean
   sampleSize: number
   cvBrier: number | null
   cvBrierCi: [number, number] | null
@@ -313,9 +318,22 @@ function draftFitOptions(
  * nhân lên (nút UI + auto-train sau eval run) → lệnh train trùng nhịp của
  * CÙNG brain trả trained=false (không xếp hàng, không đua version).
  */
+/**
+ * R7 — tùy chọn train (chỉ thị user 2026-10-31: "toàn bộ hiệu chỉnh trong tab
+ * BRAIN … muốn tất cả đều hiệu lực thật và vận hành thật"): `force: true` →
+ * bản train trở thành ACTIVE ngay cả khi KHÔNG thắng đối chứng CV (chủ nhân
+ * hệ thống quyết định — metrics CV vẫn tính + hiển thị đầy đủ để thấy chất
+ * lượng; trainMeta ghi appliedBy='user-force' để phân biệt với 'cv-win').
+ * Đường auto-retrain (sau eval run) KHÔNG dùng force — giữ cổng CV an toàn.
+ */
+export interface TrainOpts {
+  force?: boolean
+}
+
 export async function trainBrainCalibrationV3(
   inputMode: string = V3_INPUT_MODE,
   override?: BrainDraftSpec,
+  opts?: TrainOpts,
 ): Promise<V3TrainResult> {
   if (!acquireTrainLock('calibration_v3')) {
     return {
@@ -333,7 +351,7 @@ export async function trainBrainCalibrationV3(
   trainProgressStart('calibration_v3', null)
   const t0 = Date.now()
   try {
-    const result = await trainBrainCalibrationV3Locked(inputMode, override)
+    const result = await trainBrainCalibrationV3Locked(inputMode, override, opts)
     observeBrainTrain('calibration_v3', 'end', {
       inputMode, useDraft: override != null, durationMs: Date.now() - t0, result,
     })
@@ -368,6 +386,7 @@ export async function trainBrainCalibrationV3(
 async function trainBrainCalibrationV3Locked(
   inputMode: string,
   override?: BrainDraftSpec,
+  opts?: TrainOpts,
 ): Promise<V3TrainResult> {
   const [results, cases] = await Promise.all([
     db.evalResult.findMany({
@@ -461,7 +480,10 @@ async function trainBrainCalibrationV3Locked(
   // Bất biến A1 (chỉ 1 active mỗi brain): tắt bản active cũ TRƯỚC khi ghi
   // bản active mới. Không $transaction (BUG2-119); gãy giữa chừng → không
   // còn active → runtime fail-open về V2 (hướng an toàn).
-  if (cv.improved) {
+  // R7: force → active theo Ý CHỈ chủ nhân (appliedBy audit trong trainMeta).
+  const force = opts?.force === true
+  const willActivate = cv.improved || force
+  if (willActivate) {
     await db.brainModel.updateMany({
       where: { brain: 'calibration_v3', active: true },
       data: { active: false },
@@ -495,6 +517,8 @@ async function trainBrainCalibrationV3Locked(
     metric: 'brier',
     brierV2: round5(cv.brierV2),
     improved: cv.improved,
+    // R7 — phân biệt bản active vì THẮNG CV vs theo Ý CHỈ force
+    appliedBy: willActivate ? (cv.improved ? 'cv-win' : 'user-force') : 'cv-lose',
     featureNames: FEATURE_NAMES,
     // stds GIỮ full precision — KHÔNG round5: cột near-constant (std ∈
     // (1e-12, 5e-6)) bị round5 về 0 → (v−mean)/0 = ±∞/NaN tại runtime
@@ -530,7 +554,7 @@ async function trainBrainCalibrationV3Locked(
       specJson: JSON.stringify(serialized.spec),
       weightsJson: JSON.stringify(serialized),
       trainMetaJson: JSON.stringify(trainMeta),
-      active: cv.improved,
+      active: willActivate,
     },
   })
 
@@ -546,7 +570,8 @@ async function trainBrainCalibrationV3Locked(
   return {
     trained: true,
     version,
-    active: cv.improved,
+    active: willActivate,
+    forced: force && !cv.improved,
     sampleSize: y.length,
     cvBrier: round5(cv.cvBrier),
     cvBrierCi,

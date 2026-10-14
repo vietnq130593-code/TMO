@@ -33,7 +33,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getAgentRuns, hasActiveRun, cancelSessionRuns, readRunTrail } from '@/lib/agent-run-tracker'
+import { getAgentRuns, hasActiveRun, cancelSessionRuns, readRunTrail, getRunningRunIds, reconcileRunEndedFromDb } from '@/lib/agent-run-tracker'
 import { db } from '@/lib/db'
 import { withPollCache } from '@/lib/poll-microcache'
 
@@ -149,6 +149,35 @@ async function getAgentRunByRunId(runId: string, limit: number): Promise<Respons
 
 async function getAgentRunData(sessionId: string, limit: number): Promise<Response> {
   try {
+
+    // R7 — RECONCILE SWEEP (user report "timer vẫn chạy sau khi agent lỗi
+    // bước cuối"): trước khi trả dữ liệu, đối chiếu mọi run 'running'
+    // in-memory với DB AgentRunRecord — row DB đã terminal (failed/crashed
+    // bởi orphan-sweeper, hoặc completed/cancelled từ đường khác) → lật
+    // in-memory theo DB. Tự chữa (a) run kẹt từ các crash-path chưa được vá,
+    // (b) run kẹt TỪ TRƯỚC bản vá (cùng process), (c) đua giữa endAgentRun
+    // và poll. Chỉ chạy khi CÓ run 'running' (bình thường 0 query thêm);
+    // row KHÔNG tồn tại (insert start chưa kịp / fail) → bỏ qua (coi như
+    // sống — thà chậm chân hơn giết nhầm). Fail-open tuyệt đối.
+    const runningIds = getRunningRunIds(sessionId)
+    if (runningIds.length > 0) {
+      try {
+        const rows = await db.agentRunRecord.findMany({
+          where: { sessionId, runId: { in: runningIds } },
+          select: { runId: true, status: true, stopReason: true, completedAt: true },
+          orderBy: { createdAt: 'desc' },
+        })
+        const seen = new Set<string>()
+        for (const row of rows) {
+          // row mới nhất mỗi runId (orderBy desc); runId/status nullable trong
+          // schema — thiếu cái nào thì bỏ qua row đó (chưa đủ bằng chứng)
+          if (!row.runId || !row.status) continue
+          if (seen.has(row.runId)) continue
+          seen.add(row.runId)
+          reconcileRunEndedFromDb(sessionId, row.runId, row.status, row.completedAt, row.stopReason)
+        }
+      } catch { /* fail-open — sweep lỗi không được phép làm hỏng poll */ }
+    }
 
     const runs = getAgentRuns(sessionId, limit)
 

@@ -13,7 +13,10 @@
  *
  * Bất biến §9.1-1 (Draft ≠ runtime): route này CHỈ đụng bảng BrainSpecDraft —
  * KHÔNG BAO GIỜ ghi BrainModel/active. Đường lên runtime duy nhất vẫn là
- * train (POST /api/brain/train với useDraft) → thắng đối chứng CV → thăng cấp.
+ * train (POST /api/brain/train với useDraft) — R7 (chỉ thị user 2026-10-31
+ * "muốn hiệu lực thật"): từ tab BRAIN, lệnh train gửi force=true → bản mới
+ * active NGAY (kể cả chưa thắng CV) + cờ runtime tự bật; auto-retrain giữ
+ * cổng CV thắng đối chứng như cũ.
  *
  * Fail-open: lỗi DB → 500 kèm thông điệp; lỗi validation → 400 kèm DANH SÁCH
  * lỗi (editor hiển thị hết một lượt).

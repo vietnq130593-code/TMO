@@ -424,8 +424,8 @@ export function BrainStudio({
                 size="sm" variant="outline" onClick={onDraftSave}
                 disabled={savingDraft || !validation.ok}
                 className="min-h-[44px] md:min-h-[32px] border-amber-500/50 px-2 text-[10px] text-amber-300 hover:text-amber-200"
-                title={validation.ok ? 'Lưu bản nháp (BrainSpecDraft — không chạm bản active)' : 'Sửa lỗi validation trước khi lưu'}
-              ><Save className="mr-1 h-3 w-3" /> {savingDraft ? 'Đang lưu…' : 'Lưu nháp'}</Button>
+                title={validation.ok ? 'R7: lưu cấu hình + TỰ ĐỘNG train & ÁP DỤNG NGAY vào runtime thật (bản active mới + cờ bật)' : 'Sửa lỗi validation trước khi lưu'}
+              ><Save className="mr-1 h-3 w-3" /> {savingDraft ? 'Đang lưu & áp dụng…' : 'Lưu & áp dụng'}</Button>
               <Button
                 size="sm" variant="outline" onClick={restoreDefault}
                 className="min-h-[44px] md:min-h-[32px] border-stone-700 px-2 text-[10px] text-stone-300"

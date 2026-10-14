@@ -7,8 +7,17 @@
  * sau agent run ở src/lib/agent-goal-loop.ts) — KHÔNG tự train trong
  * request path của runtime (đúng kỷ luật blueprint §4.2).
  *
- * Body: { brain: 'calibration_v3' | 'surrogate', inputMode? } (BRAIN_
- * TRAINABLE_KEYS; inputMode mặc định theo từng brain — mode vector chờ Q2).
+ * Body: { brain: 'calibration_v3' | 'surrogate', inputMode?, force? }
+ * (BRAIN_TRAINABLE_KEYS; inputMode mặc định theo từng brain — mode vector chờ
+ * Q2).
+ *
+ * R7 — FORCE (chỉ thị user 2026-10-31 "không muốn bản nháp, muốn hiệu lực
+ * thật"): body.force=true → bản train trở thành ACTIVE NGAY cả khi không
+ * thắng đối chứng CV, VÀ cờ runtime của brain (calibration_v3 / replay_eval
+ * / runtime_policy) tự bật ON (setTuningValue — audit vào change log) để
+ * model thật sự VẬN HÀNH trong chuỗi runtime ngay sau train. Metrics CV vẫn
+ * tính + trả đầy đủ (minh bạch chất lượng); trainMeta.appliedBy='user-force'.
+ * Đường auto-retrain (eval runner / agent-goal-loop) KHÔNG truyền force.
  *
  * Hành vi (kế thừa nguyên vẹn pattern POST /api/eval/calibration):
  *   - brain lạ/chưa có pipeline → 400 (liệt kê các brain đã hỗ trợ)
@@ -97,9 +106,9 @@ async function loadDraftOverride(
 }
 
 export async function POST(request: Request) {
-  let body: { brain?: unknown; inputMode?: unknown; useDraft?: unknown } = {}
+  let body: { brain?: unknown; inputMode?: unknown; useDraft?: unknown; force?: unknown } = {}
   try {
-    body = (await request.json()) as { brain?: unknown; inputMode?: unknown; useDraft?: unknown }
+    body = (await request.json()) as { brain?: unknown; inputMode?: unknown; useDraft?: unknown; force?: unknown }
   } catch {
     return NextResponse.json({ error: 'Body phải là JSON { brain }' }, { status: 400 })
   }
@@ -115,6 +124,30 @@ export async function POST(request: Request) {
     )
   }
 
+  // R7 — force: hiệu chỉnh chủ đích (user/agents qua tab BRAIN) áp dụng THẬT
+  const force = body.force === true
+  // R7 — bật cờ runtime tương ứng khi force (để model active THẬT SỰ vận hành
+  // trong chuỗi runtime, không chỉ nằm DB). Fail-open: lỗi cờ → vẫn trả kết
+  // quả train + flagOn:false (client hiển thị hướng dẫn bật tay).
+  const flagKeyByBrain: Record<string, string> = {
+    calibration_v3: 'calibration_v3',
+    surrogate: 'replay_eval',
+    policy: 'runtime_policy',
+  }
+  const ensureFlagOn = async (): Promise<boolean> => {
+    if (!force) return false
+    const key = flagKeyByBrain[brain]
+    if (!key) return false
+    try {
+      const { setTuningValue } = await import('@/lib/learning/tuning-store')
+      await setTuningValue(key, 'on')
+      return true
+    } catch (err) {
+      console.warn(`[BrainTrain] bật cờ ${key} thất bại (fail-open — model active nhưng cờ giữ nguyên):`, err instanceof Error ? err.message : String(err))
+      return false
+    }
+  }
+
   // BRAIN-UX §9.3 — nút Huấn luyện của Training Console gửi useDraft=true
   // để train theo bản nháp (đã validate lại ở server — không tin client)
   const draftLoad = await loadDraftOverride(brain, body.useDraft === true)
@@ -127,7 +160,7 @@ export async function POST(request: Request) {
     if (brain === 'calibration_v3') {
       // ── Brain-A "V3" (BRAIN-P2) — CV so V2 đối chứng ──
       const inputMode = typeof body.inputMode === 'string' ? body.inputMode : V3_INPUT_MODE
-      const result = await trainBrainCalibrationV3(inputMode, override)
+      const result = await trainBrainCalibrationV3(inputMode, override, { force })
       if (!result.trained) {
         return NextResponse.json(
           {
@@ -139,12 +172,15 @@ export async function POST(request: Request) {
           { status: 400 },
         )
       }
+      const flagOn = result.active ? await ensureFlagOn() : false
       return NextResponse.json({
         trained: true,
         brain,
         version: result.version,
         active: result.active,
         improved: result.improved,
+        forced: result.forced || undefined,
+        flagOn: flagOn || undefined,
         cvBrier: result.cvBrier,
         cvBrierCi: result.cvBrierCi,
         brierV2: result.brierV2,
@@ -160,7 +196,7 @@ export async function POST(request: Request) {
     // ── Brain-C "Lệnh" policy head (BRAIN-P4) — CV mixture so π_Q ──
     if (brain === 'policy') {
       const inputMode = typeof body.inputMode === 'string' ? body.inputMode : POLICY_INPUT_MODE
-      const result = await trainBrainPolicy(inputMode, override)
+      const result = await trainBrainPolicy(inputMode, override, { force })
       if (!result.trained) {
         // Thiếu mẫu / thiếu Q / thiếu verdict / lệch lớp / mode chưa hỗ trợ /
         // trùng nhịp A7 — ngủ an toàn, không ghi DB
@@ -176,12 +212,15 @@ export async function POST(request: Request) {
           { status: 400 },
         )
       }
+      const flagOn = result.active ? await ensureFlagOn() : false
       return NextResponse.json({
         trained: true,
         brain,
         version: result.version,
         active: result.active,
         improved: result.improved,
+        forced: result.forced || undefined,
+        flagOn: flagOn || undefined,
         sampleSize: result.sampleSize,
         usable: result.usable,
         total: result.total,
@@ -204,7 +243,7 @@ export async function POST(request: Request) {
 
     // ── Brain-B "Vọng" surrogate (BRAIN-P3) — CV so baseline từng đầu ──
     const inputMode = typeof body.inputMode === 'string' ? body.inputMode : SURROGATE_INPUT_MODE
-    const result = await trainBrainSurrogate(inputMode, override)
+    const result = await trainBrainSurrogate(inputMode, override, { force })
     if (!result.trained) {
       // Thiếu mẫu / lệch lớp / mode chưa hỗ trợ / trùng nhịp A7 — ngủ an
       // toàn, không ghi DB
@@ -218,12 +257,15 @@ export async function POST(request: Request) {
         { status: 400 },
       )
     }
+    const flagOn = result.active ? await ensureFlagOn() : false
     return NextResponse.json({
       trained: true,
       brain,
       version: result.version,
       active: result.active,
       improved: result.improved,
+      forced: result.forced || undefined,
+      flagOn: flagOn || undefined,
       sampleSize: result.sampleSize,
       usable: result.usable,
       total: result.total,

@@ -525,8 +525,12 @@ export interface SurrogateTrainResult {
   /** true khi đã ghi BrainModel (kể cả bản thua CV — vết audit) */
   trained: boolean
   version: number | null
-  /** CHỈ true khi đầu success thắng baseline CV (ngặt) */
+  /** true khi đầu success thắng baseline CV (ngặt) HOẶC force (R7 — hiệu
+   * chỉnh chủ đích từ tab BRAIN áp dụng NGAY theo ý chỉ, audit
+   * trainMeta.appliedBy='user-force') */
   active: boolean
+  /** R7 — true khi bản active theo Ý CHỈ (force) chứ không vì thắng CV */
+  forced?: boolean
   sampleSize: number
   improved: boolean
   /** CV chi tiết từng đầu — null khi không train */
@@ -564,6 +568,7 @@ function standardizeRow(row: (number | null)[], means: number[], stds: number[])
 export async function trainBrainSurrogate(
   inputMode: string = SURROGATE_INPUT_MODE,
   override?: BrainDraftSpec,
+  opts?: { force?: boolean },
 ): Promise<SurrogateTrainResult> {
   if (!acquireTrainLock('surrogate')) {
     return {
@@ -580,7 +585,7 @@ export async function trainBrainSurrogate(
   trainProgressStart('surrogate', null)
   const t0 = Date.now()
   try {
-    const result = await trainBrainSurrogateLocked(inputMode, override)
+    const result = await trainBrainSurrogateLocked(inputMode, override, opts)
     observeBrainTrain('surrogate', 'end', {
       inputMode, useDraft: override != null, durationMs: Date.now() - t0, result,
     })
@@ -609,6 +614,7 @@ export async function trainBrainSurrogate(
 async function trainBrainSurrogateLocked(
   inputMode: string,
   override?: BrainDraftSpec,
+  opts?: { force?: boolean },
 ): Promise<SurrogateTrainResult> {
   const rows = await db.agentRunRecord.findMany({
     select: {
@@ -700,7 +706,10 @@ async function trainBrainSurrogateLocked(
   // Bất biến A1: tắt active cũ TRƯỚC khi ghi bản active mới (không
   // $transaction BUG2-119; gãy giữa chừng → không còn active → replay rơi
   // nhánh đo lường thuần — hướng an toàn)
-  if (cv.improved) {
+  // R7: force → active theo Ý CHỈ chủ nhân (appliedBy audit trong trainMeta).
+  const force = opts?.force === true
+  const willActivate = cv.improved || force
+  if (willActivate) {
     await db.brainModel.updateMany({
       where: { brain: 'surrogate', active: true },
       data: { active: false },
@@ -732,6 +741,8 @@ async function trainBrainSurrogateLocked(
     cvScoreCiHigh: round5(cv.success.cvBrierCiHi),
     brierBaseline: round5(cv.success.brierBaseline),
     improved: cv.improved,
+    // R7 — phân biệt bản active vì THẮNG CV vs theo Ý CHỈ force
+    appliedBy: willActivate ? (cv.improved ? 'cv-win' : 'user-force') : 'cv-lose',
     heads: {
       success: {
         cvBrier: round5(cv.success.cvBrier),
@@ -832,7 +843,7 @@ async function trainBrainSurrogateLocked(
       specJson: JSON.stringify(specDoc),
       weightsJson: JSON.stringify(weightsDoc),
       trainMetaJson: JSON.stringify(trainMeta),
-      active: cv.improved,
+      active: willActivate,
     },
   })
 
@@ -843,7 +854,8 @@ async function trainBrainSurrogateLocked(
   return {
     trained: true,
     version,
-    active: cv.improved,
+    active: willActivate,
+    forced: force && !cv.improved,
     sampleSize: ySuccess.length,
     improved: cv.improved,
     heads: cv,
