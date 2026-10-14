@@ -36,6 +36,8 @@
 
 import type { GoalLoopJob } from '@prisma/client'
 import { db } from '@/lib/db'
+// R12 (P-NEW-2 lượt 5): user-chat priority flag — job durable chạy thay user
+import { markUserChatRunActive, markUserChatRunDone } from '@/lib/execution/user-run-priority'
 // ROUND-28 W1 — TYPE-ONLY import (erased lúc build): giá trị runGoalDrivenLoop
 // chuyển sang DYNAMIC IMPORT tại chỗ chạy job (xem bước 7) — singleton worker
 // sống sót qua HMR (globalThis pattern dòng dưới) giữ binding tĩnh MÃI MÃI
@@ -834,25 +836,34 @@ class GoalLoopWorker {
           console.warn(`[GoalLoopWorker] ⚠️ job ${job.id}: STALE CODE (mtime) — ${staleFamily.length} file của goal-loop family sửa SAU lúc process boot (dynamic import vẫn resolve module graph CŨ — round-28): ${staleFamily.join(', ')}. RESTART app (pm2 restart theopusflashlite) để nạp code mới.`)
         }
       } catch { /* fail-open — guard không được phép làm hỏng claim */ }
-      const result: GoalLoopResult = await runGoalDrivenLoop({
-        systemPrompt: jobInput.systemPrompt,
-        userMessage: jobInput.userMessage,
-        chatHistory: jobInput.chatHistory,
-        agentProvider: jobInput.agentProvider,
-        agentModel: jobInput.agentModel,
-        agentId: jobInput.agentId,
-        agentName: jobInput.agentName,
-        agentTemperature: jobInput.agentTemperature,
-        agentMaxTokens: jobInput.agentMaxTokens,
-        agentTools: jobInput.agentTools ?? [],
-        agentSessionId: jobInput.agentSessionId ?? null,
-        durable: {
-          resumeState,
-          onCheckpoint,
-          onSignal,
-          cancelCheck,
-        } satisfies GoalLoopDurableHooks,
-      })
+      // R12 (P-NEW-2 lượt 5): job durable chạy THAY user (user vẫn chờ kết quả qua
+      // polling) — đánh dấu user-chat priority để SelfDirection orchestration tự
+      // nhường chỗ, đối xứng đường inline trong chat route.
+      markUserChatRunActive()
+      let result: GoalLoopResult
+      try {
+        result = await runGoalDrivenLoop({
+          systemPrompt: jobInput.systemPrompt,
+          userMessage: jobInput.userMessage,
+          chatHistory: jobInput.chatHistory,
+          agentProvider: jobInput.agentProvider,
+          agentModel: jobInput.agentModel,
+          agentId: jobInput.agentId,
+          agentName: jobInput.agentName,
+          agentTemperature: jobInput.agentTemperature,
+          agentMaxTokens: jobInput.agentMaxTokens,
+          agentTools: jobInput.agentTools ?? [],
+          agentSessionId: jobInput.agentSessionId ?? null,
+          durable: {
+            resumeState,
+            onCheckpoint,
+            onSignal,
+            cancelCheck,
+          } satisfies GoalLoopDurableHooks,
+        })
+      } finally {
+        markUserChatRunDone()
+      }
 
       // 8. Final checkpoint — buộc ghi KHÔNG throttle (ranh giới cuối trước
       //    return của loop, chỉ còn giá trị observability sau khi completed)

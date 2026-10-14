@@ -106,6 +106,9 @@ import { Prisma } from '@prisma/client'
 // xuất / đánh giá bước / viết báo cáo hoàn thiện. (opus-agent chỉ phụ thuộc
 // @/lib/db — không có vòng import; KHÔNG sửa src/lib/opus/**.)
 import { OPUS_AGENT_NAME, OPUS_INSTRUCTION } from '@/lib/opus/opus-agent'
+// R12 (fix P-NEW-2 lượt quan sát 5): user-chat priority — mỗi bước orchestration
+// tự nhường chỗ khi request chat của user đang chờ phản hồi.
+import { waitForUserChatPriority } from '@/lib/execution/user-run-priority'
 
 // ==================== TYPES ====================
 
@@ -2468,6 +2471,14 @@ async function runOrchestrationInner(proposalId: string, opts?: { dryRun?: boole
       where: { id: stepRow.id },
       data: { status: 'in_progress', startedAt: new Date(), attempts: { increment: 1 } },
     })
+
+    // ━━ R12 (fix P-NEW-2 lượt quan sát 5): USER-CHAT PRIORITY GATE ━━
+    // Trước khi bắt đầu mỗi bước: nhường chỗ nếu request chat của user đang chờ
+    // phản hồi (bằng chứng lượt 5 §8.3: escalation 6 bước chạy song song run chat
+    // → MemWatchdog self-exit, PM2 restart 9 lần/2.5h). Gate là ƯU TIÊN không
+    // khóa cứng — hết SD_USER_RUN_MAX_WAIT_MS thì chạy tiếp (semaphore F7 vẫn
+    // serialize OC-CLI spawn). Log [SD-Priority] minh bạch từng lần chờ.
+    await waitForUserChatPriority(`Bước ${i + 1}/${stepsQueue.length} "${stepDef.title}" [${stepDef.assignee}]`)
 
     // ── CI-6 B5: bước CUỐI code-workflow → pipeline verify_and_push THẬT ──
     // Thành công của bước = pipeline PASS (đánh giá deterministic — không cần

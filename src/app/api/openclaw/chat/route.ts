@@ -24,6 +24,9 @@ import { db } from '@/lib/db'
 import { addTokensUsed, addTokensUsedByAgent, callLLMForAgent } from '@/lib/llm'
 // R11 (F4 — Giáo thức Thầy truyền lại, Bước 1 TRIAGE): phân loại yêu cầu tại cửa API
 import { classifyChatRequest } from '@/lib/execution/triage'
+// R12 (fix P-NEW-2 lượt 5): user-chat priority flag — SelfDirection orchestration
+// tự nhường chỗ khi request chat của user đang chờ phản hồi.
+import { markUserChatRunActive, markUserChatRunDone } from '@/lib/execution/user-run-priority'
 import { observeEvent } from '@/lib/observation/ledger'
 import { autoLearnFromAnswer, shouldAutoLearn } from '@/lib/auto-learn'
 import { recallMemories, extractMemoriesFromConversation, saveChatMessages, getUserProfile, ensureAgentMemoryCollection, decayMemories } from '@/lib/agent-memory'
@@ -1050,6 +1053,14 @@ export async function POST(request: NextRequest) {
         }
         const goalLoopUserMessage = directiveGuard.directive
 
+        // ━━ R12 (fix P-NEW-2 lượt 5) — USER-CHAT RUN PRIORITY: từ điểm này trở đi,
+        // request đang xử lý phần user chờ (triage/fast-path/goal-loop). Đánh dấu
+        // để SelfDirection orchestration tự nhường (waitForUserChatPriority) thay vì
+        // chạy song song đè bộ nhớ/OC-CLI (bằng chứng: escalation 6 bước chạy cùng lúc
+        // run chat → MemWatchdog self-exit 9 lần restart/2.5h). Clear ở finally của
+        // try outermost — phủ MỌI đường thoát (return/throw/fallback/mock).
+        markUserChatRunActive()
+
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         // R11 (F4 — GIÁO THỨC THẦY TRUYỀN LẠI, Bước 1 TRIAGE + FAST-PATH):
         // Bằng chứng cần fix (lượt quan sát 5): "1+1=?" mất 36s; "bạn là model
@@ -1859,5 +1870,10 @@ export async function POST(request: NextRequest) {
       { error: 'Invalid request body', details: err instanceof Error ? err.message : String(err) },
       { status: 400 }
     )
+  } finally {
+    // R12 (P-NEW-2): clear user-chat flag cho MỌI đường thoát của POST — return
+    // nhanh (fast-path), return cuối (inline/local-rag/mock), throw giữa chừng.
+    // No-op khi flag chưa từng set (request lỗi trước 1051) — an toàn tuyệt đối.
+    markUserChatRunDone()
   }
 }

@@ -3692,19 +3692,14 @@ export async function shell(args: {
   const cwdRes = resolveCwd({ requested: args.cwd, base: root, label: 'dev-tools.shell' })
   const cwd = cwdRes.cwd
   if (!cwdRes.ok) {
-    return {
-      success: false,
-      exit_code: -1,
-      stdout: '',
-      stderr:
-        `TỪ CHỐI cwd "${String(args.cwd)}" — ${cwdRes.message} ` +
-        `[reason=${cwdRes.reason}] Đã fallback về "${cwd}".`,
-      duration_ms: 0,
-      truncated: false,
-      cwd,
-      cwdRejected: true,
-      cwdReason: cwdRes.reason,
-    }
+    // FIX R12 (2026-10-14 — gate protected-paths D3/D6 FAIL trước đó): đúng
+    // hợp đồng resolve-cwd ("a bad cwd is downgraded to a safe fallback + a
+    // structured log"), cwd xấu/thiếu HẠ CẤP về fallback an toàn và VẪN CHẠY
+    // lệnh — bản trước trả fail exit_code=-1 làm chết tool shell cho mọi caller
+    // KHÔNG truyền cwd (D6: shell "echo guard-ok" thất bại reason=EMPTY dù
+    // fallback đã có sẵn). Thông tin từ chối giữ lại trong receipt (cwdRejected/
+    // cwdReason) + log [CWD-GUARD] cấu trúc.
+    console.warn(`[CWD-GUARD] dev-tools.shell: từ chối cwd=${JSON.stringify(args.cwd ?? null)} [reason=${cwdRes.reason}] — hạ cấp về fallback "${cwd}" (lệnh vẫn chạy)`)
   }
 
   // INFRA GUARD (Task 24, 2026-10-21; cập nhật chính sách 2026-10-27 phiên 4):

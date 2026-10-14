@@ -57,6 +57,11 @@
 import { callLLMForAgent, type LLMTool } from '@/lib/llm'
 import { executeTool, buildCompactToolSchemasSection, resolveToolAlias, getToolDefinitions, getAllBuiltinToolNames } from '@/lib/code-team/tool-executor'
 import { parseToolCallsFromOutput, formatMessagesForLLM, detectBrokenToolCallHint, countProviderGarbleMarkers, tryParseLooseJson, salvageNativeToolArgs, maskToolCallText } from '@/lib/tool-calls'
+// R12 (triển khai fix lượt quan sát 5 — 2026-10-14): INFRA-DEBT DEMOTION —
+// tách side issues loại hạ tầng (guard/provider/DB/watchdog) khỏi debt cycle:
+// nợ infra ghi Todo follow-up, debt cycle chỉ chạy cho nợ agent TỰ gây ra
+// (Giáo thức Thầy #4 — "nợ infra không giao cho agent trả trong phiên chat").
+import { splitSideIssuesByInfra, INFRA_DEBT_DEMOTE_ENABLED } from '@/lib/execution/debt-demote'
 // TASK 43 — Agent Event Bus: emit sự kiện vòng đời run lên bus hợp nhất
 // (GET /api/agent-events) — fail-open tuyệt đối bên trong emit (try/catch).
 import { emitAgentEvent } from '@/lib/agent-event-bus'
@@ -228,14 +233,15 @@ const MAX_CYCLES = intEnv('GOAL_LOOP_MAX_CYCLES', 4)
  * trong thời gian dài + NVIDIA NIM key không giới hạn token → làm việc càng
  * nhiều càng tốt. Khi hết trần MAX_CYCLES mà mục tiêu CHƯA hoàn thành triệt
  * để (verdict chưa complete, hoặc còn lỗi phát sinh liên quan chưa xử lý),
- * loop TÁI LẬP thêm 1 cửa sổ MAX_CYCLES chu kỳ mới — tối đa 100 cửa sổ
- * (MAX_CYCLES=4 → tổng tối đa 4×101=404 chu kỳ; 0 = KHÔNG tái lập).
- * An toàn: tái lập CHỈ xảy ra khi còn budget + chu kỳ vừa rồi CÓ tiến triển
- * (no-progress / stall-brake vẫn cắt như thường trước điểm này) + user chưa
- * cancel → không đẻ vòng lặp vô hạn. Phanh chính: stall-brake 3 chu kỳ
- * không tool call thành công + time budget 12h + nút Dừng của user.
+ * loop TÁI LẬP thêm 1 cửa sổ MAX_CYCLES chu kỳ mới.
+ * R12 (2026-10-14 — triển khai fix lượt quan sát 5): default 100 → 10.
+ * Bằng chứng: 100 cửa sổ × 12 chu kỳ safe-cap = tối đa 1212 chu kỳ/run là
+ * nguồn "cơ chế luẩn quẩn" (1 câu hỏi Brain đốt 646K-751K tokens × 3 run
+ * chết). 10 cửa sổ × 12 = tối đa 132 chu kỳ; phanh chất lượng giữ nguyên
+ * (tái lập chỉ mở khi chu kỳ có hành động thành công MỚI + evaluator không
+ * bế tắc) — an toàn không đổi: budget + no-progress/stall-brake + cancel.
  */
-const MAX_CYCLE_RENEWALS = Math.max(0, intEnv('GOAL_LOOP_MAX_CYCLE_RENEWALS', 100))
+const MAX_CYCLE_RENEWALS = Math.max(0, intEnv('GOAL_LOOP_MAX_CYCLE_RENEWALS', 10))
 /**
  * TASK 22 (user directive 2026-09-30 #1) — số chu kỳ debt tối đa / run nâng
  * 3 → 100 (đồng bộ với trần tái lập 100). Với GOAL_LOOP_MAX_CYCLES=0 (∞ —
@@ -414,6 +420,21 @@ const VERIFY_RESULT_CHARS = 6000
  */
 const STALL_CYCLE_LIMIT = intEnvPositive('GOAL_LOOP_STALL_CYCLES', 3)
 const NO_PROGRESS_GRACE = intEnvPositive('GOAL_LOOP_NO_PROGRESS_GRACE', 2)
+
+// ==================== R12 — BOOT LOG PHANH HIỆU DỤNG (2026-10-14) ====================
+// Bài học F10/R11: fix hạ default 100→10 trong code nhưng .env vẫn giữ 100 →
+// giá trị chạy thật KHÔNG BAO GIỜ đổi và không ai nhìn thấy. Từ R12: in 1 dòng
+// lúc module load liệt kê TOÀN BỘ phanh hiệu dụng (env + default hòa trộn) —
+// người vận hành đối chiếu dev.log là biết cấu hình thật đang cấm chu kỳ
+// luẩn quẩn ở đâu. (Đặt SAU mọi const phanh để tránh TDZ.)
+console.log(
+  `[GoalLoop] Phanh hiệu dụng (R12): cycles=${EFFECTIVE_MAX_CYCLES === 0 ? '∞' : EFFECTIVE_MAX_CYCLES}` +
+  ` iter/cycle=${EFFECTIVE_ITER_PER_CYCLE === 0 ? '∞' : EFFECTIVE_ITER_PER_CYCLE}` +
+  ` debtCycles=${MAX_DEBT_CYCLES} (F10 từng bị .env=100 đè mất — R12 sửa .env)` +
+  ` renewals=${MAX_CYCLE_RENEWALS} (tối đa ~${EFFECTIVE_MAX_CYCLES === 0 ? '∞' : EFFECTIVE_MAX_CYCLES * (MAX_CYCLE_RENEWALS + 1)} chu kỳ)` +
+  ` stallCycles=${STALL_CYCLE_LIMIT} noProgressGrace=${NO_PROGRESS_GRACE}` +
+  ` infraDemote=${INFRA_DEBT_DEMOTE_ENABLED ? 'on' : 'OFF (kill-switch)'} — thời gian=${Math.round(TIME_BUDGET_MS / 60000)}phút tokens=${TOKEN_BUDGET === 0 ? '∞' : TOKEN_BUDGET}`
+)
 /**
  * r63 (F1) — VERDICT-STAGNATION STOP: số chu kỳ LIÊN TIẾP evaluator TỰ KHAI
  * bế tắc (rootCause chứa lời khai rõ ràng: "kẹt" / "vòng lặp" / "bế tắc"…)
@@ -3034,6 +3055,10 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
    * lastVerdict.sideIssues nhưng evaluateCompletion không nhận debtIssues →
    * rule 10 DEBT CHECK không kích hoạt → nợ bị xóa chìm nếu phán complete). */
   let pendingDebtIssues: string[] = resumeState?.pendingDebtIssues ?? []
+  /** R12 — các side issue loại infra ĐÃ ghi Todo follow-up trong run này
+   * (chống ghi đúp khi nhiều đợt debt liên tiếp đều relist cùng lỗi infra:
+   * arbiter có thể liệt kê lại infra issue từ transcript — mỗi lỗi chỉ 1 follow-up). */
+  const recordedInfraIssues = new Set<string>()
   // CI-5 (Task 14-b) — RESUME: counters khôi phục từ checkpoint (MANG TIẾP —
   // tokensUsed KHÔNG reset: trung thực tổng chi phí của run; budget thời gian
   // vẫn tính từ startedAt của lần chạy này — đúng chủ đích).
@@ -3630,7 +3655,11 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
       // side issues nghiêm trọng → chu kỳ này là CHU KỲ DEBT: mục tiêu chính đã
       // xong, việc duy nhất là xử lý các lỗi phát sinh (side issues).
       if (debtMode) {
-        const debtList = lastVerdict.sideIssues.map(s => `- ${s}`).join('\n')
+        // R12: dùng pendingDebtIssues (đã tách infra ra — debt cycle chỉ xử lý nợ
+        // agent). Fallback lastVerdict.sideIssues cho đường resume (đã có sẵn
+        // từ chu kỳ trước khi split chưa tồn tại).
+        const debtIssuesForDirective = pendingDebtIssues.length > 0 ? pendingDebtIssues : lastVerdict.sideIssues
+        const debtList = debtIssuesForDirective.map(s => `- ${s}`).join('\n')
         // 2026-10-20 TASK 20 — debt cycle cũng là CLI spawn mới: kèm TODO block
         // để agent thấy todo còn mở của run (nhất quán với continuation directive)
         const debtTodosBlock = await buildRunTodosBlock(agentSessionId, runId)
@@ -3648,8 +3677,8 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           messages.push({ role: 'user', content: `📡 KẾT QUẢ ĐIỀU PHỐI TỰ ĐỘNG (chu kỳ trước — ĐỌC KỸ trước khi xử lý nợ):\n${advisoryBlock}` })
         }
         messages.push({ role: 'user', content: debtDirective })
-        evidence.push({ cycle, kind: 'directive', text: `DEBT CYCLE ${cycle}: xử lý ${lastVerdict.sideIssues.length} lỗi phát sinh (mục tiêu chính đã xong)` })
-        recordAgentThought(agentSessionId, `📍 Chu kỳ ${cycle} — GĐ0 QUAN SÁT & PHÂN TÍCH (CHU KỲ DEBT — quay lại GĐ0): trọng tài tái khởi động chu kỳ để xử lý ${lastVerdict.sideIssues.length} lỗi phát sinh (mục tiêu chính đã hoàn thành) — TOÀN BỘ nợ kỹ thuật ƯU TIÊN triển khai TRƯỚC, sau đó mới tới việc khác`, totalIterations)
+        evidence.push({ cycle, kind: 'directive', text: `DEBT CYCLE ${cycle}: xử lý ${debtIssuesForDirective.length} lỗi phát sinh (mục tiêu chính đã xong; R12 đã tách infra ra follow-up)` })
+        recordAgentThought(agentSessionId, `📍 Chu kỳ ${cycle} — GĐ0 QUAN SÁT & PHÂN TÍCH (CHU KỲ DEBT — quay lại GĐ0): trọng tài tái khởi động chu kỳ để xử lý ${debtIssuesForDirective.length} lỗi phát sinh (mục tiêu chính đã hoàn thành) — TOÀN BỘ nợ kỹ thuật ƯU TIÊN triển khai TRƯỚC, sau đó mới tới việc khác`, totalIterations)
         debtMode = false // directive đã inject — chu kỳ debt chạy như chu kỳ thường (verdict cuối cùng quyết định kết thúc)
       } else {
         // ===== FIX 2026-09-14 #8 — MID-RUN SIMILAR-ERROR RECALL =====
@@ -5302,12 +5331,24 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
     // lượt/budget (hoặc STAGNANT GUARD ép ghi nợ) bị phán sai "hoàn thành sạch,
     // nợ tồn đọng 0" dù nợ vừa tạo. Khai báo NGOÀI khối if để GĐ3 marker đọc được.
     let justRecordedFollowUps = 0
+    // ━━ R12 (2026-10-14 — triển khai fix lượt quan sát 5 P1-2): INFRA-DEBT
+    // DEMOTION — tách side issues làm 2 loại, khai báo NGOÀI khối if (GĐ3 marker
+    // + debt directive chu kỳ kế cùng dùng). Nợ hạ tầng (guard chặn oan, provider
+    // 410/429, SQLite contention, watchdog...) KHÔNG giao agent trả trong run này
+    // (bằng chứng lượt 5: DEBT CYCLE đợt 1/100 cho tác vụ "trả lời OK" — vòng lặp
+    // tự duy trì; Giáo thức Thầy #4 "nợ infra không giao cho agent trả trong phiên
+    // chat"). Debt cycle giờ chỉ chạy cho nợ do CHÍNH CÔNG VIỆC của run sinh ra.
+    // Kill-switch GOAL_LOOP_INFRA_DEBT_DEMOTE=0 → hành vi cũ (mọi issue là nợ agent).
+    const issueSplit = splitSideIssuesByInfra(verdict.sideIssues)
+    const debtEligibleIssues = issueSplit.agent
     if (verdict.complete && verdict.sideIssues.length > 0 && verdict.debtDecision !== 'none') {
       // TASK 21 — RENEW-FOR-DEBT: debt cycle cần chạy mà trần chu kỳ hiện hành
       // đã chặn → tái lập cửa sổ chu kỳ mới (nếu còn lượt + budget) thay vì để
       // rơi vào nhánh ghi nợ + kết thúc.
+      // (R12: issueSplit/debtEligibleIssues khai báo ở trên khối này.)
       if (
         verdict.debtDecision === 'continue' &&
+        debtEligibleIssues.length > 0 && // R12: toàn-infra → KHÔNG tái lập chỉ để chạy debt vô ích
         EFFECTIVE_MAX_CYCLES !== 0 &&
         cycle >= effectiveMaxCycles &&
         cycleRenewals < MAX_CYCLE_RENEWALS &&
@@ -5320,12 +5361,13 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       ) {
         cycleRenewals++
         effectiveMaxCycles += EFFECTIVE_MAX_CYCLES
-        recordAgentThought(agentSessionId, `🔁 TÁI LẬP CỬA SỔ CHU KỲ (lần ${cycleRenewals}/${MAX_CYCLE_RENEWALS}): trọng tài muốn chạy debt cycle cho ${verdict.sideIssues.length} lỗi phát sinh nhưng hết trần chu kỳ → mở thêm ${EFFECTIVE_MAX_CYCLES} chu kỳ để giải quyết tiếp thay vì kết thúc`, totalIterations)
-        evidence.push({ cycle, kind: 'directive', text: `TÁI LẬP cửa sổ chu kỳ (lần ${cycleRenewals}) cho debt cycle — ${verdict.sideIssues.length} side issue(s) chưa xử lý` })
+        recordAgentThought(agentSessionId, `🔁 TÁI LẬP CỬA SỔ CHU KỲ (lần ${cycleRenewals}/${MAX_CYCLE_RENEWALS}): trọng tài muốn chạy debt cycle cho ${debtEligibleIssues.length} lỗi phát sinh (đã tách ${issueSplit.infra.length} lỗi infra ra follow-up) nhưng hết trần chu kỳ → mở thêm ${EFFECTIVE_MAX_CYCLES} chu kỳ để giải quyết tiếp thay vì kết thúc`, totalIterations)
+        evidence.push({ cycle, kind: 'directive', text: `TÁI LẬP cửa sổ chu kỳ (lần ${cycleRenewals}) cho debt cycle — ${debtEligibleIssues.length} nợ agent chưa xử lý${issueSplit.infra.length ? ` (+${issueSplit.infra.length} infra đã ghi follow-up)` : ''}` })
         console.log(`[GoalLoop] ${agentName} RENEWAL (debt): chu kỳ ${cycle} chạm trần → mở thêm ${EFFECTIVE_MAX_CYCLES} chu kỳ (renewal ${cycleRenewals}/${MAX_CYCLE_RENEWALS}, effectiveMax=${effectiveMaxCycles})`)
       }
       const canDebtCycle =
         verdict.debtDecision === 'continue' &&
+        debtEligibleIssues.length > 0 && // R12: debt cycle chỉ cho nợ agent; toàn-infra → record
         debtCyclesRun < MAX_DEBT_CYCLES &&
         (EFFECTIVE_MAX_CYCLES === 0 || cycle < effectiveMaxCycles) &&
         timeLeft() > 0 &&
@@ -5340,22 +5382,58 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       // trước → stagnation++. 3 đợt liên tiếp không tiến triển → ép GHI NỢ (record)
       // thay vì tiếp tục debt — lỗi đang lặp là loại ngoài quyền agent (guard chặn /
       // chờ phê duyệt) hoặc evaluator bế tắc, chạy tiếp chỉ đốt token vô ích.
-      const debtFingerprint = verdict.sideIssues.map(s => s.toLowerCase().trim().slice(0, 60)).sort().join('||')
+      const debtFingerprint = debtEligibleIssues.map(s => s.toLowerCase().trim().slice(0, 60)).sort().join('||')
       if (debtFingerprint === lastDebtFingerprint) stagnantDebtCount++
       else { stagnantDebtCount = 1; lastDebtFingerprint = debtFingerprint }
       if (canDebtCycle && stagnantDebtCount >= 3) {
-        recordAgentThought(agentSessionId, `🛑 STAGNANT DEBT GUARD: ${stagnantDebtCount} đợt debt LIÊN TIẾP với cùng tập ${verdict.sideIssues.length} lỗi (không tiến triển) → ép GHI NỢ Todo follow-up thay vì debt cycle ${debtCyclesRun + 1} (lỗi ngoài quyền agent hoặc evaluator bế tắc — không đốt thêm chu kỳ)`, totalIterations)
+        recordAgentThought(agentSessionId, `🛑 STAGNANT DEBT GUARD: ${stagnantDebtCount} đợt debt LIÊN TIẾP với cùng tập ${debtEligibleIssues.length} lỗi (không tiến triển) → ép GHI NỢ Todo follow-up thay vì debt cycle ${debtCyclesRun + 1} (lỗi ngoài quyền agent hoặc evaluator bế tắc — không đốt thêm chu kỳ)`, totalIterations)
         console.log(`[GoalLoop] ${agentName} STAGNANT DEBT: ${stagnantDebtCount} đợt liên tiếp cùng fingerprint (${debtFingerprint.slice(0, 80)}...) → ép record thay vì debt cycle`)
       }
       if (canDebtCycle && stagnantDebtCount < 3) {
         debtCyclesRun++
         debtMode = true
-        // REVIEW 9-fix (2026-08-30) #9 — checkpoint lại các side issues gốc: nếu
+        // ━━ R12 — INFRA-DEBT DEMOTION (trước khi checkpoint): các side issue loại
+        // hạ tầng ghi Todo follow-up NGAY trong đợt này — không đợi kết run, không
+        // đưa vào debt cycle (agent không có quyền hạn/công cụ để trả loại nợ này;
+        // bằng chứng lượt 5 §3.1 P1-2: nợ infra bị tính là việc của agent → vòng
+        // lặp tự duy trì).
+        if (issueSplit.infra.length > 0) {
+          // R12 dedupe: mỗi infra issue chỉ 1 follow-up cho cả run (arbiter có thể
+          // relist từ transcript ở các đợt debt sau — không ghi đúp Todo).
+          const newInfraIssues = issueSplit.infra.filter(i => !recordedInfraIssues.has(i))
+          if (newInfraIssues.length > 0) {
+            for (const i of newInfraIssues) recordedInfraIssues.add(i)
+            console.log(`[GoalLoop] ${agentName} INFRA-DEBT DEMOTION: ${newInfraIssues.length}/${verdict.sideIssues.length} side issue(s) là lỗi hạ tầng → ghi Todo follow-up ngay; debt cycle (đợt ${debtCyclesRun}/${MAX_DEBT_CYCLES}) chỉ chạy cho ${debtEligibleIssues.length} nợ agent`)
+            evidence.push({ cycle, kind: 'directive', text: `INFRA-DEBT DEMOTION (R12): ${newInfraIssues.length} lỗi hạ tầng → Todo follow-up (người quản trị/run kế xử lý) — KHÔNG vào debt cycle` })
+            if (agentSessionId) {
+              try {
+                const { db } = await import('@/lib/db')
+                for (const issue of newInfraIssues) {
+                  await db.todo.create({
+                    data: {
+                      sessionId: agentSessionId,
+                      content: `🔁 Follow-up INFRA (R12 demotion — run ${runId?.slice(0, 18) ?? '-'}): ${issue}`.slice(0, 480),
+                      status: 'pending',
+                      priority: 'medium',
+                      ...(runId ? { runId } : {}),
+                      taskMetaJson: JSON.stringify({ source: 'arbiter_side_issue', cycle, debtDecision: verdict.debtDecision, infraDemoted: true }),
+                    },
+                  }).catch(() => { /* fail-open từng item */ })
+                }
+                unresolvedDebt = unresolvedDebt.length > 0
+                  ? [...new Set([...unresolvedDebt, ...newInfraIssues])]
+                  : newInfraIssues
+              } catch { /* fail-open — ghi infra follow-up không được làm hỏng debt path */ }
+            }
+          }
+        }
+        // REVIEW 9-fix (2026-08-30) #9 — checkpoint lại các nợ AGENT gốc: nếu
         // debt cycle thất bại/chạy dở, chúng vẫn được ghi nợ ở cuối run.
-        pendingDebtIssues = verdict.sideIssues
-        recordAgentThought(agentSessionId, `⚖️ Trọng tài: mục tiêu ĐẠT nhưng ${verdict.sideIssues.length} lỗi phát sinh còn tồn tại → TÁI KHỞI ĐỘNG chu kỳ debt (đợt ${debtCyclesRun}/${MAX_DEBT_CYCLES}, chu kỳ ${cycle + 1}) để xử lý: ${verdict.sideIssues.slice(0, 2).join('; ').slice(0, 200)}`, totalIterations)
-        console.log(`[GoalLoop] ${agentName} DEBT CYCLE (đợt ${debtCyclesRun}/${MAX_DEBT_CYCLES}): complete=true nhưng trọng tài quyết định 'continue' — chu kỳ ${cycle + 1} xử lý ${verdict.sideIssues.length} side issue(s)`)
-        evidence.push({ cycle, kind: 'directive', text: `Trọng tài: hoàn thành + debtDecision='continue' → chu kỳ debt (đợt ${debtCyclesRun}) cho ${verdict.sideIssues.length} lỗi phát sinh` })
+        // (R12: chỉ nợ agent — nợ infra đã ghi follow-up ở trên.)
+        pendingDebtIssues = debtEligibleIssues
+        recordAgentThought(agentSessionId, `⚖️ Trọng tài: mục tiêu ĐẠT nhưng ${debtEligibleIssues.length} lỗi phát sinh còn tồn tại → TÁI KHỞI ĐỘNG chu kỳ debt (đợt ${debtCyclesRun}/${MAX_DEBT_CYCLES}, chu kỳ ${cycle + 1}) để xử lý: ${debtEligibleIssues.slice(0, 2).join('; ').slice(0, 200)}${issueSplit.infra.length ? ` (riêng ${issueSplit.infra.length} lỗi hạ tầng đã ghi follow-up — không phải việc agent)` : ''}`, totalIterations)
+        console.log(`[GoalLoop] ${agentName} DEBT CYCLE (đợt ${debtCyclesRun}/${MAX_DEBT_CYCLES}): complete=true nhưng trọng tài quyết định 'continue' — chu kỳ ${cycle + 1} xử lý ${debtEligibleIssues.length} nợ agent${issueSplit.infra.length ? ` (bỏ ${issueSplit.infra.length} infra đã ghi follow-up)` : ''}`)
+        evidence.push({ cycle, kind: 'directive', text: `Trọng tài: hoàn thành + debtDecision='continue' → chu kỳ debt (đợt ${debtCyclesRun}) cho ${debtEligibleIssues.length} nợ agent` })
         // KHÔNG break — để outerLoop chạy chu kỳ debt (directive debt đã sẵn sàng)
       } else {
         // Hoàn thành + GHI NỢ kỹ thuật: mỗi side issue 1 Todo follow-up —
@@ -5448,7 +5526,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           : ' — nợ ĐÃ CÓ THỂ xử lý ở chu kỳ kế (đủ tool/đường tự phục vụ)'
         : ''
       const nextDecision = debtMode
-        ? `QUAY LẠI GĐ0 ở chu kỳ ${cycle + 1} (CHU KỲ DEBT) — TOÀN BỘ ${verdict.sideIssues.length} nợ kỹ thuật ƯU TIÊN triển khai TRƯỚC, sau đó mới tới phần việc khác (trọng tài xác nhận nợ SẴN SÀNG xử lý)${readinessNote}`
+        ? `QUAY LẠI GĐ0 ở chu kỳ ${cycle + 1} (CHU KỲ DEBT) — ${issueSplit.infra.length > 0 ? `${debtEligibleIssues.length} nợ agent ƯU TIÊN triển khai TRƯỚC (R12 đã tách ${issueSplit.infra.length} lỗi hạ tầng ra Todo follow-up — không phải việc agent)` : `TOÀN BỘ ${debtEligibleIssues.length} nợ kỹ thuật ƯU TIÊN triển khai TRƯỚC`}, sau đó mới tới phần việc khác (trọng tài xác nhận nợ SẴN SÀNG xử lý)${readinessNote}`
         : verdict.complete
           ? justRecordedFollowUps > 0
             ? `KHÔNG chạy tiếp trong run này — ${justRecordedFollowUps} nợ kỹ thuật đã GHI Todo follow-up${readinessNote}, sẽ được ưu tiên xử lý ở RUN KẾ TIẾP của phiên (đầu run)`
@@ -5456,7 +5534,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           : `QUAY LẠI GĐ0 ở chu kỳ ${cycle + 1} — khắc phục phần thiếu: ${(verdict.missing[0] || verdict.rootCause || '').slice(0, 120)}`
       recordAgentThought(
         agentSessionId,
-        `📍 Chu kỳ ${cycle} — GĐ3 KIỂM ĐỊNH & BÁO CÁO: trọng tài độc lập phán ${verdict.complete ? 'MỤC TIÊU ĐẠT' : 'CHƯA ĐẠT'} (verified=${verdict.verified ? 'có' : 'chưa'} · nợ kỹ thuật tồn đọng: ${debtMode ? verdict.sideIssues.length : justRecordedFollowUps} mục) → quyết định chu kỳ tiếp: ${nextDecision}`,
+        `📍 Chu kỳ ${cycle} — GĐ3 KIỂM ĐỊNH & BÁO CÁO: trọng tài độc lập phán ${verdict.complete ? 'MỤC TIÊU ĐẠT' : 'CHƯA ĐẠT'} (verified=${verdict.verified ? 'có' : 'chưa'} · nợ kỹ thuật tồn đọng: ${debtMode ? debtEligibleIssues.length : justRecordedFollowUps}${debtMode && issueSplit.infra.length > 0 ? ` (+${issueSplit.infra.length} infra đã ghi follow-up)` : ''} mục) → quyết định chu kỳ tiếp: ${nextDecision}`,
         totalIterations,
       )
     }
