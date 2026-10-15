@@ -178,6 +178,17 @@ export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string; 
       label: 'DeepSeek v4.1 Flash (NVIDIA NIM — ⚡ nhanh ~2s/call; rescue tier của toàn chuỗi)',
       caps: { coding: true, reasoning: true, agentic: true },
     },
+    // R17 (2026-10-15) — deepseek-v4.1-flash treo hoàn toàn 15/10 (probe
+    // 3/3 abort 30s — lỗi phía NVIDIA); nemotron-3-ultra-550b là lõi chat NIM
+    // duy nhất còn sống (200/2-3.5s + tool_calls chuẩn OpenAI format). Trước
+    // đây chỉ là lõi extraction — giờ nâng thành MODEL AGENT CHÍNH (17/17
+    // AgentProfile R17) + NIM rescue mặc định. deepseek-flash sống lại → đổi
+    // lại qua dropdown được.
+    {
+      id: 'nvidia/nemotron-3-ultra-550b-a55b',
+      label: 'Nemotron-3 Ultra 550B (NVIDIA NIM — 🛡 R17 model chính; lõi NIM duy nhất còn sống 15/10)',
+      caps: { coding: true, reasoning: true, agentic: true },
+    },
     // Lõi embed KHÔNG phải LLM agent — giữ để hiển thị/đối chiếu (UI chat
     // dropdown lọc mục này ra).
     { id: 'nvidia/nemotron-3-embed-1b', label: 'nemotron-3-embed-1b (CHỈ lõi embed — không phải LLM agent)' },
@@ -193,7 +204,7 @@ export const PROVIDER_DATA = [
   },
   {
     key: 'nvidia',
-    label: 'NVIDIA NIM (kimi-k3 + deepseek-v4.1-flash + embed + extraction)',
+    label: 'NVIDIA NIM (kimi-k3 + deepseek-v4.1-flash + nemotron-550b + embed + extraction)',
     icon: '🎮',
     models: PROVIDER_MODELS.nvidia,
   },

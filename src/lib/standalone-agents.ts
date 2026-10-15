@@ -466,11 +466,11 @@ LEARNING & MEMORY + ĐỊNH DẠNG BÁO CÁO
     domain: 'mixed',
     capable:
       'Quản trị vận hành hệ thống TMO: phân loại công việc theo chức trách agents, điều phối/giao việc đúng agent (delegate/dispatch/code team), giám sát quá trình, nghiệm thu & đánh giá kết quả agents bằng bằng chứng, tổng hợp báo cáo, tạo agent mới, quản lý automation & tool-access, tư vấn khi agents escalate, kiểm định nhanh (file_read/lint/type_check/đếm máy)',
-    provider: 'zen',
+    provider: 'nvidia',
     // PHIÊN 7 (Task 37 — 2026-10-28, user directive): TẤT CẢ agents dùng
     // space-bunny-free — model free DUY NHẤT còn mở cho oc_sk API key sau
     // policy Zen ~25-26/09 (nemotron-ultra/muse-spark → 403 FreeTierError).
-    model: 'space-bunny-free',
+    model: 'nvidia/nemotron-3-ultra-550b-a55b', // R17 2026-10-15: deepseek-v4.1-flash (R16) treo hoàn toàn 15/10 (probe 3/3 abort 30s) — nemotron-550b là lõi NIM duy nhất còn sống (200/2-3.5s + tool_calls chuẩn)
     temperature: 0.7,
     // TASK 39 (phiên 8) — maxTokens = -1 = KHÔNG GIỚI HẠN (callZenProvider
     // omit max_tokens → model output tối đa 512k) — user directive "agents dùng
@@ -663,9 +663,9 @@ LEARNING & MEMORY + ĐỊNH DẠNG BÁO CÁO
       + 'auto-learn health, KnowledgeGraph sync, token anomaly, DB storage, cron/queue stuck), '
       + 'viết proposal bảo trì 4 phần chuẩn Self-Direction kèm tiêu chí xác nhận hiệu quả '
       + '(metric + target + recheck window) — machine-checkable',
-    provider: 'zen',
+    provider: 'nvidia',
     // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note Omega).
-    model: 'space-bunny-free',
+    model: 'nvidia/nemotron-3-ultra-550b-a55b', // R17 2026-10-15: deepseek-v4.1-flash (R16) treo hoàn toàn 15/10 (probe 3/3 abort 30s) — nemotron-550b là lõi NIM duy nhất còn sống (200/2-3.5s + tool_calls chuẩn)
     temperature: 0.3, // chẩn đoán cần chính xác, ít sáng tạo
     // TASK 39 (phiên 8) — -1 = unlimited (xem note Omega).
     maxTokens: -1,
@@ -720,9 +720,9 @@ LEARNING & MEMORY + ĐỊNH DẠNG BÁO CÁO
     domain: 'security',
     capable:
       'Pentest & vulnerability assessment, web/network/AD/cloud pentesting, red teaming, malware analysis, reverse engineering, cryptography, DFIR, security code review, hardening, DevSecOps, ML threat detection, HCI',
-    provider: 'zen',
+    provider: 'nvidia',
     // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note Omega).
-    model: 'space-bunny-free',
+    model: 'nvidia/nemotron-3-ultra-550b-a55b', // R17 2026-10-15: deepseek-v4.1-flash (R16) treo hoàn toàn 15/10 (probe 3/3 abort 30s) — nemotron-550b là lõi NIM duy nhất còn sống (200/2-3.5s + tool_calls chuẩn)
     // Security yêu cầu CHÍNH XÁC — temperature thấp (khai thác/phân tích
     // forensic không được "sáng tác" chi tiết — giữ nguyên giá trị Task 47).
     temperature: 0.2,
@@ -756,9 +756,9 @@ LEARNING & MEMORY + ĐỊNH DẠNG BÁO CÁO
     domain: 'programming',
     capable:
       'Full-stack Next.js/React/UI components, API routes, Prisma database schema, end-to-end feature delivery, tự kiểm định (lint/type_check/run_tests), chạy preview + browser verify',
-    provider: 'zen',
+    provider: 'nvidia',
     // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note Omega).
-    model: 'space-bunny-free',
+    model: 'nvidia/nemotron-3-ultra-550b-a55b', // R17 2026-10-15: deepseek-v4.1-flash (R16) treo hoàn toàn 15/10 (probe 3/3 abort 30s) — nemotron-550b là lõi NIM duy nhất còn sống (200/2-3.5s + tool_calls chuẩn)
     temperature: 0.3,
     // TASK 39 (phiên 8) — -1 = unlimited (xem note Omega).
     maxTokens: -1,

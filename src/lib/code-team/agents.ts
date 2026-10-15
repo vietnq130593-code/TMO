@@ -51,11 +51,11 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     instruction: '', // Loaded dynamically from getAgentPrompt('TL')
     domain: 'programming',
     capable: 'Phân tích thị giác, routing decision, code UI/UX, verify kết quả, điều phối team',
-    provider: 'zen',
+    provider: 'nvidia',
     // PHIÊN 7 (Task 37 — 2026-10-28, user directive): TẤT CẢ agents dùng
     // space-bunny-free — model free DUY NHẤT còn mở cho oc_sk API key sau
     // policy Zen ~25-26/09 (nemotron-ultra/muse-spark → 403 FreeTierError).
-    model: 'space-bunny-free',
+    model: 'nvidia/nemotron-3-ultra-550b-a55b', // R17 2026-10-15: deepseek-v4.1-flash (R16) treo hoàn toàn 15/10 (probe 3/3 abort 30s) — nemotron-550b là lõi NIM duy nhất còn sống (200/2-3.5s + tool_calls chuẩn)
     temperature: 0.5,
     // TASK 39 (phiên 8) — maxTokens = -1 = KHÔNG GIỚI HẠN (callZenProvider omit
     // max_tokens → model output tối đa 512k) — user directive "agents dùng lượng
@@ -106,9 +106,9 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     instruction: '',
     domain: 'programming',
     capable: 'Thiết kế kiến trúc, DB schema, API design, component tree, state management, security architecture',
-    provider: 'zen',
+    provider: 'nvidia',
     // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note MEGATRON).
-    model: 'space-bunny-free',
+    model: 'nvidia/nemotron-3-ultra-550b-a55b', // R17 2026-10-15: deepseek-v4.1-flash (R16) treo hoàn toàn 15/10 (probe 3/3 abort 30s) — nemotron-550b là lõi NIM duy nhất còn sống (200/2-3.5s + tool_calls chuẩn)
     temperature: 0.4,
     // TASK 39 (phiên 8) — -1 = unlimited (xem note MEGATRON).
     maxTokens: -1,
@@ -136,9 +136,9 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     instruction: '',
     domain: 'programming',
     capable: 'Code TypeScript/React/Next.js, implement API, database operations, error handling',
-    provider: 'zen',
+    provider: 'nvidia',
     // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note MEGATRON).
-    model: 'space-bunny-free',
+    model: 'nvidia/nemotron-3-ultra-550b-a55b', // R17 2026-10-15: deepseek-v4.1-flash (R16) treo hoàn toàn 15/10 (probe 3/3 abort 30s) — nemotron-550b là lõi NIM duy nhất còn sống (200/2-3.5s + tool_calls chuẩn)
     temperature: 0.3,
     // TASK 39 (phiên 8) — -1 = unlimited (xem note MEGATRON).
     maxTokens: -1,
@@ -161,11 +161,11 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     instruction: '',
     domain: 'security',
     capable: 'Code review, tìm bugs, kiểm tra security, fix bugs, iterative refinement',
-    provider: 'zen',
+    provider: 'nvidia',
     // TASK 33 (2026-09-27 — user directive): SENTINEL là 1 trong 2 agent CHUYÊN
     // DEBUG (cùng LISMA của research team) → dùng space-bunny-free (stealth
     // reasoning model, ctx 1M/out 512k, effort max) thay vì muse-spark.
-    model: 'space-bunny-free',
+    model: 'nvidia/nemotron-3-ultra-550b-a55b', // R17 2026-10-15: deepseek-v4.1-flash (R16) treo hoàn toàn 15/10 (probe 3/3 abort 30s) — nemotron-550b là lõi NIM duy nhất còn sống (200/2-3.5s + tool_calls chuẩn)
     temperature: 0.2,
     // TASK 39 (phiên 8) — -1 = unlimited (xem note MEGATRON).
     maxTokens: -1,
@@ -198,9 +198,9 @@ export const CODE_TEAM_AGENTS: CodeTeamAgentDef[] = [
     instruction: '',
     domain: 'programming',
     capable: 'Tối ưu performance, refactor code, scalability, best practices, UI+Backend integration',
-    provider: 'zen',
+    provider: 'nvidia',
     // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note MEGATRON).
-    model: 'space-bunny-free',
+    model: 'nvidia/nemotron-3-ultra-550b-a55b', // R17 2026-10-15: deepseek-v4.1-flash (R16) treo hoàn toàn 15/10 (probe 3/3 abort 30s) — nemotron-550b là lõi NIM duy nhất còn sống (200/2-3.5s + tool_calls chuẩn)
     temperature: 0.3,
     // TASK 39 (phiên 8) — -1 = unlimited (xem note MEGATRON).
     maxTokens: -1,

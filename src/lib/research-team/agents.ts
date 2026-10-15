@@ -285,11 +285,11 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     domain: 'meta_cognitive',
     capable:
       'Phân tích request, chấm complexity (3 tiêu chí → tier T1/T2/T3), decompose mission thành parts, giao việc G1/G2/G3, monitor worklog + KB capture, PIVOT/CONTINUE/ESCALATE decisions, tổng hợp final report + Proposal items, chủ trì 5 councils (①②③④⑤).',
-    provider: 'zen',
+    provider: 'nvidia',
     // PHIÊN 7 (Task 37 — 2026-10-28, user directive): TẤT CẢ agents dùng
     // space-bunny-free — model free DUY NHẤT còn mở cho oc_sk API key sau
     // policy Zen ~25-26/09 (nemotron-ultra/muse-spark → 403 FreeTierError).
-    model: 'space-bunny-free',
+    model: 'nvidia/nemotron-3-ultra-550b-a55b', // R17 2026-10-15: deepseek-v4.1-flash (R16) treo hoàn toàn 15/10 (probe 3/3 abort 30s) — nemotron-550b là lõi NIM duy nhất còn sống (200/2-3.5s + tool_calls chuẩn)
     temperature: 0.3, // NEMESIS chặt — không sáng tạo quá mức
     // TASK 39 (phiên 8) — maxTokens = -1 = KHÔNG GIỚI HẠN (callZenProvider omit
     // max_tokens → model output tối đa 512k) — user directive "agents dùng lượng
@@ -307,9 +307,9 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     domain: 'mixed',
     capable:
       'Decompose task thành N hướng explore, dispatch sub-agents (≤20/part, ≤25/round), synthesize kết quả SA, flag dual-interpretation conflicts (TC-03), chuẩn bị spec cho BELI, ghi KB lessons về explore approach.',
-    provider: 'zen',
+    provider: 'nvidia',
     // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note NEMESIS).
-    model: 'space-bunny-free',
+    model: 'nvidia/nemotron-3-ultra-550b-a55b', // R17 2026-10-15: deepseek-v4.1-flash (R16) treo hoàn toàn 15/10 (probe 3/3 abort 30s) — nemotron-550b là lõi NIM duy nhất còn sống (200/2-3.5s + tool_calls chuẩn)
     temperature: 0.5, // SIVIL sáng tạo — explore nhiều hướng
     // TASK 39 (phiên 8) — -1 = unlimited (xem note NEMESIS).
     maxTokens: -1,
@@ -325,9 +325,9 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     domain: 'programming',
     capable:
       'Code TypeScript/React/Next.js đúng spec, viết research report M2, tạo POC trong workspace/research/<missionId>/, G1→G2 handoff, đề xuất KB candidates (lesson/anti-pattern) qua KB Candidates flow.',
-    provider: 'zen',
+    provider: 'nvidia',
     // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note NEMESIS).
-    model: 'space-bunny-free',
+    model: 'nvidia/nemotron-3-ultra-550b-a55b', // R17 2026-10-15: deepseek-v4.1-flash (R16) treo hoàn toàn 15/10 (probe 3/3 abort 30s) — nemotron-550b là lõi NIM duy nhất còn sống (200/2-3.5s + tool_calls chuẩn)
     temperature: 0.2, // BELI chặt — code đúng spec
     // TASK 39 (phiên 8) — -1 = unlimited (xem note NEMESIS).
     maxTokens: -1,
@@ -343,11 +343,11 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     domain: 'programming',
     capable:
       'Code review TypeScript/React/Next.js, tìm bug + fix bug (trần 3 vòng), System Diagnostician root cause (M2), RWV loop (READ→WRITE→VERIFY), TC-04 regression check, TC-06 evidence gate, đề xuất KB candidates anti-patterns.',
-    provider: 'zen',
+    provider: 'nvidia',
     // TASK 33 (2026-09-27 — user directive): LISMA là 1 trong 2 agent CHUYÊN
     // DEBUG (cùng SENTINEL của code team) → dùng space-bunny-free (stealth
     // reasoning model, ctx 1M/out 512k, effort max) thay vì muse-spark.
-    model: 'space-bunny-free',
+    model: 'nvidia/nemotron-3-ultra-550b-a55b', // R17 2026-10-15: deepseek-v4.1-flash (R16) treo hoàn toàn 15/10 (probe 3/3 abort 30s) — nemotron-550b là lõi NIM duy nhất còn sống (200/2-3.5s + tool_calls chuẩn)
     temperature: 0.2, // LISMA chặt — review nghiêm ngặt
     // TASK 39 (phiên 8) — -1 = unlimited (xem note NEMESIS).
     maxTokens: -1,
@@ -363,9 +363,9 @@ export const RESEARCH_TEAM_AGENTS: ResearchTeamAgentDef[] = [
     domain: 'ml',
     capable:
       'Tối ưu performance + refactor, Architecture Proposer (sinh 3 option A/B/C + Verification Plan), KB Curator (consolidate + dedup + retire), tuning + ensemble + feature engineering (M1), ghi KB trực tiếp (lesson/anti-pattern/baseline/pattern/calibration), curate phase 1→2→3.',
-    provider: 'zen',
+    provider: 'nvidia',
     // PHIÊN 7 (Task 37): TẤT CẢ agents = space-bunny-free (xem note NEMESIS).
-    model: 'space-bunny-free',
+    model: 'nvidia/nemotron-3-ultra-550b-a55b', // R17 2026-10-15: deepseek-v4.1-flash (R16) treo hoàn toàn 15/10 (probe 3/3 abort 30s) — nemotron-550b là lõi NIM duy nhất còn sống (200/2-3.5s + tool_calls chuẩn)
     temperature: 0.4, // HAN cân bằng — creative nhưng chính xác
     // TASK 39 (phiên 8) — -1 = unlimited (xem note NEMESIS).
     maxTokens: -1,
@@ -703,8 +703,8 @@ export function getResearchPositionsInOrder(): string[] {
 
 /** Fallback brain khi DB lookup fail — mirror OMEGA_FALLBACK pattern. */
 export const RESEARCH_FALLBACK_BRAIN = {
-  provider: 'zen',
-  model: 'space-bunny-free',
+  provider: 'nvidia',
+  model: 'nvidia/nemotron-3-ultra-550b-a55b', // R17 2026-10-15: deepseek-v4.1-flash (R16) treo hoàn toàn 15/10 (probe 3/3 abort 30s) — nemotron-550b là lõi NIM duy nhất còn sống (200/2-3.5s + tool_calls chuẩn)
 } as const
 
 /**

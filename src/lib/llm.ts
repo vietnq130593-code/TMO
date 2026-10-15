@@ -379,6 +379,8 @@ const NVIDIA_EXTRACTION_MODELS = [
 const NVIDIA_AGENT_MODELS = [
   'moonshotai/kimi-k3',
   'deepseek-ai/deepseek-v4.1-flash',
+  // R17: nemotron-550b — model agent NIM chính (deepseek-flash treo 15/10)
+  'nvidia/nemotron-3-ultra-550b-a55b',
 ]
 
 /** Kimi K3 NIM id — lựa chọn model agent NIM tạm thời (user directive
@@ -388,9 +390,18 @@ export const KIMI_K3_NIM_ID = 'moonshotai/kimi-k3'
 
 /** DeepSeek v4.1 Flash NIM id — lựa chọn dropdown chính thức (user request
  *  2026-10-14). Cùng pattern KIMI_K3_NIM_ID: chọn → callLLMForAgent route NIM
- *  thật; NIM chết → fallback chuỗi Zen. Đồng thời là NIM RESCUE MODEL mặc định
- *  (tier cuối callLLMForAgent — env NIM_RESCUE_MODEL override). */
+ *  thật; NIM chết → fallback chuỗi Zen. */
 export const DEEPSEEK_V41_FLASH_NIM_ID = 'deepseek-ai/deepseek-v4.1-flash'
+
+/** Nemotron-3-Ultra-550B NIM id — MODEL AGENT CHÍNH R17 (2026-10-15):
+ *  live-probe R16 (14/10) deepseek-v4.1-flash còn 200/4.3s, nhưng 15/10 treo
+ *  HOÀN TOÀN (3/3 lần abort 30s — lỗi phía NVIDIA, cùng tình trạng kimi-k3
+ *  từ 14/10). Nemotron-550b là lõi chat NIM duy nhất còn sống: 200/2-3.5s,
+ *  tool_calls chuẩn OpenAI format (probe read_file {"path":...} ✓). Trước
+ *  đây là lõi extraction (NVIDIA_EXTRACTION_MODELS) — R17 nâng thành lựa chọn
+ *  agent chính thức + NIM RESCUE MODEL mặc định (env NIM_RESCUE_MODEL
+ *  override). */
+export const NEMOTRON_550B_NIM_ID = 'nvidia/nemotron-3-ultra-550b-a55b'
 
 /**
  * KIMI-K3 TIMEOUT RIÊNG (user directive 2026-12-01: "kimi-k3 là siêu model
@@ -3767,7 +3778,9 @@ export async function callUtilityLLM(
     // agent path: khi Zen chết toàn chuỗi → thử NIM deepseek-v4.1-flash (ALIVE
     // live-probe 2026-10-13, ~2s) giữ utility (compression/evaluator/extraction)
     // sống. Override env NIM_RESCUE_MODEL; đặt rỗng = tắt hẳn tier này.
-    const utilNimRescueModel = (process.env.NIM_RESCUE_MODEL ?? 'deepseek-ai/deepseek-v4.1-flash').trim()
+    // R17: default rescue đổi sang nemotron-550b (deepseek-flash treo 15/10 —
+    // probe 3/3 abort; rescue tier phải dùng model ĐANG SỐNG)
+    const utilNimRescueModel = (process.env.NIM_RESCUE_MODEL ?? NEMOTRON_550B_NIM_ID).trim()
     if (utilNimRescueModel) {
       console.warn(`[LLM] Utility-core NIM RESCUE (R8): toàn chuỗi Zen chết — thử NIM ${utilNimRescueModel} giữ utility sống — task: ${taskLabel}...`)
       const rescue = await callModelWithKeyRotation(
@@ -3904,12 +3917,42 @@ export async function callLLM(
         return foCli
       }
     }
-    console.warn(`[LLM] Utility Zen thất bại toàn chuỗi (HTTP + CLI${utilModel !== (process.env.ZEN_FAILOVER_MODEL?.trim() || 'space-bunny-free') ? ' + failover' : ''}) — trả lỗi (NIM removed — Task 33) — task: ${taskLabel}`)
+    console.warn(`[LLM] Utility Zen thất bại toàn chuỗi (HTTP + CLI${utilModel !== (process.env.ZEN_FAILOVER_MODEL?.trim() || 'space-bunny-free') ? ' + failover' : ''}) — thử NIM RESCUE (R16) — task: ${taskLabel}`)
+    // R16 2026-10-14 — NIM RESCUE cho utility (khôi phục nguyên tắc R8-1
+    // "NIM RESCUE vẫn giữ agents sống", bị gỡ bởi Task 33 khi agents còn
+    // Zen sống). Bằng chứng R16: zen free-tier bị chặn 403 THEO IP datacenter
+    // (HTTP oc_sk + CLI session hợp lệ đều 403 — db/opencode-oauth.json
+    // freeTier.unlocked=false) → mỗi utility call (nén context, triage,
+    // evaluator...) đốt 60-240s trong chuỗi chết rồi fail; spawn CLI hang
+    // từng leak 590MB (PID 1507, 20:14 2026-10-14). Fall back NIM
+    // deepseek-v4.1-flash — model agent NIM tạm thời được duyệt (boot-log
+    // directive), verify 200/4.3s. Rollback: set UTILITY_NIM_RESCUE=off.
+    if (process.env.UTILITY_NIM_RESCUE !== 'off') {
+      try {
+        // R17: rescue model theo env NIM_RESCUE_MODEL (default nemotron-550b —
+        // deepseek-flash treo 15/10, không dùng làm rescue được nữa)
+        const utilRescueModel = (process.env.NIM_RESCUE_MODEL ?? NEMOTRON_550B_NIM_ID).trim() || NEMOTRON_550B_NIM_ID
+        const nimRescue = await callLLMWithSpecificProvider(
+          prompt,
+          'nvidia',
+          utilRescueModel,
+          systemPrompt,
+          { ...utilOptions, temperature: utilOptions?.temperature ?? 0.2, maxTokens: utilOptions?.maxTokens ?? 4000 },
+        )
+        if (nimRescue && nimRescue.content) {
+          console.log(`[LLM] Utility NIM RESCUE ${utilRescueModel} ✓ (${nimRescue.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
+          return nimRescue
+        }
+        console.warn(`[LLM] Utility NIM RESCUE cũng thất bại (${(nimRescue as unknown as { error?: string })?.error ?? 'null result'}) — trả lỗi — task: ${taskLabel}`)
+      } catch (rescueErr) {
+        console.warn(`[LLM] Utility NIM RESCUE lỗi (không chặn — trả lỗi zen gốc): ${rescueErr instanceof Error ? rescueErr.message : String(rescueErr)}`)
+      }
+    }
     return {
       content: '',
       provider: 'zen',
       model: utilModel,
-      error: `Utility "${taskLabel}" thất bại toàn chuỗi Zen (${utilModel} HTTP + CLI + failover) — NIM đã ngừng dùng cho LLM (Task 33)`,
+      error: `Utility "${taskLabel}" thất bại toàn chuỗi Zen (${utilModel} HTTP + CLI + failover${process.env.UTILITY_NIM_RESCUE !== 'off' ? ' + NIM rescue' : ''})`,
     }
   }
 
@@ -6056,16 +6099,38 @@ export async function callLLMForAgent(
     console.warn(`[LLM] Agent NIM ${DEEPSEEK_V41_FLASH_NIM_ID} thất bại toàn chuỗi xoay key → fallback chuỗi Zen space-bunny-free${options?.agentName ? ` — agent: ${options.agentName}` : ''}: ${String(nimResult?.error || 'null result').slice(0, 120)}`)
   }
 
+  // ===== R17 (2026-10-15) — NEMOTRON-3-ULTRA-550B (NIM) MODEL AGENT CHÍNH =====
+  // deepseek-v4.1-flash (model R16) treo hoàn toàn 15/10 (3/3 abort 30s,
+  // probe /home/z/model-test.ts) — nemotron-550b là lõi NIM duy nhất còn
+  // sống (200/2-3.5s + tool_calls chuẩn). Cùng pattern kimi-k3/deepseek-flash:
+  // chọn → route THẬT qua NIM (xoay 4 key); NIM chết → fallback chuỗi Zen
+  // space-bunny-free phía dưới (agent không chết).
+  if (model === NEMOTRON_550B_NIM_ID) {
+    const nimResult = await callModelWithKeyRotation(
+      NEMOTRON_550B_NIM_ID,
+      prompt,
+      systemPrompt,
+      options,
+      { taskLabel: `agent-nim:${NEMOTRON_550B_NIM_ID}` },
+    )
+    if (nimResult && (nimResult.content || (nimResult.tool_calls && nimResult.tool_calls.length > 0))) {
+      const tcCount = nimResult.tool_calls?.length ?? 0
+      console.log(`[LLM] Agent dùng NIM ${NEMOTRON_550B_NIM_ID} ✓ (${tcCount} tool_calls, ${nimResult.tokensUsed ?? 0} tokens)${options?.agentName ? ` — agent: ${options.agentName}` : ''}`)
+      return nimResult
+    }
+    console.warn(`[LLM] Agent NIM ${NEMOTRON_550B_NIM_ID} thất bại toàn chuỗi xoay key → fallback chuỗi Zen space-bunny-free${options?.agentName ? ` — agent: ${options.agentName}` : ''}: ${String(nimResult?.error || 'null result').slice(0, 120)}`)
+  }
+
   let zenModel = model
-  if (provider !== 'zen' && model !== KIMI_K3_NIM_ID && model !== DEEPSEEK_V41_FLASH_NIM_ID) {
+  if (provider !== 'zen' && model !== KIMI_K3_NIM_ID && model !== DEEPSEEK_V41_FLASH_NIM_ID && model !== NEMOTRON_550B_NIM_ID) {
     // Model NIM cũ (chứa '/') hoặc id lạ → map về model zen PHIÊN 7: space-bunny-free
     // cho TẤT CẢ agent (Task 37 — model free duy nhất mở cho oc_sk API key).
-    // (kimi-k3 + deepseek-v4.1-flash đã xử lý ở nhánh riêng phía trên — không
-    // rơi vào normalize này.)
+    // (kimi-k3 + deepseek-v4.1-flash + nemotron-550b đã xử lý ở nhánh riêng
+    // phía trên — không rơi vào normalize này.)
     zenModel = isZenModelId(model) ? model : 'space-bunny-free'
-    console.warn(`[LLM] Agent cấu hình provider "${provider}/${model}" không còn dùng cho agents (NIM matrix 2026-11-30 — chỉ kimi-k3 + deepseek-v4.1-flash còn mở) → route Zen ${zenModel}${options?.agentName ? ` (agent: ${options.agentName})` : ''}`)
+    console.warn(`[LLM] Agent cấu hình provider "${provider}/${model}" không còn dùng cho agents (NIM matrix — chỉ kimi-k3 + deepseek-v4.1-flash + nemotron-550b còn mở) → route Zen ${zenModel}${options?.agentName ? ` (agent: ${options.agentName})` : ''}`)
   }
-  if (model === KIMI_K3_NIM_ID || model === DEEPSEEK_V41_FLASH_NIM_ID) {
+  if (model === KIMI_K3_NIM_ID || model === DEEPSEEK_V41_FLASH_NIM_ID || model === NEMOTRON_550B_NIM_ID) {
     // NIM model fail NIM → chạy chuỗi Zen với model chính space-bunny-free
     zenModel = isZenModelId(zenModel) ? zenModel : 'space-bunny-free'
   }
@@ -6213,7 +6278,8 @@ export async function callLLMForAgent(
   // OAuth login mở free tier) thì chuỗi trên return trước, không bao giờ chạm
   // tới đây. Override bằng env NIM_RESCUE_MODEL; đặt rỗng = tắt hẳn tier này.
   const lastResortList = parseZenLastResortModels(process.env.ZEN_LAST_RESORT_MODELS, zenModel, zenFailoverModel).join('/')
-  const nimRescueModel = (process.env.NIM_RESCUE_MODEL ?? 'deepseek-ai/deepseek-v4.1-flash').trim()
+  // R17: default rescue đổi sang nemotron-550b (deepseek-flash treo 15/10)
+  const nimRescueModel = (process.env.NIM_RESCUE_MODEL ?? NEMOTRON_550B_NIM_ID).trim()
   if (nimRescueModel) {
     console.warn(`[LLM] NIM RESCUE (2026-10-13): toàn chuỗi Zen chết (free-tier 403 toàn cục cho oc_sk + failover ${zenFailoverModel} + last-resort ${lastResortList}) — thử NIM ${nimRescueModel} giữ agent sống${options?.agentName ? ` — agent: ${options.agentName}` : ''}...`)
     const rescue = await callModelWithKeyRotation(
