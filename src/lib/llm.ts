@@ -4323,6 +4323,20 @@ function zenKeyCooldownSummary(): string {
 // dấu → các lần sau skip ngay (không lặp HTTP ~1s + CLI spawn ~5-10s mỗi call),
 // caller đi thẳng ZEN FAILOVER. Override: ZEN_FREE_TIER_CACHE_MS (ms; 0 = tắt).
 const ZEN_FREE_TIER_CACHE_MS = parseInt(process.env.ZEN_FREE_TIER_CACHE_MS || '900000', 10)
+// ━━━ R18 — TTL RIÊNG CHO FreeTierError 403 (POLICY BLOCK) ━━━
+// Vấn đề đo được (user bug report "request định kỳ + RAM tăng liên tục mặc dù
+// không động vào app"): 2 call-site FreeTierError trước đây ghi đè TTL xuống
+// 60s (HTTP) / 300s (CLI) — hết hạn → MỖI agent call lại đốt nguyên chuỗi
+// failover (HTTP ~1s + 1 CLI spawn + SBF failover HTTP+CLI + 3 last-resort CLI
+// spawn ≈ 5 process × 400-590MB) cho các model ĐÃ BIẾT bị policy-chặn toàn
+// cục (r74 BUG2-033 — policy, không phải quota: retry 60s sau vô nghĩa).
+// Giờ FreeTierError dùng TTL dài hơn (default 1h; 0 = tắt tăng → dùng TTL cũ
+// của ZEN_FREE_TIER_CACHE_MS). Các lỗi transient khác (429/5xx/timeout) KHÔNG
+// dùng TTL này — vẫn ngắn như cũ (model có thể hồi phục thật).
+const ZEN_POLICY_BLOCK_TTL_MS_RAW = parseInt(process.env.ZEN_POLICY_BLOCK_TTL_MS || '', 10)
+const ZEN_POLICY_BLOCK_TTL_MS = Number.isFinite(ZEN_POLICY_BLOCK_TTL_MS_RAW) && ZEN_POLICY_BLOCK_TTL_MS_RAW > 0
+  ? ZEN_POLICY_BLOCK_TTL_MS_RAW
+  : 3_600_000
 // r74 — value lưu kèm reason (cho zenModelBlockSummary → tooltip UI nói thật)
 const zenFreeTierBlockedUntil = new Map<string, { until: number; reason: string }>() // key `${transport}:${model}`
 
@@ -4971,7 +4985,7 @@ async function callZenProvider(
       // cache bỏ qua các lần sau: FreeTierError (model free chặn API key),
       // RegionError (geo-block), 402 (hết credit cho model trả phí)
       if (response.status === 403 && (errBody.includes('FreeTierError') || errBody.toLowerCase().includes('free tier'))) {
-        markZenFreeTierBlocked('http', model, 'HTTP 403 FreeTierError — model free bị Zen chặn với API key ở transport HTTP (chỉ space-bunny-free còn mở API HTTP) — model này sẽ chuyển tiếp về ZEN FAILOVER (r74: native CLI cũng đã bị chặn lại — xem BUG2-033)', 60_000)
+        markZenFreeTierBlocked('http', model, 'HTTP 403 FreeTierError — model free bị Zen chặn với API key ở transport HTTP (chỉ space-bunny-free còn mở API HTTP) — model này sẽ chuyển tiếp về ZEN FAILOVER (r74: native CLI cũng đã bị chặn lại — xem BUG2-033)', ZEN_POLICY_BLOCK_TTL_MS)
         // 2026-10-14 — oc_sk bị chặn free-tier → thử NGAY session OpenCode
         // account trong CÙNG call (không đợi call sau): đăng nhập rồi thì call
         // này vẫn thành công, không rơi xuống CLI/failover.
@@ -5549,6 +5563,35 @@ async function acquireOcCliSlot(taskLabel: string): Promise<() => void> {
 }
 
 /**
+ * ━━━ R18 — KILL CẢ CÂY TIẾN TRÌNH khi CLI timeout ━━━
+ * Bằng chứng R16 (điều tra RAM): PID 1507 (opencode spawn) sống 11 PHÚT với
+ * RSS 590MB SAU khi finishTimer đã "kill" — vì `child.kill('SIGKILL')` trên
+ * Windows chỉ giết process TRỰC TIẾP (cmd.exe shim khi shell:true — opencode.
+ * exe/node cháu sống tiếp giữ RAM); trên POSIX con cháu của con cũng có thể
+ * thoát. Máy user (Windows local) là nơi leak nặng nhất theo report RAM.
+ * Giải pháp: Windows → `taskkill /PID <pid> /T /F` (giết cả tree — lệnh gốc
+ * của Windows); POSIX → SIGKILL trực tiếp + pkill -P best-effort cho cháu.
+ * Async fire-and-forget — không chờ, không throw.
+ */
+function killCliProcessTree(child: { pid?: number; kill?: (sig?: NodeJS.Signals) => void }, taskLabel: string): void {
+  try { child.kill?.('SIGKILL') } catch { /* đã chết — tiếp tục dọn cháu */ }
+  const pid = child.pid
+  if (!pid || !Number.isFinite(pid)) return
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { spawn: rawSpawn } = require('child_process') as typeof import('child_process')
+    if (process.platform === 'win32') {
+      rawSpawn('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
+        .on('error', () => { /* best-effort */ })
+      console.warn(`[OC-CLI] ${taskLabel} timeout — taskkill /T /F cây tiến trình pid ${pid} (R18 chống leak RAM cháu)`)
+    } else {
+      rawSpawn('pkill', ['-KILL', '-P', String(pid)], { stdio: 'ignore' })
+        .on('error', () => { /* pkill không có trên máy này — con trực tiếp đã chết */ })
+    }
+  } catch { /* best-effort — không được phép throw trong đường timeout */ }
+}
+
+/**
  * Call OpenCode Zen model via CLI subprocess (prompt truyền qua STDIN — Task 34).
  * Spawns `opencode run --model <prefix>/<model> --format json` + stdin prompt.
  * Returns LLMResult with content + tokens. On failure → null (caller falls back
@@ -5743,8 +5786,10 @@ async function callOpenCodeCLIProvider(
 
     const finishTimer = setTimeout(() => {
       if (!resolved) {
-        try { child.kill('SIGKILL') } catch { /* ignore */ }
-        console.warn(`[OC-CLI] ${taskLabel} timeout ${OPENCODE_CLI_TIMEOUT_MS}ms — kill`)
+        // R18 — kill CẢ CÂY tiến trình (Windows .cmd shim: SIGKILL chỉ giết
+        // cmd.exe, opencode.exe cháu sống tiếp giữ 400-590MB — bằng chứng R16)
+        killCliProcessTree(child, taskLabel)
+        console.warn(`[OC-CLI] ${taskLabel} timeout ${OPENCODE_CLI_TIMEOUT_MS}ms — kill tree`)
         // (fix 2026-09-25) PARTIAL-ON-TIMEOUT: inner loop CLI có thể ĐÃ thực thi
         // nhiều tool trước khi bị kill (E2E 2026-09-25: SENTINEL edit+bash thật
         // nhưng resolve(null) vứt bỏ toàn bộ → evaluator kết luận oan "không có
@@ -5899,14 +5944,16 @@ async function callOpenCodeCLIProvider(
       if (!content && code !== 0) {
         // TASK 34 — các lỗi model-level dai dẳng từ CLI → mark cache để các lần
         // sau skip CLI thẳng failover (không tốn 5-10s spawn mỗi call):
-        //   FreeTierError/RegionError/Insufficient = policy-level (TTL chuẩn
-        //   15 phút); UnknownError "Unexpected server error" = model-level
-        //   (vd muse-spark geo-block trả UnknownError — verified 2026-09-27)
+        //   FreeTierError = POLICY-level toàn cục (r74 BUG2-033) → R18 dùng TTL
+        //   dài ZEN_POLICY_BLOCK_TTL_MS (default 1h — retry ngắn chỉ đốt lại
+        //   spawn CLI 400-590MB vô nghĩa); RegionError/Insufficient = policy
+        //   chuẩn (TTL 15 phút); UnknownError "Unexpected server error" =
+        //   model-level (vd muse-spark geo-block — verified 2026-09-27)
         //   → TTL ngắn 5 phút (tự retry định kỳ phòng lỗi server tạm thời).
         //   Lỗi timeout/hang/spawn KHÔNG cache (có thể tạm thời).
         const raw = rawHead + '\n' + stderr
         if (raw.includes('FreeTierError') || raw.includes('free tier can only be used from within OpenCode')) {
-          markZenFreeTierBlocked('cli', model, 'CLI nhận FreeTierError 403 (r74 BUG2-033: Zen đã chặn lại native provider cho model free ngoài SBF — policy toàn cục, không phải quota key/app-dir; model chuyển tiếp về ZEN FAILOVER)', 300_000)
+          markZenFreeTierBlocked('cli', model, 'CLI nhận FreeTierError 403 (r74 BUG2-033: Zen đã chặn lại native provider cho model free ngoài SBF — policy toàn cục, không phải quota key/app-dir; model chuyển tiếp về ZEN FAILOVER)', ZEN_POLICY_BLOCK_TTL_MS)
         } else if (raw.includes('RegionError') || /not available in your region/i.test(raw)) {
           markZenFreeTierBlocked('cli', model, 'CLI nhận RegionError — model geo-block tại vùng máy chủ này')
         } else if (/Insufficient (account )?(funds|credits?)/i.test(raw)) {

@@ -242,9 +242,79 @@ async function getAgentRunData(sessionId: string, limit: number): Promise<Respon
       todos: todosByRun.get(r.runId) || [],
     }))
 
+    // ━━━ R18 — RECORD RUNS (Thought Process "GIỮ NGUYÊN tại phản hồi đó") ━━━
+    // Registry in-memory (nguồn `runs` phía trên) CHẾT khi: restart process /
+    // eviction cửa sổ run / LRU session purge → UI poll + loadSessionTail
+    // REPLACE messages + merge panel CHỈ từ registry → panel Thought Process
+    // BIẾN MẤT vĩnh viễn (user report R18) dù JSONL trail đầy đủ còn trên đĩa.
+    // Lớp phục hồi: AgentRunRecord (DB — persist từ lúc start run + delegation)
+    // cho session NÀY nhưng KHÔNG còn trong registry → trả kèm `recordRuns`
+    // (events: [] + trailAvailable: true — UI lazy-fetch /api/agent-run?runId=
+    // đọc JSONL disk trail khi user mở panel). Fail-open tuyệt đối: lỗi DB →
+    // recordRuns=[] và response shape cũ không đổi.
+    let recordRuns: Array<Record<string, unknown>> = []
+    try {
+      const liveRunIds = new Set(runs.map(r => r.runId))
+      const rows = await db.agentRunRecord.findMany({
+        where: { sessionId, runId: { not: null } },
+        orderBy: { createdAt: 'desc' },
+        take: 40,
+        select: {
+          runId: true,
+          parentRunId: true,
+          agentName: true,
+          status: true,
+          cycles: true,
+          toolCalls: true,
+          tokensUsed: true,
+          startedAt: true,
+          createdAt: true,
+        },
+      })
+      const statusMap: Record<string, 'done' | 'error' | 'cancelled'> = {
+        completed: 'done',
+        cancelled: 'cancelled',
+        // failed/incomplete = kết thúc không đạt; 'running' record-only =
+        // mồ côi (process chủ đã chết/boot-cleanup chưa lật) — hiển thị trung
+        // thực là lỗi, KHÔNG giả "đang chạy"
+        failed: 'error',
+        incomplete: 'error',
+        running: 'error',
+      }
+      for (const row of rows) {
+        if (!row.runId || liveRunIds.has(row.runId)) continue
+        if (recordRuns.length >= 20) break
+        const startedAt = row.startedAt?.getTime() ?? row.createdAt.getTime()
+        recordRuns.push({
+          runId: row.runId,
+          sessionId,
+          agentName: row.agentName || 'Agent',
+          agentPosition: undefined,
+          step: row.parentRunId ? `delegated bởi ${row.parentRunId.slice(0, 16)}` : undefined,
+          mode: row.parentRunId ? 'team' : 'standalone',
+          startedAt,
+          endedAt: undefined,
+          status: statusMap[row.status || ''] || 'error',
+          events: [],
+          counters: {
+            iterations: row.cycles ?? 0,
+            toolCalls: row.toolCalls ?? 0,
+            filesRead: 0,
+            commandsRun: 0,
+            editsMade: 0,
+            searches: 0,
+          },
+          // UI dấu hiệu: panel được phép lazy-fetch trail JSONL từ đĩa
+          trailAvailable: true,
+          source: 'record' as const,
+        })
+      }
+    } catch { /* fail-open — recordRuns=[] giữ response cũ */ }
+
     return NextResponse.json({
       ok: true,
       runs: runsWithTodos,
+      recordRuns,
       hasActive: hasActiveRun(sessionId),
       serverTs: Date.now(),
       count: runsWithTodos.length,

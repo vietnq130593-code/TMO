@@ -136,16 +136,49 @@ export interface AgentRun {
    *  sổ event in-memory — trước đây persistAgentRunRecord đếm trong cửa sổ
    *  250-event nên run dài bị đếm thiếu: 3 nguồn cho 3 số khác nhau). */
   toolFailuresTotal?: number
+  /**
+   * R18 (user bug report "Không còn nhịp" giả): timestamp lúc run CHA bắt đầu
+   * await delegation (delegate_task/dispatch_agent...) — null/undefined khi
+   * không chờ. Delegation hợp lệ chờ 10-16' (SUBAGENT_WALL_CLOCK_MS 15' +
+   * trọng tài) — trong suốt khoảng đó run cha KHÔNG có event mới → chip stalled
+   * (im lặng ≥5') báo động GIẢ. UI đọc field này hiển thị "Đang chờ sub-agent"
+   * thay vì "Không còn nhịp". Fail-open: tracker lỗi → field undefined → UI
+   * hành vi cũ.
+   */
+  awaitingDelegationSince?: number
 }
 
 // ==================== Storage (globalThis — shared across module instances) ====================
 
-const MAX_RUNS_PER_SESSION = 10
+const MAX_RUNS_PER_SESSION = 20
 // ROUND-23 P4: 250 → 120 — registry in-memory giờ chỉ còn là lớp HIỂN THỊ;
 // bằng chứng đầy đủ đã append ra đĩa (appendEventTrail) nên giảm cap để bớt
 // ăn RAM (worst case cũ 60×10×250 event × ~3.3KB ≈ hàng trăm MB → 30×10×120).
+// R18 (user bug report "Thought Process biến mất hết"): 10 → 20 run/session —
+// mission fan-out delegation (>10 run) trước đây đẩy panel run cũ ra khỏi
+// registry giữa chừng (run CHA còn bị splice → endAgentRun mất dấu → summary
+// không persist). 20 run × 120 event × ~400B ≈ 1MB/session worst case — rẻ so
+// với mất bằng chứng; JSONL trail + recordRuns (API R18) là lớp bền vững.
 const MAX_EVENTS_PER_RUN = 120
-const MAX_SESSIONS = 30
+// R18: 30 → 40 — automation/opus/self-direction tạo runs ở hàng chục session
+// khác → LRU-purge session user đang xem giữa buổi (đúng symptom "đang xem
+// bình thường một lúc sau TẤT CẢ biến mất").
+const MAX_SESSIONS = 40
+/**
+ * R18 — EVICTION AN TOÀN: chỉ đuổi run KHÔNG chạy ra khỏi cửa sổ MAX_RUNS.
+ * Trước đây splice(0, n) xóa MẤT CÁC run cũ NHẤT bất kể trạng thái — run cha
+ * goal-loop đang sống có thể bị splice giữa chừng (fan-out >10 delegation)
+ * → endAgentRun không tìm thấy run → AgentRunRecord kẹt 'running' + summary
+ * không persist. Toàn bộ đang chạy → tạm vượt cap (an toàn hơn giết run sống).
+ */
+function evictOldRuns(runs: AgentRun[]): void {
+  let guard = 0
+  while (runs.length > MAX_RUNS_PER_SESSION && guard++ < 100) {
+    const idx = runs.findIndex(r => r.status !== 'running')
+    if (idx === -1) break // toàn bộ đang chạy — giữ nguyên (tạm vượt cap)
+    runs.splice(idx, 1)
+  }
+}
 const THOUGHT_MAX_CHARS = 2400
 const RESULT_PREVIEW_MAX_CHARS = 900
 
@@ -503,9 +536,7 @@ export function startAgentRun(params: {
     }
     const arr = runsOf(sessionId)
     arr.push(run)
-    if (arr.length > MAX_RUNS_PER_SESSION) {
-      arr.splice(0, arr.length - MAX_RUNS_PER_SESSION)
-    }
+    evictOldRuns(arr)
     reg.activeRunBySession.set(sessionId, run.runId)
     trimSessions()
     pushEvent(run, {
@@ -1055,9 +1086,7 @@ export function registerDelegationRun(params: {
     }
     const arr = runsOf(sessionId)
     arr.push(run)
-    if (arr.length > MAX_RUNS_PER_SESSION) {
-      arr.splice(0, arr.length - MAX_RUNS_PER_SESSION)
-    }
+    evictOldRuns(arr)
     trimSessions()
     pushEvent(run, {
       id: nextEventId(),
@@ -1069,6 +1098,36 @@ export function registerDelegationRun(params: {
   } catch {
     return null
   }
+}
+
+/**
+ * R18 — Đánh dấu run (thường là run cha goal-loop) ĐANG await delegation.
+ * Gọi TRƯỚC khi await promise delegation; clearRunAwaitingDelegation ngay sau
+ * khi có kết quả (try/finally bên caller). Fail-open tuyệt đối — không throw.
+ * runId null → dùng run active của session (đúng ngữ cảnh goal-loop cha đang
+ * chạy trong chính session đó).
+ */
+export function markRunAwaitingDelegation(sessionId: string | null | undefined, runId?: string | null): void {
+  try {
+    if (!sessionId) return
+    const run = runId
+      ? runsOf(sessionId).find(r => r.runId === runId) || activeRun(sessionId)
+      : activeRun(sessionId)
+    if (!run) return
+    if (run.awaitingDelegationSince === undefined) run.awaitingDelegationSince = Date.now()
+  } catch { /* fail-open */ }
+}
+
+/** R18 — Xóa cờ đang-chờ-delegation (khi delegation trả kết quả / throw). */
+export function clearRunAwaitingDelegation(sessionId: string | null | undefined, runId?: string | null): void {
+  try {
+    if (!sessionId) return
+    const run = runId
+      ? runsOf(sessionId).find(r => r.runId === runId) || activeRun(sessionId)
+      : activeRun(sessionId)
+    if (!run) return
+    delete run.awaitingDelegationSince
+  } catch { /* fail-open */ }
 }
 
 /**

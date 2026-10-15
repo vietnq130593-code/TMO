@@ -1146,6 +1146,18 @@ export function runAutoReview(
 const OPUS_SWEEP_MIN_INTERVAL_MS = 30_000
 let lastOpusSweepAt = 0
 
+/**
+ * R18 — IDLE GATE cho auto-review sweep: session opusReviewMode='auto' KHÔNG
+ * có tin user nào trong ngưỡng này → SKIP review (user bug report "request
+ * định kỳ mặc dù không động vào app": flag auto sống vĩnh viễn trong DB, mỗi
+ * lần mở app sweep review lại session cổ — đốt chuỗi LLM + RAM nền không ai
+ * yêu cầu). Default 6h; 0 = tắt gate (hành vi cũ — review mọi tuổi).
+ */
+const OPUS_AUTO_IDLE_MS = (() => {
+  const raw = parseInt(process.env.OPUS_AUTO_IDLE_MS || '', 10)
+  return Number.isFinite(raw) && raw >= 0 ? raw : 6 * 60 * 60 * 1000
+})()
+
 export async function sweepOpusAutoSessions(): Promise<{ sessions: number }> {
   if (Date.now() - lastOpusSweepAt < OPUS_SWEEP_MIN_INTERVAL_MS) return { sessions: 0 }
   lastOpusSweepAt = Date.now()
@@ -1154,11 +1166,28 @@ export async function sweepOpusAutoSessions(): Promise<{ sessions: number }> {
       where: { opusReviewMode: 'auto' },
       select: { sessionId: true },
     })
+    let swept = 0
     for (const s of sessions) {
+      // R18 — IDLE GATE: session không có user message gần đây → tự review
+      // vòng lặp cũ là "tác vụ ma" (không ai yêu cầu) → bỏ qua, KHÔNG đốt
+      // LLM. Fail-open per-session (query lỗi → coi như còn hoạt động).
+      if (OPUS_AUTO_IDLE_MS > 0) {
+        try {
+          const lastUser = await db.chatMessage.findFirst({
+            where: { sessionId: s.sessionId, role: 'user' },
+            orderBy: { createdAt: 'desc' },
+            select: { createdAt: true },
+          })
+          if (!lastUser || Date.now() - lastUser.createdAt.getTime() > OPUS_AUTO_IDLE_MS) {
+            continue // session idle — bỏ qua review
+          }
+        } catch { /* fail-open — query lỗi thì vẫn review như cũ */ }
+      }
       // Fire-and-forget — maybeAutoOpusReview tự gate + KHÔNG throw
       void maybeAutoOpusReview(s.sessionId)
+      swept++
     }
-    return { sessions: sessions.length }
+    return { sessions: swept }
   } catch (err) {
     const sweepMsg = err instanceof Error ? err.message : String(err)
     // FIX (user report 2026-08-31 — "Unknown argument `opusReviewMode`"):

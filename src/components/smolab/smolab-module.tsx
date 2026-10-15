@@ -6,7 +6,7 @@
 // ========================================================================
 
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react'
-import { Network, CheckCircle2, XCircle, Loader2, Brain, Zap, Check, ChevronDown, Activity, AlertTriangle, Play, ShieldOff, MessageSquare, Send, Trash2, Search, Sparkles, X, AlertCircle, ThumbsUp, ThumbsDown, Wrench, Radio, BookMarked, Plus, Download, Pencil, Users, User, Code2, Square, Thermometer, ClipboardList, Mic, AudioLines, Volume2, OctagonX, Scale, Cog, ArrowUpCircle, BrainCircuit, Copy, LogIn, LogOut } from 'lucide-react'
+import { Network, CheckCircle2, XCircle, Loader2, Brain, Zap, Check, ChevronDown, Activity, AlertTriangle, Play, ShieldOff, MessageSquare, Send, Trash2, Search, Sparkles, X, AlertCircle, ThumbsUp, ThumbsDown, Wrench, Radio, BookMarked, Plus, Download, Pencil, Users, User, Code2, Square, Thermometer, ClipboardList, Mic, AudioLines, Volume2, OctagonX, Scale, Cog, ArrowUpCircle, BrainCircuit, Copy, LogIn, LogOut, Hourglass } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -264,6 +264,20 @@ export interface AgentRunData {
    *  mỗi run item từ GET /api/agent-run) — panel Thought Process (11-b) ưu
    *  tiên nguồn này thay vì danh sách session-wide. Fail-open [] khi lỗi DB. */
   todos?: RunTodoData[]
+  /**
+   * R18 ("Không còn nhịp" giả): timestamp run cha bắt đầu await delegation —
+   * panel hiển thị "Đang chờ sub-agent (xếp lượt tuần tự)" thay vì chip
+   * stalled khi im lặng ≥5' (delegation hợp lệ 10-16').
+   */
+  awaitingDelegationSince?: number
+  /**
+   * R18 ("Thought Process biến mất"): run do API tái tạo từ AgentRunRecord DB
+   * (registry in-memory đã mất sau restart/eviction) — events=[] và panel sẽ
+   * lazy-fetch JSONL trail từ /api/agent-run?runId= khi user mở panel.
+   */
+  trailAvailable?: boolean
+  /** R18 — 'record' = tái tạo từ DB (không phải registry live) */
+  source?: 'record' | 'live'
 }
 
 
@@ -352,7 +366,36 @@ export function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: RunTod
   // Mặc định ĐÓNG — bấm tiêu đề mới mở (user request: như Claude Code)
   const [open, setOpen] = useState(false)
 
+  // ━━━ R18 — LAZY-FETCH TRAIL TỪ ĐĨA ("Thought Process biến mất") ━━━
+  // Run tái tạo từ AgentRunRecord (source='record', events=[], trailAvailable)
+  // → khi user MỞ panel lần đầu, fetch /api/agent-run?runId= đọc JSONL trail
+  // bền vững (agent-runs/<runId>.jsonl — sống qua restart + không evict) →
+  // panel hiển thị ĐẦY ĐỦ thought/tool như lúc live. Fail-open: lỗi fetch →
+  // giữ events rỗng (header vẫn hiện counters từ record).
+  const [trailEvents, setTrailEvents] = useState<AgentRunEventData[] | null>(null)
+  const [trailLoading, setTrailLoading] = useState(false)
+  const trailFetchedRef = useRef(false)
+  useEffect(() => {
+    if (!open || trailFetchedRef.current) return
+    if (!run.trailAvailable || run.events.length > 0 || run.status === 'running') return
+    trailFetchedRef.current = true
+    // async-wrapper pattern (precedent R15 runtime-metrics-panel): setState
+    // KHÔNG gọi đồng bộ trong body effect — tránh cascading render
+    const loadTrail = async (): Promise<void> => {
+      setTrailLoading(true)
+      try {
+        const res = await fetch(`/api/agent-run?runId=${encodeURIComponent(run.runId)}&limit=2000`)
+        const data = res.ok ? await res.json().catch(() => null) : null
+        const loaded = (data as { run?: { events?: AgentRunEventData[] } } | null)?.run?.events
+        if (loaded && loaded.length > 0) setTrailEvents(loaded)
+      } catch { /* fail-open — giữ events rỗng */ }
+      finally { setTrailLoading(false) }
+    }
+    void loadTrail()
+  }, [open, run.runId, run.trailAvailable, run.events.length, run.status])
+
   const running = run.status === 'running'
+  const events = trailEvents ?? run.events
   const elapsed = (run.endedAt || Date.now()) - run.startedAt
   const c = run.counters
   // CI-2 (Task 11-b) — PER-TASK TODO ISOLATION: panel chỉ hiện todo của ĐÚNG
@@ -373,8 +416,8 @@ export function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: RunTod
   const doneCount = todoList.filter(t => t.status === 'completed').length
 
   // Hoạt động mới nhất — hiện ngay ở header (collapsed) để thấy "đang làm gì"
-  const lastTool = [...run.events].reverse().find(e => e.type === 'tool')
-  const lastThought = [...run.events].reverse().find(e => e.type === 'thought')
+  const lastTool = [...events].reverse().find(e => e.type === 'tool')
+  const lastThought = [...events].reverse().find(e => e.type === 'thought')
   const lastActivity = lastTool
     ? `${runToolIcon(lastTool.tool)} ${lastTool.argsSummary || lastTool.tool || ''}`
     : lastThought?.text
@@ -385,9 +428,16 @@ export function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: RunTod
   // được vá đóng tracker + reconcile từ DB, chip này là lớp hiển thị cuối cho
   // trường hợp DB không có row). elapsed vẫn đếm (thời gian thật trôi) nhưng
   // user thấy ngay dấu hiệu "không còn nhịp" thay vì tưởng agent đang làm.
-  const lastEventTs = run.events.length > 0 ? run.events[run.events.length - 1].ts : run.startedAt
+  //
+  // R18 — NGOẠI LỆ QUAN TRỌNG: run cha đang await delegation (sub-agent chạy
+  // 10-16' hợp lệ — SUBAGENT_WALL_CLOCK_MS 15' + trọng tài) KHÔNG phải chết:
+  // hiển thị chip "Đang chờ sub-agent" (server đánh dấu awaitingDelegationSince
+  // qua markRunAwaitingDelegation) — hết chờ mới tính stalled như thường.
+  const lastEventTs = events.length > 0 ? events[events.length - 1].ts : run.startedAt
   const silentMinutes = running ? Math.floor((Date.now() - lastEventTs) / 60000) : 0
-  const stalled = running && silentMinutes >= 5
+  const waitingSub = running && typeof run.awaitingDelegationSince === 'number'
+  const waitingMinutes = waitingSub ? Math.floor((Date.now() - (run.awaitingDelegationSince as number)) / 60000) : 0
+  const stalled = running && !waitingSub && silentMinutes >= 5
 
   const agentColor = AGENT_COLORS[run.agentName]?.text
     || (run.agentPosition ? POSITION_COLORS[run.agentPosition]?.text : undefined)
@@ -409,13 +459,21 @@ export function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: RunTod
 
         {/* Trạng thái */}
         {running ? (
-          <span className={runStatusChipCls(stalled)}>
-            {stalled
-              ? <AlertTriangle className="h-3 w-3" />
-              : <Loader2 className="h-3 w-3 animate-spin" />}
-            {stalled ? 'Không còn nhịp' : 'Đang chạy'} · {fmtRunDuration(elapsed)}
-            {stalled && <span className="text-stone-500">({silentMinutes}′ im lặng)</span>}
-          </span>
+          waitingSub ? (
+            <span className="flex items-center gap-1 text-[11px] text-sky-300 flex-shrink-0" title="Run cha đang chờ sub-agent hoàn tất (pool tuần tự 1-slot R14) — không phải treo">
+              <Hourglass className="h-3 w-3 animate-pulse" />
+              Đang chờ sub-agent · {fmtRunDuration(elapsed)}
+              {waitingMinutes > 0 && <span className="text-stone-500">({waitingMinutes}′ chờ)</span>}
+            </span>
+          ) : (
+            <span className={runStatusChipCls(stalled)}>
+              {stalled
+                ? <AlertTriangle className="h-3 w-3" />
+                : <Loader2 className="h-3 w-3 animate-spin" />}
+              {stalled ? 'Không còn nhịp' : 'Đang chạy'} · {fmtRunDuration(elapsed)}
+              {stalled && <span className="text-stone-500">({silentMinutes}′ im lặng)</span>}
+            </span>
+          )
         ) : run.status === 'done' ? (
           <span className="flex items-center gap-1 text-[11px] text-emerald-400 flex-shrink-0">
             <CheckCircle2 className="h-3 w-3" /> Done
@@ -528,7 +586,8 @@ export function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: RunTod
             <div className="flex items-center gap-1.5 mb-1">
               <Activity className="h-3 w-3 text-cyan-400" />
               <span className="text-[12px] font-medium text-stone-200">Quá trình thực thi</span>
-              <span className="text-[11px] text-stone-400">{run.events.filter(e => e.type !== 'todo_update').length} sự kiện</span>
+              <span className="text-[11px] text-stone-400">{events.filter(e => e.type !== 'todo_update').length} sự kiện</span>
+              {run.source === 'record' && <span className="text-[10px] text-stone-500" title="Tái tạo từ bản ghi DB + trail đĩa — sống sót qua restart">(bản lưu)</span>}
             </div>
             <div className="max-h-80 overflow-y-auto space-y-1 pr-1" style={{ scrollbarWidth: 'thin' }}>
               {run.task && (
@@ -536,7 +595,18 @@ export function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: RunTod
                   🎯 Nhiệm vụ: <span className="text-stone-300">{run.task.slice(0, 160)}</span>
                 </div>
               )}
-              {run.events.map(e => {
+              {trailLoading && (
+                <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] text-stone-400">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Đang tải lại quá trình thực thi từ bản lưu...
+                </div>
+              )}
+              {!trailLoading && events.length === 0 && (
+                <div className="px-2 py-1 text-[11px] text-stone-500">
+                  (Không có sự kiện chi tiết được lưu — run trước R18 hoặc trail đã hết hạn retention)
+                </div>
+              )}
+              {events.map(e => {
                 if (e.type === 'thought') {
                   return (
                     <div key={e.id} className="px-2 py-1.5 rounded bg-slate-900/50 border-l-2 border-violet-500/50">
@@ -2949,18 +3019,28 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         // message khởi tạo run) + nạp dữ liệu vào agentRuns để panel render.
         // Run đang chạy (resume tác vụ nền) cũng được merge — panel hiện đúng
         // chỗ ngay khi mở lại session.
+        //
+        // R18 (user bug report "Thought Process biến mất hết không xem lại
+        // được"): server giờ trả THÊM `recordRuns` — các run tái tạo từ bảng
+        // AgentRunRecord DB (registry in-memory đã mất sau restart/eviction).
+        // Merge cả recordRuns → panel run cũ XUẤT HIỆN LẠI đúng vị trí; events
+        // rỗng + trailAvailable → AgentRunPanel tự lazy-fetch JSONL trail từ
+        // đĩa khi user mở panel (panel "GIỮ NGUYÊN tại phản hồi đó" vĩnh viễn).
         try {
           const runRes = await fetchWithTransientRetry(`/api/agent-run?sessionId=${encodeURIComponent(sid)}&limit=10`, undefined, { label: 'agent-run' })
           if (runRes.ok) {
-            const runData = await runRes.json() as { ok?: boolean; runs?: AgentRunData[] } | null
-            if (runData?.ok && Array.isArray(runData.runs) && runData.runs.length > 0) {
+            const runData = await runRes.json() as { ok?: boolean; runs?: AgentRunData[]; recordRuns?: AgentRunData[] } | null
+            if (runData?.ok && Array.isArray(runData.runs)) {
               const runs = runData.runs
+              const recordRuns = Array.isArray(runData.recordRuns) ? runData.recordRuns : []
               setAgentRuns(prev => {
                 const next = { ...prev }
+                // recordRuns KHÔNG đè run live (cùng runId → registry thắng)
                 for (const r of runs) if (r?.runId) next[r.runId] = r
+                for (const r of recordRuns) if (r?.runId && !next[r.runId]) next[r.runId] = r
                 return next
               })
-              setMessages(prev => mergeAgentRunPanels(prev, runs))
+              setMessages(prev => mergeAgentRunPanels(prev, [...runs, ...recordRuns]))
             }
           }
         } catch { /* best-effort — panel merge thất bại không chặn session load */ }
@@ -5559,7 +5639,13 @@ ${manifest}` : rawText
         signal: controller.signal, // USER REQUEST 2026-08-31: nút Dừng abort request này
       })
 
-      if (!res.ok) throw new Error(`Chat API error: ${res.status}`)
+      if (!res.ok) {
+        // R18 — 409 = inline chat mutex (phiên đang có tác vụ agent chạy):
+        // server trả message tiếng Việt rõ ràng — hiển thị NGUYÊN VĂN thay vì
+        // "Chat API error: 409" mù mờ.
+        const errData = await res.json().catch(() => null) as { error?: string } | null
+        throw new Error(errData?.error || `Chat API error: ${res.status}`)
+      }
 
       const data = await res.json()
 

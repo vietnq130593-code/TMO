@@ -243,8 +243,26 @@ function intEnvWithDefault(name: string, def: number): number {
 
 /** 0 = tắt worker hẳn (không tick) */
 export const GOAL_LOOP_WORKER_TICK_MS = intEnvWithDefault('GOAL_LOOP_WORKER_TICK_MS', 5000)
-/** Số job chạy đồng thời tối đa — Mr. Architect chốt: 2 */
-export const GOAL_LOOP_MAX_CONCURRENT = Math.max(1, intEnvWithDefault('GOAL_LOOP_MAX_CONCURRENT', 2))
+/**
+ * Số job goal-loop chạy đồng thời tối đa.
+ * R18 (user bug report "Omega gọi nhiều agent khác CÙNG LÚC làm việc — thiết kế
+ * yêu cầu 1 agent khác/lượt, các agent sau XẾP LỖT"): default 2 → 1. Bằng chứng
+ * điều tra R18: máy user không có override .env (env không track git) → nhận
+ * default 2 → worker chạy 2 job song song = 2 agent "đang chạy" cùng lúc ngoài
+ * ý muốn. User directive là TUẦN TỰ toàn diện (mirror SUBAGENT_MAX_CONCURRENT=1
+ * R14 — 2 tầng cùng 1 quy tắc). Nâng lại: đặt GOAL_LOOP_MAX_CONCURRENT=2 qua
+ * env (chỉ khi RAM dư + p95 chờ slotPool cao — xem docs/QUYET-DINH-TUAN-TU-VS-CONCURRENCY-R15.md).
+ */
+export const GOAL_LOOP_MAX_CONCURRENT = Math.max(1, intEnvWithDefault('GOAL_LOOP_MAX_CONCURRENT', 1))
+/**
+ * R18 — TRẦN TUỔI RESUME: job mồ côi (running-mà-không-có-chủ sau crash/restart)
+ * cũ hơn ngưỡng này KHÔNG được requeue nữa → mark failed 'stale'. Chống "tác vụ
+ * ma" định kỳ: job kẹt từ hôm trước được resume MỌI LẦN BOOT, mỗi lần đốt nguyên
+ * chuỗi failover LLM (5 spawn CLI × 400-590MB) dù user không yêu cầu gì — đúng
+ * symptom user report "request định kỳ mặc dù không động vào app". 0 = tắt trần
+ * (resume mọi tuổi — hành vi cũ).
+ */
+export const GOAL_LOOP_RESUME_MAX_AGE_MS = Math.max(0, intEnvWithDefault('GOAL_LOOP_RESUME_MAX_AGE_MS', 12 * 60 * 60 * 1000))
 /**
  * Job 'running' trong DB mà KHÔNG nằm trong running-map của process này
  * (orphan do restart/crash) được requeue nếu attempts < maxAttempts.

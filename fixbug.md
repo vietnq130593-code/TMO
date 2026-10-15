@@ -415,3 +415,22 @@
 - **Phát hiện lũy kế qua giao thức: 107 + 7 = 114** (R15-DEBT 7: 3 P3 + 4 P4) — 100% có entry Bug_v2.md (BUG2-255..261).
 - Gate kiểm thử: **1727/1727** (từ 1726; +1 r102 B0 behavioral pin 4 mục đường production).
 - Sai-kỳ-vọng phía người-rà R15-R1: 6 (auditor tự bác — ghi report auditor) — chuỗi chấm chéo tiếp tục xác nhận giá trị.
+
+### ĐỢT R18 — 4 bug user report production (nhiều agent cùng lúc + Thought Process biến mất + THAY ĐỔI CHƯA COMMIT thừa + RAM/request ma định kỳ) — KHÉP KẾT SAU ĐIỀU TRA 3 SUBAGENT EXPLORE SONG SONG + FIX 5 BUG + E2E BROWSER
+
+| Vòng | Phát hiện mới | Xác minh |
+|---|---|---|
+| R18 (điều tra gốc rễ — 3 subagent Explore song song: concurrency-paths · thought-lifecycle · periodic-LLM-sources; fix chính session) | **5** (BUG2-262..266: 1 P1 · 3 P2 · 1 P3) + 1 bug phụ phát hiện khi E2E (BUG2-266 response rỗng) | tsc 0 · lint 9 file 0 · full **1727/1727** · E2E browser: panel tái xuất hiện qua 2 lần restart + trail lazy-fetch 21 events + response không còn block 📁 + mobile/footer OK + 0 console error |
+
+- **Điểm chẩn đoán quan trọng nhất đợt:** "nhiều agent cùng lúc" KHÔNG phải slot pool R14 hỏng (pool vẫn serialize đúng — registerDelegationRun chạy SAU acquireSubAgentSlot) mà là 3 tầng khác: GOAL_LOOP_MAX_CONCURRENT default 2 (máy user không có .env override) · đường inline chat không mutex (2 POST chồng = 2 loop song song) · orphan sweep requeue-đè đa process (không check workerPid sống). Tương tự: "Không còn nhịp" là báo động GIẢ của panel cha khi await delegation hợp lệ 10-16' (chip dựa run.events im lặng ≥5').
+- **Kiến trúc mới "Thought Process vĩnh viễn" (BUG2-263):** 3 lớp — registry in-memory (nâng cap + evict an toàn: chỉ đuổi run KHÔNG chạy) → recordRuns (API tái tạo panel từ bảng AgentRunRecord DB khi registry mất) → trail lazy-fetch (panel mở → /api/agent-run?runId= đọc JSONL đĩa agent-runs/<runId>.jsonl — đầy đủ event, sống qua restart, retention 14 ngày). UI merge cả 3 nguồn — panel "GIỮ NGUYÊN tại phản hồi đó" theo yêu cầu user.
+- **Chống "tác vụ ma" định kỳ (BUG2-265):** trần tuổi resume job 12h (GOAL_LOOP_RESUME_MAX_AGE_MS — job kẹt từ hôm trước không tự sống lại mỗi boot) · Opus auto-sweep idle-gate 6h (OPUS_AUTO_IDLE_MS — session không ai dùng không review nữa) · policy-block TTL FreeTierError 403: 60s/300s → 1h (ZEN_POLICY_BLOCK_TTL_MS — retry ngắn cho policy-chặn toàn cục chỉ đốt lại 5 spawn CLI × 400-590MB) · kill cây tiến trình khi CLI timeout (Windows taskkill /T /F — chống leak opencode.exe cháu giữ RAM).
+- **BUG2-264 "THAY ĐỔI CHƯA COMMIT" thừa:** wrap-up cũ chụp TOÀN BỘ working tree lúc kết thúc (gồm phần bẩn từ TRƯỚC run) → mọi final report kèm block. Giờ: snapshot đầu run + chỉ báo DELTA (file run này tạo ra) — E2E: 2 run chỉ-đọc đều sạch.
+- **BUG2-266 (phát hiện E2E):** run kết thúc bằng tool call (không prose) + verdict complete → response "(agent không trả về nội dung)" — thêm ngoại lệ thứ 3 cho generateFinalReport (complete + lastContent rỗng → tổng hợp từ bằng chứng).
+- **Bài học truyền lại:** (7) **registry in-memory làm nguồn render UI = bug biến mất chờ ngày nổ** — phải luôn có lớp phục hồi bền vững (DB record + disk trail) và UI phải có đường fallback đọc lớp đó; (8) **chip trạng thái UI phải biết về các trạng thái CHỜ HỢP LỆ của hạ tầng** (await delegation 10-16') — heuristic "im lặng = chết" chỉ đúng khi không có cơ chế chờ dài đang chạy; (9) **TTL cache lỗi phải phân biệt POLICY (chặn vĩnh viễn — TTL dài) vs TRANSIENT (429/5xx — TTL ngắn)** — đồng nhất TTL khiến policy-block được retry vô nghĩa định kỳ; (10) **điều kiện nhánh fix phải kể CHẦN các trạng thái dữ liệu** (lastContent rỗng ≠ lastContent raw-mid-work — 2 ngoại lệ cùng đường complete nhưng chỉ 1 được bắt).
+
+### TỔNG KẾT LŨY KẾ (cập nhật sau R18)
+
+- **Phát hiện lũy kế qua giao thức: 114 + 5 = 119** (R18: BUG2-262..266 — 1 P1 · 3 P2 · 1 P3).
+- Gate kiểm thử: **1727/1727** (không test mới — theo directive phiên; pin hành vi qua E2E browser có bằng chứng screenshot + DB + trail).
+- Ghi chú: 1 vòng OOM-recompile xuất hiện giữa E2E (kernel OOM-kill next-server RSS 2.47GB lúc recompile sau edit — ràng buộc box 4GB đã ghi R16/R17, app tự hồi phục, run bị gián đoạn được salvage đúng cơ chế).

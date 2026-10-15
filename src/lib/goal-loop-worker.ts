@@ -65,6 +65,7 @@ import {
   GOAL_LOOP_MUTEX_STARVE_WARN_MS,
   GOAL_LOOP_STALL_PREEMPT_MS,
   GOAL_LOOP_MUTEX_MAX_PREEMPTS,
+  GOAL_LOOP_RESUME_MAX_AGE_MS,
   type GoalLoopCheckpoint,
   type GoalLoopDurableHooks,
   type GoalLoopJobInput,
@@ -408,6 +409,25 @@ class GoalLoopWorker {
   // -------------------- ORPHAN SWEEP --------------------
 
   /**
+   * R18 — check pid còn sống hay không (multi-process an toàn). process.kill
+   * (pid, 0) không gửi tín hiệu — chỉ probe: throw ESRCH nếu pid chết; EPERM nếu
+   * sống nhưng khác quyền (Windows/Unix đều đúng semantics này — coi EPERM = sống).
+   */
+  private isWorkerPidAlive(pid: number | null | undefined): boolean {
+    if (!pid || !Number.isFinite(pid)) return false
+    if (pid === process.pid) return true
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code === 'EPERM'
+    }
+  }
+
+  /** R18 — throttle log skip theo pid-sống (sweep chạy mỗi 5s — tránh spam cùng dòng) */
+  private pidSkipLogAt = new Map<string, number>()
+
+  /**
    * Sweep job mồ côi: status='running' trong DB mà KHÔNG nằm trong Map
    * `running` của process này (process cũ chết/crash). Xử lý CẢ boot-recovery
    * lẫn steady-state crash detection:
@@ -417,6 +437,15 @@ class GoalLoopWorker {
    *   - else → mark failed (không retry vô hạn).
    * Job ĐANG chạy trong process này (có trong Map) → KHÔNG đụng — LLM call
    * tối đa 8' là hợp lệ, stale heartbeat KHÔNG phải lý do kill.
+   *
+   * R18 — 2 GATE MỚI (user bug report "request định kỳ mặc dù không động vào app"):
+   *   - PID-ALIVE: row.workerPid còn sống và KHÔNG phải process này → process
+   *     khác (dev + pm2, 2 terminal next dev...) ĐANG CHẠY job đó → KHÔNG
+   *     requeue-đè (double-run thật: 2 bản cùng goal = 2 agent làm cùng lúc —
+   *     đúng symptom "Omega gọi nhiều agent cùng lúc" trên máy đa process).
+   *   - STALE-AGE: job mồ côi quá GOAL_LOOP_RESUME_MAX_AGE_MS (default 12h) →
+   *     mark failed 'stale' thay vì requeue — chống "tác vụ ma" tự sống lại mỗi
+   *     lần boot, mỗi lần đốt nguyên chuỗi failover LLM (5 spawn CLI × 400-590MB).
    */
   private async sweepOrphans(): Promise<{ requeued: number; markedFailed: number }> {
     let requeued = 0
@@ -428,6 +457,46 @@ class GoalLoopWorker {
       if (this.running.has(row.id)) continue
       const heartbeatAgeMs = row.heartbeatAt ? now - row.heartbeatAt.getTime() : null
       try {
+        // ━━━ R18 GATE 1 — PID-ALIVE: process khác (pid sống) đang giữ job ━━━
+        // Máy chạy >1 instance (dev + pm2 / 2 terminal) → mỗi process có Map
+        // running riêng; sweep của process này KHÔNG được requeue job process
+        // kia đang chạy (double-run thật). Chỉ tiếp tục khi pid chủ đã CHẾT.
+        if (row.workerPid && row.workerPid !== process.pid && this.isWorkerPidAlive(row.workerPid)) {
+          const lastLog = this.pidSkipLogAt.get(row.id) ?? 0
+          if (now - lastLog > 60_000) {
+            this.pidSkipLogAt.set(row.id, now)
+            if (this.pidSkipLogAt.size > 200) this.pidSkipLogAt.clear() // bound
+            console.log(
+              `[GoalLoopWorker] orphan sweep: SKIP job ${row.id} — workerPid ${row.workerPid} còn sống (process khác đang chạy — không requeue-đè, R18 gate)`
+            )
+          }
+          continue
+        }
+        // ━━━ R18 GATE 2 — STALE-AGE: job mồ côi quá tuổi không resume nữa ━━━
+        const jobAgeMs = row.createdAt ? now - row.createdAt.getTime() : 0
+        if (GOAL_LOOP_RESUME_MAX_AGE_MS > 0 && jobAgeMs > GOAL_LOOP_RESUME_MAX_AGE_MS) {
+          const res = await db.goalLoopJob.updateMany({
+            where: { id: row.id, status: 'running' },
+            data: {
+              status: 'failed',
+              error: `job mồ côi quá cũ (${Math.round(jobAgeMs / 3_600_000)}h > trần resume ${Math.round(GOAL_LOOP_RESUME_MAX_AGE_MS / 3_600_000)}h — R18: không resume tác vụ ma, user không yêu cầu lại thì thôi)`,
+              completedAt: new Date(),
+              workerPid: null,
+            },
+          })
+          if (res.count === 1) {
+            markedFailed++
+            console.log(
+              `[GoalLoopWorker] orphan sweep: mark FAILED (stale ${Math.round(jobAgeMs / 3_600_000)}h) job ${row.id} — quá trần resume, không tự sống lại (R18)`
+            )
+            // Opus hook giữ nguyên semantics mark-failed path (REVIEW 13-f BUG #3)
+            try {
+              const { maybeAutoOpusReview } = await import('@/lib/opus/pipeline')
+              void maybeAutoOpusReview(row.sessionId, { runRef: null, messageId: row.messageId ?? null })
+            } catch { /* fail-open */ }
+          }
+          continue
+        }
         if (row.attempts < GOAL_LOOP_MAX_ATTEMPTS) {
           // Conditional updateMany: chỉ requeue khi VẪN còn running — tránh
           // đè nếu có race với process khác claim/cancel trong chốc lát vừa rồi

@@ -48,7 +48,7 @@ import { isSessionDeleted, isSessionDeletedDeep } from '@/lib/session-tombstone'
 // buildAgentRunSummaryForMessage (goal-loop-finalize.ts, Task 14-c pure-move).
 // CI-2 (Task 11-a): getActiveRunId dùng ở crash-path để đóng todo của run
 // đang chạy dở khi goal loop văng exception.
-import { getActiveRunId, endAgentRun } from '@/lib/agent-run-tracker'
+import { getActiveRunId, endAgentRun, hasActiveRun } from '@/lib/agent-run-tracker'
 // CI-2 (Task 11-a) — PER-TASK TODO ISOLATION: 2 helper vòng đời todo theo
 // runId (dev-tools TODO section): archive todo của run trước khi run mới bắt
 // đầu + đóng per-item trung thực khi run kết thúc (thay bulk-close cũ).
@@ -1315,6 +1315,29 @@ export async function POST(request: NextRequest) {
               kbConfidence: kbSearchResult?.confidence || undefined,
             })
           }
+        }
+
+        // ━━━ R18 — INLINE CHAT MUTEX (user bug report "Omega gọi nhiều agent
+        // cùng lúc") ━━━ Đường durable có per-session mutex trong worker
+        // (REVIEW 14-g M2 — claimQueued skip job cùng session) nhưng đường INLINE
+        // KHÔNG có gì: 2 request chồng nhau (user gửi lại sau 502/504, tab thứ 2,
+        // voice + gõ tay) → 2 goal-loop chạy SONG SONG cùng session → nhiều panel
+        // "Đang chạy" chồng nhau + ChatMessage đan xen + tốn RAM gấp đôi. Giữ
+        // cùng semantics mutex của worker: session đang có run active → TỪ CHỐI
+        // với message rõ (user chờ hoàn tất / bấm Dừng), KHÔNG chạy chồng.
+        // Fail-open tuyệt đối: tracker throw → cho chạy như cũ.
+        if (sessionId) {
+          try {
+            if (hasActiveRun(sessionId)) {
+              return NextResponse.json(
+                {
+                  error:
+                    'Phiên chat này đang có tác vụ agent chạy (chưa hoàn tất). Theo dõi Thought Process đang chạy, chờ hoàn tất, hoặc bấm nút Dừng rồi gửi lại.',
+                },
+                { status: 409 },
+              )
+            }
+          } catch { /* fail-open — tracker lỗi không chặn chat */ }
         }
 
         const reactResult = await runGoalDrivenLoop({

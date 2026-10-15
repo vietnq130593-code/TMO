@@ -88,6 +88,10 @@ import {
   isSessionCancelled,
   stripInvisibleThoughtNoise,
   checkpointAgentRun,
+  // R18 ("Không còn nhịp" giả): đánh dấu run cha đang await delegation — UI
+  // hiển thị "Đang chờ sub-agent" thay vì chip stalled khi im lặng ≥5'
+  markRunAwaitingDelegation,
+  clearRunAwaitingDelegation,
 } from '@/lib/agent-run-tracker'
 // ROUND 3 (R3-03) — CTO mode cho Opus (meta-agent không thi công). Static
 // import an toàn: opus-agent chỉ import db/fs (động tool-executor bên trong
@@ -2727,6 +2731,19 @@ export async function runGoalDrivenLoop(params: {
     // AgentRunRecord + panel Thought Process liền mạch "1 chat run = 1 run".
     runId: resumeState?.runId ?? undefined,
   })
+  // ━━━ R18 (user bug report "THAY ĐỔI CHƯA COMMIT xuất hiện vô cớ") — GIT
+  // SNAPSHOT ĐẦU RUN ━━━ Wrap-up bàn giao (BUG-025 r69) trước đây chụp git
+  // status LÚC KẾT THÚC: working tree bẩn SẴN TỪ TRƯỚC run (dev.log, .env,
+  // db/, file mission trước để lại...) → block "THAY ĐỔI CHƯA COMMIT" nhảy ra
+  // trong MỌI final report — kể cả run không đụng file nào, kể cả run lỗi
+  // không trả lời được (user report đúng). Giờ chụp snapshot ĐẦU run; wrap-up
+  // chỉ báo DELTA (file run NÀY làm thay đổi) — đúng semantics "công sức có
+  // thật chưa được commit" của BUG-025. Fail-open như mọi tầng git helper.
+  let gitStatusRunStart: import('@/lib/workspace-git').WorkspaceGitStatus | null = null
+  try {
+    const { getWorkspaceGitStatus } = await import('@/lib/workspace-git')
+    gitStatusRunStart = await getWorkspaceGitStatus()
+  } catch { /* fail-open — wrap-up tự fallback hành vi cũ */ }
   // Task 20-c — INSERT row AgentRunRecord 'running' lúc START: runs.active
   // (Runtime Metrics panel) ≠ 0 trong lúc agent đang chạy. Fire-and-forget,
   // fail-open — metrics không được phép làm hỏng loop.
@@ -4660,7 +4677,12 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         // vứt stub (kết quả đã trả phải về tay agent). =====
         const pendingDelegation = delegationPromises.get(tcIdx)
         if (pendingDelegation) {
+          // R18 — run cha đang await delegation (chờ sub-agent chạy xong,
+          // hợp lệ 10-16'): đánh dấu để panel không báo "Không còn nhịp" giả.
+          // Promise IIFE có try/catch bên trong → không bao giờ reject.
+          markRunAwaitingDelegation(agentSessionId, runId)
           const r = await pendingDelegation
+          clearRunAwaitingDelegation(agentSessionId, runId)
           if (r.preFlightFail) {
             pushToolMessage(messages, { tool: tc.name, success: false, result: r.preFlightFail })
             evidence.push({ cycle, kind: 'tool', tool: tc.name, success: false, text: 'từ chối (budget cha gần cạn)' })
@@ -4794,7 +4816,18 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           const t = buildDelegationDispatchThought(cycle, agentName, tc)
           if (t) recordAgentThought(agentSessionId, t, totalIterations)
         }
+        // R18 — delegation tool chạy TUẦN TỰ (không fan-out): run cha block ở
+        // await này 10-16' hợp lệ → đánh dấu "đang chờ sub-agent" chống chip
+        // "Không còn nhịp" giả (executeTool throw → loop unwind + endAgentRun
+        // → flag không còn tác dụng).
+        const isDelegationTool = DELEGATION_LOG_TOOLS.has(tc.name)
+        if (isDelegationTool) {
+          markRunAwaitingDelegation(agentSessionId, runId)
+        }
         const toolResult = await executeTool(tc.name, toolArgs, { agentName, sessionId: agentSessionId, runId })
+        if (isDelegationTool) {
+          clearRunAwaitingDelegation(agentSessionId, runId)
+        }
 
         processToolResult(tc, toolResult)
       }
@@ -6003,8 +6036,14 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
     // tới khi lệnh trên trả về" — user nhận thinking thay vì báo cáo. Heuristic
     // phát hiện: lastContent chứa marker tool_call raw chưa parse.
     const lastContentIsRawMidWork = !!lastContent && /\btool_call:\s*[a-z_]+\s*\(/i.test(lastContent)
+    // R18 — NGOẠI LỆ THỨ BA đường complete: run kết thúc bằng TOOL CALL (agent
+    // chưa kịp viết prose kết luận — bằng chứng E2E R18: run đọc package.json
+    // 8 vòng/7 tool calls, trọng tài phán ĐẠT 95%, nhưng lastContent='' →
+    // response "(agent không trả về nội dung)" — đúng nhóm "lỗi không trả lời"
+    // user phàn nàn). Tổng hợp final report từ bằng chứng như 2 ngoại lệ trên.
+    const lastContentIsEmpty = !lastContent || lastContent.trim() === ''
     if ((stopReason !== 'complete' && stopReason !== 'needs_input' && lastContent)
-        || (stopReason === 'complete' && lastContentIsRawMidWork)) {
+        || (stopReason === 'complete' && (lastContentIsRawMidWork || lastContentIsEmpty))) {
       // r60 (A5) — bọc heartbeat: final report là 1 LLM call dài cuối run,
       // heartbeat cần đập xuyên suốt (mirror LLM call chính + evaluator)
       const wrapUp = await runWithBatchHeartbeat(() => generateFinalReport({
@@ -6099,13 +6138,30 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
   // sau có thể ghi đè. Bước bàn giao cứng: chụp git status, nếu working tree
   // bẩn → BÁO RÕ trong final report (deterministic, 0 LLM call) — operator/
   // lần chạy kế nhặt lên được.
+  //
+  // R18 (user bug report "THAY ĐỔI CHƯA COMMIT nhảy ra ngay cả khi không được
+  // yêu cầu / khi lỗi không trả lời"): trước đây block liệt kê TOÀN BỘ working
+  // tree bẩn — bao gồm phần bẩn TỪ TRƯỚC run (dev.log, .env, db/, mission
+  // cũ...) → mọi final report đều kèm block dù run này không làm gì. Giờ chỉ
+  // báo DELTA so với snapshot đầu run (xem gitStatusRunStart phía trên): block
+  // xuất hiện KHI VÀ CHỈ KHI run này thật sự làm thay đổi working tree.
   try {
-    const { getWorkspaceGitStatus, formatUncommittedBlock } = await import('@/lib/workspace-git')
+    const { getWorkspaceGitStatus, diffGitStatusSnapshots, formatUncommittedBlock, MAX_UNCOMMITTED_LINES_VISIBLE } = await import('@/lib/workspace-git')
     const gs = await getWorkspaceGitStatus()
-    const block = formatUncommittedBlock(gs, '📁 **THAY ĐỔI CHƯA COMMIT trong working tree** (bàn giao — công sức có thật chưa được git_commit chốt)')
-    if (block) {
-      content += `\n\n---\n${block}\n→ Lần chạy kế/operator nhặt: commit kèm provenance HOẶC discard tường minh — không để mất trắng.`
-      recordAgentThought(agentSessionId, `📁 Wrap-up bàn giao: ${gs.total} thay đổi chưa commit trong working tree — đã ghi danh sách vào báo cáo cuối (BUG-025)`, totalIterations)
+    const deltaLines = gitStatusRunStart
+      ? diffGitStatusSnapshots(gitStatusRunStart, gs)
+      : gs.lines // snapshot đầu run fail (repo không phải git lúc đó...) → hành vi cũ
+    if (deltaLines.length > 0) {
+      const deltaStatus = {
+        ok: true,
+        lines: deltaLines.slice(0, MAX_UNCOMMITTED_LINES_VISIBLE),
+        total: deltaLines.length,
+      }
+      const block = formatUncommittedBlock(deltaStatus, `📁 **THAY ĐỔI CHƯA COMMIT do run này tạo ra** (${deltaLines.length} file — bàn giao: công sức có thật chưa được git_commit chốt)`)
+      if (block) {
+        content += `\n\n---\n${block}\n→ Lần chạy kế/operator nhặt: commit kèm provenance HOẶC discard tường minh — không để mất trắng.`
+        recordAgentThought(agentSessionId, `📁 Wrap-up bàn giao: ${deltaLines.length} thay đổi chưa commit do run này tạo ra (delta so với đầu run — R18) — đã ghi danh sách vào báo cáo cuối (BUG-025)`, totalIterations)
+      }
     }
   } catch { /* fail-open — bàn giao không được phá response */ }
 
