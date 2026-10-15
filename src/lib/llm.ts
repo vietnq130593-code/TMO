@@ -342,9 +342,8 @@ function getRotatedModels(provider: string, models: string[]): string[] {
 /** NVIDIA NIM EXTRACTION models (user directive 2026-11-30 — cập nhật từ 2026-09-05):
  *  CHÍNH SÁCH: trích xuất (triết tách) tài liệu dùng nemotron-3-ultra-550b làm
  *  LÕI CHÍNH DUY NHẤT — KHÔNG BAO GIỜ dùng kimi-k3 cho trích xuất tài liệu.
- *  Khi lõi NIM fail toàn chuỗi xoay key (429 kéo dài — đặc tính NIM với tác vụ
- *  phức tạp/dài) → callLLMSlot fallback chuỗi Zen (EXTRACTION_ZEN_MODEL, mặc
- *  định space-bunny-free) để pipeline trích xuất không chết.
+ *  R19 (2026-10-15 — bỏ model fallback): lõi NIM fail → callLLMSlot trả lỗi,
+ *  document sẽ retry sau (KHÔNG còn chuỗi fallback Zen cũ).
  *
  *  nvidia/nemotron-3-ultra-550b-a55b: 550B MoE (55B active) ✓ ALIVE —
  *    live-probe 2026-11-30 HTTP 200 (4/4 key OK từ matrix 2026-10-16).
@@ -399,8 +398,7 @@ export const DEEPSEEK_V41_FLASH_NIM_ID = 'deepseek-ai/deepseek-v4.1-flash'
  *  từ 14/10). Nemotron-550b là lõi chat NIM duy nhất còn sống: 200/2-3.5s,
  *  tool_calls chuẩn OpenAI format (probe read_file {"path":...} ✓). Trước
  *  đây là lõi extraction (NVIDIA_EXTRACTION_MODELS) — R17 nâng thành lựa chọn
- *  agent chính thức + NIM RESCUE MODEL mặc định (env NIM_RESCUE_MODEL
- *  override). */
+ *  agent chính thức (R19: không còn vai trò NIM RESCUE — fallback đã dỡ). */
 export const NEMOTRON_550B_NIM_ID = 'nvidia/nemotron-3-ultra-550b-a55b'
 
 /**
@@ -2739,10 +2737,17 @@ async function callModelWithKeyRotation(
   rotationOpts?: { startKeyIndex?: number; timeoutMs?: number; maxTokens?: number; temperature?: number; taskLabel?: string },
 ): Promise<LLMResult | null> {
   // ===== CIRCUIT BREAKER — hard-block đã được xác nhận trước đó → fail NGAY =====
+  // R19: trả error-result (không còn null mù) — caller đọc được nguyên nhân
+  // ngay ("báo lỗi là được, tôi tự chọn model khác" — user directive).
   const breaker = isModelHardBlocked(model)
   if (breaker.blocked) {
     console.warn(`[LLM] 🔴 ${model} (${rotationOpts?.taskLabel || 'rotation'}): circuit breaker đang mở — bỏ qua xoay vòng (còn ${Math.ceil((modelBlockBreakers.get(model)!.blockedUntil - Date.now()) / 1000)}s). ${breaker.reason}`)
-    return null
+    return {
+      content: '',
+      provider: 'nvidia',
+      model,
+      error: `circuit breaker đang mở (còn ${Math.ceil((modelBlockBreakers.get(model)!.blockedUntil - Date.now()) / 1000)}s): ${breaker.reason}`,
+    }
   }
 
   const pool = nvidiaPool
@@ -2752,14 +2757,19 @@ async function callModelWithKeyRotation(
   }
   if (validIndices.length === 0) {
     console.warn(`[LLM] 🔄 ${model}: KHÔNG có NVIDIA key nào hợp lệ (NVIDIA_API_KEY_1..4)`)
-    return null
+    return {
+      content: '',
+      provider: 'nvidia',
+      model,
+      error: 'KHÔNG có NVIDIA key nào hợp lệ (NVIDIA_API_KEY_1..4 trong .env)',
+    }
   }
 
-  // ===== Hard-block detection state =====
-  /** Số lần cooldown đã reset xong (key "recovered" theo thời gian) rồi retry */
-  let cooldownCycles = 0
-  /** Các key trả 429-instant KỂ TỪ cooldown gần nhất (reset khi có kết quả khác) */
-  const instant429Keys = new Set<number>()
+  // ===== R19 fail-fast state =====
+  /** Lỗi model-tầng (timeout/network/5xx/empty) LIÊN TIẾP — 2 lần → model treo, dừng */
+  let consecutiveModelLevelFails = 0
+  /** Chi tiết lỗi gần nhất — trả kèm error-result để user thấy nguyên nhân thật */
+  let lastFailDetail = 'unknown'
 
   const taskLabel = rotationOpts?.taskLabel || 'rotation'
   // Task 30 FIX (chat KHÔNG gọi được DS v4.1 Flash / Kimi K3): AgentProfile
@@ -2785,23 +2795,28 @@ async function callModelWithKeyRotation(
   )
   const temperature = rotationOpts?.temperature ?? options?.temperature ?? 0.1
 
-  // Chuỗi attempt: xoay vòng validIndices đủ KEY_FAILURES_PER_KEY vòng —
-  // mỗi key đúng 3 lần, quay vòng hết 4 key lại về key đầu tiên (user directive).
+  // R19 (2026-10-15 user directive — "bỏ model fallback, model lỗi thì báo
+  // lỗi, tôi tự chọn model khác thủ công"): xoay vòng giảm còn 1 LƯỢT/key.
+  // Trước đây: 3 lượt × 4 key = 12 attempts + chờ rate-limit cooldown rồi
+  // xoay lại trong budget 15 phút — nguồn "request ma đốt RAM" khi model
+  // chết/treo (mỗi attempt timeout 90-240s, chuỗi giữ request 3-5 phút).
+  // Giờ: mỗi key đúng 1 lần; lỗi key-specific (429 RPM/daily quota/auth)
+  // vẫn chuyển key kế; lỗi model-tầng (timeout/network/5xx/empty) 2 lần
+  // liên tiếp → dừng NGAY kèm nguyên nhân.
   const startIndex = rotationOpts?.startKeyIndex != null && rotationOpts.startKeyIndex >= 0
     ? validIndices.indexOf(rotationOpts.startKeyIndex) >= 0
       ? validIndices.indexOf(rotationOpts.startKeyIndex)
       : 0
     : (kimiKeyRotationCounter++) % validIndices.length
-  const maxAttempts = validIndices.length * KEY_FAILURES_PER_KEY
+  const maxAttempts = validIndices.length
 
-  const failuresByKey = new Map<number, number>()
   const deadKeys = new Set<number>()   // daily-quota / auth-dead trong chuỗi này
   const startedAt = Date.now()
   let attemptNo = 0
 
-  console.log(`[LLM] 🔄 ${model} (${taskLabel}): bắt đầu xoay vòng ${validIndices.length} key × ${KEY_FAILURES_PER_KEY} lần = tối đa ${maxAttempts} attempts`)
+  console.log(`[LLM] 🔄 ${model} (${taskLabel}): xoay vòng 1 lượt × ${validIndices.length} key = tối đa ${maxAttempts} attempts (R19 fail-fast)`)
 
-  for (let round = 0; round < KEY_FAILURES_PER_KEY; round++) {
+  {
     for (let offset = 0; offset < validIndices.length; offset++) {
       // Abort check — người dùng bấm Dừng → cắt ngang chuỗi ngay
       if (options?.abortCheck && options.abortCheck()) {
@@ -2811,10 +2826,10 @@ async function callModelWithKeyRotation(
       // Budget — chặn trường hợp mọi attempt đều treo timeout
       if (Date.now() - startedAt > KEY_ROTATION_BUDGET_MS) {
         console.warn(`[LLM] 🔄 ${model}: vượt budget ${KEY_ROTATION_BUDGET_MS / 60000} phút sau ${attemptNo} attempts — dừng xoay vòng`)
-        return null
+        return { content: '', provider: 'nvidia', model, error: `vượt budget ${KEY_ROTATION_BUDGET_MS / 60000} phút sau ${attemptNo} attempts (model trả lời quá chậm — lỗi gần nhất: ${lastFailDetail})` }
       }
 
-      const keyIdx = validIndices[(startIndex + round * validIndices.length + offset) % validIndices.length]
+      const keyIdx = validIndices[(startIndex + offset) % validIndices.length]
       if (deadKeys.has(keyIdx)) continue
       const keyInfo = pool.getRawKeyInfo(keyIdx)
       if (!keyInfo) continue
@@ -2824,12 +2839,11 @@ async function callModelWithKeyRotation(
       // ngừng đốt key/time budget cho model đã bị chặn.
       if (isModelHardBlocked(model).blocked) {
         console.warn(`[LLM] 🔄 ${model} (${taskLabel}): breaker TRIPPED giữa xoay vòng sau ${attemptNo} attempts — dừng NGAY (fail-fast)`)
-        return null
+        return { content: '', provider: 'nvidia', model, error: `circuit breaker trip giữa xoay vòng sau ${attemptNo} attempts: ${isModelHardBlocked(model).reason}` }
       }
 
       attemptNo++
 
-      const attemptStartedAt = Date.now()
       const attempt = await attemptNvidiaOnce({
         keyInfo,
         model,
@@ -2843,7 +2857,6 @@ async function callModelWithKeyRotation(
         agentId: options?.agentId,
         agentName: options?.agentName,
       })
-      const attemptMs = Date.now() - attemptStartedAt
       // TASK 22 — model timeout health (fast-fail khi model HANG)
       noteModelAttempt(model, attempt.status)
 
@@ -2853,50 +2866,41 @@ async function callModelWithKeyRotation(
         return attempt.result
       }
 
-      // ===== HARD-BLOCK DETECTION (circuit breaker input) =====
-      // 429 trả về gần như NGAY LẬP TỨC (server từ chối không xử lý) = dấu hiệu
-      // chặn ở tầng model/tài khoản, KHÔNG phải rate-limit RPM thông thường
-      // (RPM-throttle thường trả 429 sau khi đã xử lý 1 phần hoặc kèm Retry-After).
-      const isInstant429 = attempt.status === 'rate_limited' && attemptMs < INSTANT_429_MS
-      if (isInstant429) {
-        instant429Keys.add(keyIdx)
+      // ===== R19 — MODEL-LEVEL FAIL FAST =====
+      // Lỗi model-tầng (timeout/network/5xx/empty-response) lặp 2 lần liên
+      // tiếp → model đang treo/chết phía NVIDIA, xoay key khác chỉ đốt thêm
+      // timeout (bằng chứng R16/R17: kimi-k3 + deepseek-v4.1-flash treo 0-byte
+      // trên CẢ 4 key — chuỗi 12 attempts × 90-240s từng giữ request 3-5 phút
+      // và là nguồn RAM spike khi idle). Dừng NGAY + trả nguyên nhân.
+      const isModelLevelFail = attempt.status === 'timeout'
+        || attempt.status === 'network_error'
+        || attempt.status === 'server_error'
+        || attempt.status === 'empty_response'
+      if (isModelLevelFail) {
+        consecutiveModelLevelFails++
+        if (consecutiveModelLevelFails >= 2) {
+          const hangDetail = `2 lần liên tiếp ${attempt.status}${attempt.errorMessage ? ` (${attempt.errorMessage})` : ''} — model có dấu hiệu treo/chết phía NVIDIA`
+          console.warn(`[LLM] 🔄 ${model} (${taskLabel}): ${hangDetail} — dừng NGAY (R19 fail-fast, không đốt thêm key)`)
+          return { content: '', provider: 'nvidia', model, error: `NIM "${model}": ${hangDetail}` }
+        }
       } else {
-        // Kết quả khác (thành công/timeout/5xx/429 chậm) → sweep này không phải hard-block
-        instant429Keys.clear()
+        consecutiveModelLevelFails = 0
       }
-      // Đã từng cooldown-reset xong mà sweep hiện tại lại TOÀN 429-instant trên
-      // mọi key → chặn cứng đã được xác nhận → trip breaker, fail NGAY (không
-      // đốt thêm 15' budget). Cooldown RPM thật đã có 30s để hồi — nếu 30s sau
-      // vẫn instant-429 toàn bộ thì không phải RPM.
-      // FIX (breaker-audit #2): ngưỡng "mọi key" phải theo key CÒN SỐNG — key
-      // daily-quota/auth-dead đã bị loại khỏi vòng (deadKeys) nên không bao giờ
-      // vào instant429Keys; so với validIndices.length khiến breaker KHÔNG BAO
-      // GIỜ trip được khi ≥1 key chết (đúng lúc tối cần fail-fast: cạn quota).
-      const aliveKeyCount = validIndices.length - deadKeys.size
-      if (cooldownCycles >= 1 && aliveKeyCount > 0 && instant429Keys.size >= aliveKeyCount) {
-        tripModelBreaker(
-          model,
-          `Xác nhận bằng live-test: cả ${validIndices.length} key đều 429-instant (${attemptMs}ms/lần) ngay cả sau cooldown ${cooldownCycles} lần — khả năng NVIDIA NIM chặn model ở tầng tài khoản/hạn mức. Kiểm tra tài khoản NIM (build.nvidia.com → Credits/Rate limits) hoặc thử model khác trên cùng key để xác nhận.`,
-        )
-        return null
-      }
-
-      const failCount = (failuresByKey.get(keyIdx) || 0) + 1
-      failuresByKey.set(keyIdx, failCount)
+      lastFailDetail = `${attempt.status}${attempt.httpStatus ? ` (HTTP ${attempt.httpStatus})` : ''}${attempt.errorMessage ? `: ${attempt.errorMessage}` : ''}`
 
       if (attempt.status === 'bad_request') {
         // FIX (R2-a #7): 400/413/422 deterministic — body hỏng thì retry key khác
-        // CÙNG body cũng fail y hệt → dừng NGAY, không đốt 11 attempts còn lại.
+        // CÙNG body cũng fail y hệt → dừng NGAY (R19: trả kèm nguyên nhân).
         console.warn(`[LLM] 🔄 ${model} ✗ key#${keyIdx + 1} → bad_request (HTTP ${attempt.httpStatus}) — LỖI BODY deterministic, dừng xoay vòng: ${attempt.errorMessage?.slice(0, 160)}`)
-        return null
+        return { content: '', provider: 'nvidia', model, error: `bad_request (HTTP ${attempt.httpStatus})${attempt.errorMessage ? `: ${attempt.errorMessage.slice(0, 250)}` : ''}` }
       }
       if (attempt.status === 'daily_quota') {
-        // Key chết tới nửa đêm — loại khỏi chuỗi (không thử tiếp 2 lần còn lại)
+        // Key chết tới nửa đêm — loại khỏi chuỗi
         pool.markDailyQuotaExhausted(keyInfo.key)
         deadKeys.add(keyIdx)
         console.warn(`[LLM] 🔄 ${model} ✗ key#${keyIdx + 1} → 429 DAILY QUOTA — loại key khỏi chuỗi (reset nửa đêm)`)
       } else if (attempt.status === 'auth_error') {
-        // Key sai/hết hạn — thử lại vô nghĩa, loại luôn (đã tiêu 1/3 lần fail)
+        // Key sai/hết hạn — thử lại vô nghĩa, loại luôn
         pool.markRateLimitedSoft(keyInfo.key, 60000)
         deadKeys.add(keyIdx)
         console.warn(`[LLM] 🔄 ${model} ✗ key#${keyIdx + 1} → ${attempt.errorMessage} (auth) — loại key khỏi chuỗi`)
@@ -2904,43 +2908,21 @@ async function callModelWithKeyRotation(
         // 429 RPM / 5xx / timeout / network / empty — cooldown ngắn cho pool,
         // KHÔNG tăng failureCount pool (tránh cascade-exhaust) rồi CHUYỂN KEY
         pool.markRateLimitedSoft(keyInfo.key, attempt.status === 'rate_limited' ? 30000 : 15000)
-        console.log(`[LLM] 🔄 ${model} ✗ key#${keyIdx + 1} ...${keyInfo.key.slice(-6)} → ${attempt.status}${attempt.httpStatus ? ` (${attempt.httpStatus})` : ''} [fail ${failCount}/${KEY_FAILURES_PER_KEY}]${attempt.errorMessage ? ` — ${attempt.errorMessage.slice(0, 120)}` : ''} → chuyển key kế tiếp`)
+        console.log(`[LLM] 🔄 ${model} ✗ key#${keyIdx + 1} ...${keyInfo.key.slice(-6)} → ${attempt.status}${attempt.httpStatus ? ` (${attempt.httpStatus})` : ''}${attempt.errorMessage ? ` — ${attempt.errorMessage.slice(0, 120)}` : ''} → chuyển key kế tiếp`)
       }
 
-      if (failCount >= KEY_FAILURES_PER_KEY) {
-        deadKeys.add(keyIdx)
-      }
       if (deadKeys.size >= validIndices.length) {
-        // RATE-LIMIT WAIT: If all keys are dead due to RATE-LIMITING (not daily-quota/auth),
-        // WAIT for the earliest cooldown reset instead of immediately giving up.
-        // This is the critical fix for "agents stop mid-task after a few iterations" —
-        // the 429 rate limit (30-45s cooldown) was causing immediate failure instead of
-        // waiting for a key to become available again.
-        const waited = await waitForRateLimitCooldown(pool, options?.abortCheck)
-        if (waited.recovered) {
-          // A key became available — reset deadKeys and RESTART all rounds.
-          // (fix 2026-08-27: trước đây chỉ `continue` inner-loop — nếu wait rơi vào
-          // iteration cuối của round cuối thì vòng lặp kết thúc, key đã recovered
-          // không bao giờ được thử lại.) Budget 15 phút vẫn chặn tổng thời gian.
-          console.log(`[LLM] 🔄 ${model}: rate-limit cooldown expired — retrying with refreshed keys`)
-          deadKeys.clear()
-          for (const [k] of failuresByKey) failuresByKey.set(k, 0)
-          // FIX (breaker-audit #1): chỉ đếm cooldown-cycle THẬT (đã ngủ ≥30s
-          // qua reset) — vacuous cycle (reset-time cũ → trả ngay, 0s) không
-          // đủ bằng chứng "đã qua cooldown mà vẫn 429" để arming breaker.
-          if (waited.waitedMs >= REAL_COOLDOWN_CYCLE_MIN_MS) cooldownCycles++
-          instant429Keys.clear() // sweep mới bắt đầu — đếm lại 429-instant
-          round = -1 // restart outer round loop
-          break      // exit inner offset loop
-        }
-        console.warn(`[LLM] 🔄 ${model}: MỌI key đều đã fail đủ ${KEY_FAILURES_PER_KEY} lần (sau ${attemptNo} attempts) — dừng xoay vòng`)
-        return null
+        // R19 fail-fast: mọi key đều chết trong lượt xoay DUY NHẤT (rate-
+        // limit/quota/auth) — KHÔNG chờ cooldown 30s+ rồi xoay lại 3 vòng như
+        // cũ (budget 15 phút). Báo lỗi NGAY — user tự thử lại/đổi model.
+        console.warn(`[LLM] 🔄 ${model}: MỌI key đều fail trong 1 lượt xoay (sau ${attemptNo} attempts — R19 fail-fast, không chờ cooldown) — trả lỗi`)
+        return { content: '', provider: 'nvidia', model, error: `MỌI NVIDIA key đều fail trong 1 lượt xoay (lỗi gần nhất: ${lastFailDetail}) — thử lại sau ít phút khi cooldown/hạn mức hồi, hoặc chọn model khác` }
       }
     }
   }
 
-  console.warn(`[LLM] 🔄 ${model}: hết chuỗi xoay vòng (${attemptNo} attempts) — mọi key đều fail đủ ${KEY_FAILURES_PER_KEY} lần`)
-  return null
+  console.warn(`[LLM] 🔄 ${model}: hết chuỗi xoay vòng (${attemptNo} attempts, R19 1 lượt/key) — mọi key đều fail (${lastFailDetail})`)
+  return { content: '', provider: 'nvidia', model, error: `hết chuỗi xoay key sau ${attemptNo} attempts — lỗi gần nhất: ${lastFailDetail}` }
 }
 
 /** Counter xoay vòng start key cho agent/chat calls — phân tải đều các key */
@@ -3565,14 +3547,12 @@ export function getProviderDiagnostics(): Record<string, {
 /**
  * Key-based LLM call for document processing — EXTRACTION CORE ONLY
  * (user directive 2026-11-30):
- *   1. PRIMARY:  NIM nvidia/nemotron-3-ultra-550b-a55b — xoay vòng 4 key × 3 lần
- *   2. FALLBACK: chuỗi Zen (EXTRACTION_ZEN_MODEL — HTTP → CLI → ZEN FAILOVER)
- *                khi NIM fail toàn chuỗi (429 kéo dài — đặc tính NIM với tác vụ
- *                phức tạp/dài hạn theo user).
+ *   1. PRIMARY:  NIM nvidia/nemotron-3-ultra-550b-a55b — xoay vòng 4 key (1 lượt/key — R19 fail-fast)
+ *   2. R19 (2026-10-15 — bỏ model fallback): NIM fail → trả lỗi, document sẽ
+ *      retry sau (KHÔNG còn chuỗi fallback Zen cũ).
  *
  * KHÔNG BAO GIỜ gọi kimi-k3 (lõi agent/chat) cho extraction — đây là ràng
  * buộc cứng theo directive user (2026-09-05, giữ nguyên 2026-11-30).
- * (Lõi fallback NIM cũ gpt-oss-120b đã EOL 410 — loại bỏ.)
  *
  * @param slotIndex - The key index (0-3) assigned to this document; -1 = round-robin
  * @param prompt - The user prompt
@@ -3590,16 +3570,17 @@ export async function callLLMSlot(
 
   // ===== USER DIRECTIVE 2026-11-30 — EXTRACTION NIM-FIRST =====
   // "Tôi chỉ sử dụng lõi embed từ Nvidia Nim và nemotron-3-ultra-550b cho công
-  // việc triết tách" — nemotron-3-ultra-550b quay lại làm lõi extraction CHÍNH
-  // (NIM 4 key xoay vòng, circuit breaker + timeout-strike tự trip khi NIM
-  // hang/429). NIM dễ 429 kéo dài với tác vụ phức tạp/dài → khi lõi NIM fail
-  // toàn chuỗi xoay key, fallback chuỗi Zen (EXTRACTION_ZEN_MODEL, mặc định
-  // space-bunny-free) để pipeline trích xuất không chết.
+  // việc triết tách" — nemotron-3-ultra-550b là lõi extraction CHÍNH.
   // kimi-k3 TUYỆT ĐỐI không dùng cho extraction (directive 2026-09-05 giữ nguyên).
   // slotIndex (document key assignment cũ) giữ làm startKeyIndex gợi ý xoay key.
+  // R19 (2026-10-15 — user directive bỏ model fallback): extraction dùng ĐÚNG 1
+  // model (EXTRACTION_MODEL_OVERRIDE || nemotron-550b) — chuỗi fallback Zen cũ
+  // (HTTP → CLI → ZEN FAILOVER) đã DỠ. Model fail → trả lỗi, document retry sau
+  // (caller fail-open — không âm thầm đổi model).
   const nimExtractionModel = EXTRACTION_MODEL_OVERRIDE || NVIDIA_EXTRACTION_MODELS[0]
+  let nimResult: LLMResult | null = null
   if (nvidiaPool.keyCount > 0 && nimExtractionModel && !isModelHardBlocked(nimExtractionModel).blocked) {
-    const nimResult = await callModelWithKeyRotation(
+    nimResult = await callModelWithKeyRotation(
       nimExtractionModel,
       prompt,
       systemPrompt,
@@ -3615,61 +3596,18 @@ export async function callLLMSlot(
       console.log(`[LLM] Extraction dùng NIM ${nimExtractionModel} ✓ (${nimResult.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
       return nimResult
     }
-    console.warn(`[LLM] Extraction NIM ${nimExtractionModel} thất bại toàn chuỗi xoay key — fallback chuỗi Zen — task: ${taskLabel}: ${String(nimResult?.error || 'null result').slice(0, 120)}`)
   }
 
-  // ===== EXTRACTION FALLBACK — OPENCODE ZEN (giữ từ Task 33) =====
-  // NIM 429 kéo dài / hết key / breaker mở → chuỗi Zen: HTTP → CLI → ZEN
-  // FAILOVER space-bunny. Override EXTRACTION_ZEN_MODEL để đổi model zen.
-  if (isZenConfigured()) {
-    const extractModel = process.env.EXTRACTION_ZEN_MODEL?.trim() || 'space-bunny-free'
-    const zen = await callZenProvider(
-      prompt,
-      systemPrompt,
-      extractModel,
-      { ...options, temperature: options?.temperature ?? 0.1, maxTokens: options?.maxTokens ?? 16384 },
-      `extraction:${taskLabel}`,
-    )
-    if (zen && zen.content) {
-      console.log(`[LLM] Extraction dùng Zen ${extractModel} ✓ (${zen.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
-      return zen
-    }
-    console.warn(`[LLM] Extraction Zen HTTP ${extractModel} thất bại — thử OpenCode CLI: ${(zen?.error || 'unknown').slice(0, 100)}`)
-    const cliResult = await callOpenCodeCLIProvider(
-      prompt,
-      systemPrompt,
-      extractModel,
-      { ...options, temperature: options?.temperature ?? 0.1, maxTokens: options?.maxTokens ?? 16384 },
-      `extraction:${taskLabel}`,
-    )
-    if (cliResult && cliResult.content) {
-      console.log(`[LLM] Extraction dùng OpenCode CLI ${extractModel} ✓ (${cliResult.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
-      return cliResult
-    }
-    const zenFailoverModel = process.env.ZEN_FAILOVER_MODEL?.trim() || 'space-bunny-free'
-    if (extractModel !== zenFailoverModel) {
-      console.warn(`[LLM] Extraction Zen ${extractModel} thất bại cả HTTP + CLI — thử ZEN FAILOVER ${zenFailoverModel} — task: ${taskLabel}`)
-      const foHttp = await callZenProvider(prompt, systemPrompt, zenFailoverModel, { ...options, temperature: options?.temperature ?? 0.1, maxTokens: options?.maxTokens ?? 16384 }, `extraction-failover:${taskLabel}`)
-      if (foHttp && foHttp.content) {
-        console.log(`[LLM] Extraction dùng ZEN FAILOVER ${zenFailoverModel} ✓ — task: ${taskLabel}`)
-        return foHttp
-      }
-    }
-    console.warn(`[LLM] Extraction "${taskLabel}": cả NIM ${nimExtractionModel} lẫn chuỗi Zen đều thất bại — document sẽ retry sau`)
-    return {
-      content: '',
-      provider: 'zen',
-      model: extractModel,
-      error: `Extraction "${taskLabel}" thất bại toàn bộ (NIM ${nimExtractionModel} + Zen ${extractModel} HTTP + CLI${extractModel !== zenFailoverModel ? ` + failover ${zenFailoverModel}` : ''})`,
-    }
-  }
-
-  console.warn(`[LLM] Extraction "${taskLabel}": NIM thất bại và Zen chưa cấu hình (set ZEN_API_KEY_1/2 trong .env)`)
+  // R19: dừng tại model extraction được cấu hình — KHÔNG fallback chuỗi Zen.
+  const extractFailDetail = nimResult?.error
+    ?? (nvidiaPool.keyCount === 0 ? 'KHÔNG có NVIDIA key nào cấu hình (NVIDIA_API_KEY_1..4 trong .env)' : undefined)
+    ?? (nimExtractionModel ? (isModelHardBlocked(nimExtractionModel).blocked ? isModelHardBlocked(nimExtractionModel).reason : 'unknown') : 'không có model extraction cấu hình')
+  console.warn(`[LLM] Extraction "${taskLabel}": model ${nimExtractionModel} thất bại (không fallback R19) — document sẽ retry sau: ${String(extractFailDetail).slice(0, 150)}`)
   return {
     content: '',
-    provider: 'none',
-    model: 'none',
-    error: `Extraction "${taskLabel}": NIM ${nimExtractionModel} thất bại và OpenCode Zen chưa cấu hình (set ZEN_API_KEY_1/2 trong .env)`,
+    provider: 'nvidia',
+    model: nimExtractionModel || 'none',
+    error: `Extraction "${taskLabel}" thất bại (model ${nimExtractionModel} — không tự fallback R19): ${String(extractFailDetail).slice(0, 300)}`,
   }
 }
 
@@ -3760,48 +3698,15 @@ export async function callUtilityLLM(
       console.log(`[LLM] Utility-core dùng OpenCode CLI ${utilModel} ✓ (${cliResult.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
       return cliResult
     }
-    // TASK 33 — ZEN FAILOVER cho utility-core (mirror callLLMForAgent)
-    const zenFailoverModel = process.env.ZEN_FAILOVER_MODEL?.trim() || 'space-bunny-free'
-    if (utilModel !== zenFailoverModel) {
-      console.warn(`[LLM] Utility-core Zen ${utilModel} thất bại cả HTTP + CLI — thử ZEN FAILOVER ${zenFailoverModel} — task: ${taskLabel}`)
-      const foHttp = await callZenProvider(prompt, systemPrompt, zenFailoverModel, utilOptions, `utility-core-failover:${taskLabel}`)
-      if (foHttp && foHttp.content) {
-        console.log(`[LLM] Utility-core dùng ZEN FAILOVER ${zenFailoverModel} ✓ — task: ${taskLabel}`)
-        return foHttp
-      }
-    }
-    // R8 FIX (giao thức quan sát lượt 4 — 2026-10-14): NIM RESCUE cho utility-core.
-    // Bằng chứng: run_1791961389660_1 (07:03–07:13) chết vì utility compression
-    // KHÔNG có tier cứu hộ khi Zen 403 toàn chuỗi (agent path CÓ — dòng ~5992)
-    // → compression rơi hết heuristic → context phình → RSS 2125MB ≥ HARD 2100MB
-    // → MemWatchdog self-exit → PM2 restart #115 giết run giữa chừng. Mirror
-    // agent path: khi Zen chết toàn chuỗi → thử NIM deepseek-v4.1-flash (ALIVE
-    // live-probe 2026-10-13, ~2s) giữ utility (compression/evaluator/extraction)
-    // sống. Override env NIM_RESCUE_MODEL; đặt rỗng = tắt hẳn tier này.
-    // R17: default rescue đổi sang nemotron-550b (deepseek-flash treo 15/10 —
-    // probe 3/3 abort; rescue tier phải dùng model ĐANG SỐNG)
-    const utilNimRescueModel = (process.env.NIM_RESCUE_MODEL ?? NEMOTRON_550B_NIM_ID).trim()
-    if (utilNimRescueModel) {
-      console.warn(`[LLM] Utility-core NIM RESCUE (R8): toàn chuỗi Zen chết — thử NIM ${utilNimRescueModel} giữ utility sống — task: ${taskLabel}...`)
-      const rescue = await callModelWithKeyRotation(
-        utilNimRescueModel,
-        prompt,
-        systemPrompt,
-        options,
-        { taskLabel: `utility-nim-rescue:${taskLabel}` },
-      )
-      if (rescue && rescue.content) {
-        console.warn(`[LLM] Utility-core dùng NIM RESCUE ${utilNimRescueModel} ✓ (${rescue.tokensUsed ?? 0} tokens) — task: ${taskLabel} (Zen chết toàn chuỗi, R8)`)
-        return rescue
-      }
-      console.warn(`[LLM] Utility-core NIM RESCUE ${utilNimRescueModel} thất bại: ${String(rescue?.error || 'null result').slice(0, 120)} — task: ${taskLabel}`)
-    }
-    console.warn(`[LLM] Utility-core "${taskLabel}": Zen thất bại toàn chuỗi${utilNimRescueModel ? ` + NIM rescue ${utilNimRescueModel}` : ''} — caller sẽ fail-open`)
+    // R19 (2026-10-15 — user directive bỏ model fallback): model utility fail
+    // cả HTTP + CLI → trả lỗi NGAY (bỏ ZEN FAILOVER + NIM RESCUE cũ) — caller
+    // fail-open như thiết kế, KHÔNG âm thầm đổi model.
+    console.warn(`[LLM] Utility-core "${taskLabel}": model ${utilModel} thất bại (HTTP + CLI — không fallback R19) — caller sẽ fail-open: ${String(zen?.error || cliResult?.error || 'unknown').slice(0, 150)}`)
     return {
       content: '',
       provider: 'zen',
       model: utilModel,
-      error: `Utility-core "${taskLabel}" thất bại toàn chuỗi Zen (${utilModel} HTTP + CLI${utilModel !== zenFailoverModel ? ` + failover ${zenFailoverModel}` : ''}${utilNimRescueModel ? ` + NIM rescue ${utilNimRescueModel}` : ''})`,
+      error: `Utility-core "${taskLabel}" thất bại (model ${utilModel} HTTP + CLI — không tự fallback R19): ${String(zen?.error || cliResult?.error || 'unknown').slice(0, 300)}`,
     }
   }
 
@@ -3901,58 +3806,14 @@ export async function callLLM(
       console.log(`[LLM] Utility dùng OpenCode CLI ${utilModel} ✓ (${cliResult.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
       return cliResult
     }
-    // TASK 33 — ZEN FAILOVER cho utility (mirror callLLMForAgent): model utility
-    // chính fail cả HTTP + CLI → thử space-bunny trước khi trả lỗi.
-    const zenFailoverModel = process.env.ZEN_FAILOVER_MODEL?.trim() || 'space-bunny-free'
-    if (utilModel !== zenFailoverModel) {
-      console.warn(`[LLM] Utility Zen ${utilModel} thất bại cả HTTP + CLI — thử ZEN FAILOVER ${zenFailoverModel} — task: ${taskLabel}`)
-      const foHttp = await callZenProvider(prompt, systemPrompt, zenFailoverModel, utilOptions, `utility-failover:${taskLabel}`)
-      if (foHttp && foHttp.content) {
-        console.log(`[LLM] Utility dùng ZEN FAILOVER ${zenFailoverModel} ✓ — task: ${taskLabel}`)
-        return foHttp
-      }
-      const foCli = await callOpenCodeCLIProvider(prompt, systemPrompt, zenFailoverModel, utilOptions, `utility-failover:${taskLabel}`)
-      if (foCli && foCli.content) {
-        console.log(`[LLM] Utility dùng ZEN FAILOVER (CLI) ${zenFailoverModel} ✓ — task: ${taskLabel}`)
-        return foCli
-      }
-    }
-    console.warn(`[LLM] Utility Zen thất bại toàn chuỗi (HTTP + CLI${utilModel !== (process.env.ZEN_FAILOVER_MODEL?.trim() || 'space-bunny-free') ? ' + failover' : ''}) — thử NIM RESCUE (R16) — task: ${taskLabel}`)
-    // R16 2026-10-14 — NIM RESCUE cho utility (khôi phục nguyên tắc R8-1
-    // "NIM RESCUE vẫn giữ agents sống", bị gỡ bởi Task 33 khi agents còn
-    // Zen sống). Bằng chứng R16: zen free-tier bị chặn 403 THEO IP datacenter
-    // (HTTP oc_sk + CLI session hợp lệ đều 403 — db/opencode-oauth.json
-    // freeTier.unlocked=false) → mỗi utility call (nén context, triage,
-    // evaluator...) đốt 60-240s trong chuỗi chết rồi fail; spawn CLI hang
-    // từng leak 590MB (PID 1507, 20:14 2026-10-14). Fall back NIM
-    // deepseek-v4.1-flash — model agent NIM tạm thời được duyệt (boot-log
-    // directive), verify 200/4.3s. Rollback: set UTILITY_NIM_RESCUE=off.
-    if (process.env.UTILITY_NIM_RESCUE !== 'off') {
-      try {
-        // R17: rescue model theo env NIM_RESCUE_MODEL (default nemotron-550b —
-        // deepseek-flash treo 15/10, không dùng làm rescue được nữa)
-        const utilRescueModel = (process.env.NIM_RESCUE_MODEL ?? NEMOTRON_550B_NIM_ID).trim() || NEMOTRON_550B_NIM_ID
-        const nimRescue = await callLLMWithSpecificProvider(
-          prompt,
-          'nvidia',
-          utilRescueModel,
-          systemPrompt,
-          { ...utilOptions, temperature: utilOptions?.temperature ?? 0.2, maxTokens: utilOptions?.maxTokens ?? 4000 },
-        )
-        if (nimRescue && nimRescue.content) {
-          console.log(`[LLM] Utility NIM RESCUE ${utilRescueModel} ✓ (${nimRescue.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
-          return nimRescue
-        }
-        console.warn(`[LLM] Utility NIM RESCUE cũng thất bại (${(nimRescue as unknown as { error?: string })?.error ?? 'null result'}) — trả lỗi — task: ${taskLabel}`)
-      } catch (rescueErr) {
-        console.warn(`[LLM] Utility NIM RESCUE lỗi (không chặn — trả lỗi zen gốc): ${rescueErr instanceof Error ? rescueErr.message : String(rescueErr)}`)
-      }
-    }
+    // R19 (2026-10-15 — user directive bỏ model fallback): bỏ ZEN FAILOVER +
+    // NIM RESCUE cũ — model fail cả HTTP + CLI → trả lỗi NGAY kèm nguyên nhân.
+    console.warn(`[LLM] Utility "${taskLabel}": model ${utilModel} thất bại (HTTP + CLI — không fallback R19): ${String(zen?.error || cliResult?.error || 'unknown').slice(0, 150)}`)
     return {
       content: '',
       provider: 'zen',
       model: utilModel,
-      error: `Utility "${taskLabel}" thất bại toàn chuỗi Zen (${utilModel} HTTP + CLI + failover${process.env.UTILITY_NIM_RESCUE !== 'off' ? ' + NIM rescue' : ''})`,
+      error: `Utility "${taskLabel}" thất bại (model ${utilModel} HTTP + CLI — không tự fallback R19): ${String(zen?.error || cliResult?.error || 'unknown').slice(0, 300)}`,
     }
   }
 
@@ -3998,9 +3859,13 @@ const PROVIDER_CONFIG_MAP: Record<string, {
  * If the specific model fails, it does NOT fall back to other models in the
  * provider's list — only the agent's configured model is tried.
  *
+ * R19 (2026-10-15): đường NIM rescue cũ (caller duy nhất) đã dỡ theo user
+ * directive bỏ model fallback — giữ hàm export cho công cụ/tác vụ cần gọi
+ * ĐÚNG 1 provider/model cụ thể (không fallback theo đúng tinh thần R19).
+ *
  * @returns LLMResult if successful, null if the provider/model fails
  */
-async function callLLMWithSpecificProvider(
+export async function callLLMWithSpecificProvider(
   prompt: string,
   provider: string,
   model: string,
@@ -4431,7 +4296,7 @@ function isZenFreeTierBlocked(transport: 'http' | 'cli', model: string): boolean
   return getZenBlockedEntry(transport, model) !== null
 }
 
-// r74 — export cho unit-test (cùng pattern parseZenLastResortModels r73):
+// r74 — export cho unit-test (r74 vá cache rồi đối chiếu zenModelBlockSummary()):
 // test vá cache rồi đối chiếu zenModelBlockSummary() — xem tests/r74.
 export function markZenFreeTierBlocked(transport: 'http' | 'cli', model: string, reason: string, ttlMs?: number): void {
   const ttl = ttlMs ?? ZEN_FREE_TIER_CACHE_MS
@@ -6084,108 +5949,70 @@ export async function callLLMForAgent(
 ): Promise<LLMResult> {
   const { provider, model } = agentConfig
 
-  // ===== OPENCODE ZEN — LÕI DUY NHẤT CỦA AGENTS (TASK 33 — 2026-09-27) =====
-  // USER DIRECTIVE: "Không dùng các model của NVIDIA NIM cho các tác vụ agents
-  // nữa — riêng lõi embed tôi vẫn dùng của NVIDIA NIM; bỏ luôn cả z-ai."
-  // Toàn bộ agent call (goal-loop, research team, code-team, smolab, chat
-  // agents, self-direction...) route qua OpenCode Zen với model zen cấu hình
-  // TỪNG AGENT (DB AgentProfile). DB cũ còn sót provider='nvidia' +
-  // model NIM (kimi-k3/minimax/deepseek...) → normalize sang zen theo vai trò
-  // (seed migration cũng sửa DB lúc boot — đây là lớp an toàn runtime cho row
-  // chưa kịp migrate).
+  // ===== R19 (2026-10-15 — USER DIRECTIVE: BỎ TOÀN BỘ MODEL FALLBACK) =====
+  // "Bỏ tính năng model fallback đi, nếu model nào gọi bị lỗi thì báo lỗi là
+  // được, tôi tự chọn model khác thủ công."
+  // Chuỗi cũ đã DỠ theo directive: Zen HTTP → CLI → ZEN FAILOVER (model dự
+  // phòng khác) → LAST RESORT (3 model free CLI-native, r73 BUG2-018) → NIM
+  // RESCUE (model NIM khác) + normalize ÂM THẦM model lạ về space-bunny-free.
+  // Model chết giờ = lỗi trả NGAY kèm nguyên nhân — user tự chọn model khác
+  // trong dropdown. Giữ lại (KHÔNG phải model fallback):
+  //   - Xoay key CÙNG model NIM (4 key, 1 lượt/key — R19 fail-fast);
+  //   - Retry transient 1 lần + effort-ladder empty-response (CÙNG model);
+  //   - Transport HTTP → CLI (CÙNG model — CLI native là đường dùng session
+  //     OAuth của tài khoản OpenCode đã đăng nhập qua dropdown model).
+
+  // ===== NIM ROUTE — 3 model NIM được duyệt cho agent =====
+  if (model === KIMI_K3_NIM_ID || model === DEEPSEEK_V41_FLASH_NIM_ID || model === NEMOTRON_550B_NIM_ID) {
+    const nimResult = await callModelWithKeyRotation(
+      model,
+      prompt,
+      systemPrompt,
+      options,
+      { taskLabel: `agent-nim:${model}` },
+    )
+    if (nimResult && (nimResult.content || (nimResult.tool_calls && nimResult.tool_calls.length > 0))) {
+      const tcCount = nimResult.tool_calls?.length ?? 0
+      console.log(`[LLM] Agent dùng NIM ${model} ✓ (${tcCount} tool_calls, ${nimResult.tokensUsed ?? 0} tokens)${options?.agentName ? ` — agent: ${options.agentName}` : ''}`)
+      return nimResult
+    }
+    console.warn(`[LLM] Agent NIM ${model} thất bại — KHÔNG fallback (R19)${options?.agentName ? ` — agent: ${options.agentName}` : ''}: ${String(nimResult?.error || 'null result').slice(0, 200)}`)
+    return {
+      content: '',
+      provider: 'nvidia',
+      model,
+      error: `NIM model "${model}" gọi thất bại — không tự fallback (R19): ${String(nimResult?.error || 'không rõ nguyên nhân — xem log [LLM] 🔄').slice(0, 300)}. Chọn model khác trong khung chat rồi gửi lại.`,
+    }
+  }
+
+  // Model dạng "org/name" ngoài 3 model NIM được duyệt → lỗi rõ ràng (trước
+  // đây normalize ÂM THẦM về space-bunny-free — user không biết model thật
+  // đang chạy là gì, sai với tinh thần "tự chọn model thủ công" R19).
+  if (model.includes('/')) {
+    console.warn(`[LLM] Agent cấu hình model lạ "${provider}/${model}" — không tự fallback (R19) → báo lỗi`)
+    return {
+      content: '',
+      provider,
+      model,
+      error: `Model "${model}" không nằm trong danh sách model NIM được hỗ trợ (${KIMI_K3_NIM_ID} · ${DEEPSEEK_V41_FLASH_NIM_ID} · ${NEMOTRON_550B_NIM_ID}). Không tự fallback (R19) — chọn model khác trong khung chat.`,
+    }
+  }
+
   if (!isZenConfigured()) {
     return {
       content: '',
       provider: 'zen',
       model,
-      error: 'OpenCode Zen chưa cấu hình (ZEN_API_KEY_1/2 trong .env) — NIM đã ngừng dùng cho agents (Task 33), KHÔNG có fallback NIM',
+      error: 'OpenCode Zen chưa cấu hình (ZEN_API_KEY_1/2 trong .env) — model free cần đăng nhập tài khoản OpenCode (dropdown model → Đăng nhập bằng tài khoản OpenCode)',
     }
-  }
-
-  // ===== USER DIRECTIVE 2026-11-30 — KIMI-K3 (NIM) LÀ LỰA CHỌN AGENT TẠM THỜI =====
-  // Chọn kimi-k3 (dropdown Smolab / AgentProfile / Omega factory) → route
-  // THẬT qua NIM kimi-k3 (xoay vòng 4 key × 3 lần, circuit breaker tự trip
-  // khi hang/429 — không normalize về space-bunny-free như các id NIM chết).
-  // NIM 429 kéo dài / EOL kimi-k3 → fallback chuỗi Zen space-bunny-free phía
-  // dưới (agent không chết — đúng tinh thần "tạm thời nếu kimi k3 sống được
-  // thì giữ lại như 1 lựa chọn").
-  if (model === KIMI_K3_NIM_ID) {
-    const nimResult = await callModelWithKeyRotation(
-      KIMI_K3_NIM_ID,
-      prompt,
-      systemPrompt,
-      options,
-      { taskLabel: `agent-nim:${KIMI_K3_NIM_ID}` },
-    )
-    if (nimResult && (nimResult.content || (nimResult.tool_calls && nimResult.tool_calls.length > 0))) {
-      const tcCount = nimResult.tool_calls?.length ?? 0
-      console.log(`[LLM] Agent dùng NIM ${KIMI_K3_NIM_ID} ✓ (${tcCount} tool_calls, ${nimResult.tokensUsed ?? 0} tokens)${options?.agentName ? ` — agent: ${options.agentName}` : ''}`)
-      return nimResult
-    }
-    console.warn(`[LLM] Agent NIM ${KIMI_K3_NIM_ID} thất bại toàn chuỗi xoay key (429 kéo dài/EOL — user directive 2026-11-30: kimi-k3 tạm thời) → fallback chuỗi Zen space-bunny-free${options?.agentName ? ` — agent: ${options.agentName}` : ''}: ${String(nimResult?.error || 'null result').slice(0, 120)}`)
-  }
-
-  // ===== USER REQUEST 2026-10-14 — DEEPSEEK-V4.1-FLASH (NIM) LỰA CHỌN CHÍNH THỨC =====
-  // Cùng pattern kimi-k3 phía trên: chọn deepseek-v4.1-flash trong dropdown →
-  // route THẬT qua NIM (xoay 4 key — model này ~2s/call nên timeout base
-  // LLM_TIMEOUT_MS là đủ, không cần timeout riêng như kimi-k3). NIM 429 kéo
-  // dài/EOL → fallback chuỗi Zen space-bunny-free phía dưới (agent không chết).
-  if (model === DEEPSEEK_V41_FLASH_NIM_ID) {
-    const nimResult = await callModelWithKeyRotation(
-      DEEPSEEK_V41_FLASH_NIM_ID,
-      prompt,
-      systemPrompt,
-      options,
-      { taskLabel: `agent-nim:${DEEPSEEK_V41_FLASH_NIM_ID}` },
-    )
-    if (nimResult && (nimResult.content || (nimResult.tool_calls && nimResult.tool_calls.length > 0))) {
-      const tcCount = nimResult.tool_calls?.length ?? 0
-      console.log(`[LLM] Agent dùng NIM ${DEEPSEEK_V41_FLASH_NIM_ID} ✓ (${tcCount} tool_calls, ${nimResult.tokensUsed ?? 0} tokens)${options?.agentName ? ` — agent: ${options.agentName}` : ''}`)
-      return nimResult
-    }
-    console.warn(`[LLM] Agent NIM ${DEEPSEEK_V41_FLASH_NIM_ID} thất bại toàn chuỗi xoay key → fallback chuỗi Zen space-bunny-free${options?.agentName ? ` — agent: ${options.agentName}` : ''}: ${String(nimResult?.error || 'null result').slice(0, 120)}`)
-  }
-
-  // ===== R17 (2026-10-15) — NEMOTRON-3-ULTRA-550B (NIM) MODEL AGENT CHÍNH =====
-  // deepseek-v4.1-flash (model R16) treo hoàn toàn 15/10 (3/3 abort 30s,
-  // probe /home/z/model-test.ts) — nemotron-550b là lõi NIM duy nhất còn
-  // sống (200/2-3.5s + tool_calls chuẩn). Cùng pattern kimi-k3/deepseek-flash:
-  // chọn → route THẬT qua NIM (xoay 4 key); NIM chết → fallback chuỗi Zen
-  // space-bunny-free phía dưới (agent không chết).
-  if (model === NEMOTRON_550B_NIM_ID) {
-    const nimResult = await callModelWithKeyRotation(
-      NEMOTRON_550B_NIM_ID,
-      prompt,
-      systemPrompt,
-      options,
-      { taskLabel: `agent-nim:${NEMOTRON_550B_NIM_ID}` },
-    )
-    if (nimResult && (nimResult.content || (nimResult.tool_calls && nimResult.tool_calls.length > 0))) {
-      const tcCount = nimResult.tool_calls?.length ?? 0
-      console.log(`[LLM] Agent dùng NIM ${NEMOTRON_550B_NIM_ID} ✓ (${tcCount} tool_calls, ${nimResult.tokensUsed ?? 0} tokens)${options?.agentName ? ` — agent: ${options.agentName}` : ''}`)
-      return nimResult
-    }
-    console.warn(`[LLM] Agent NIM ${NEMOTRON_550B_NIM_ID} thất bại toàn chuỗi xoay key → fallback chuỗi Zen space-bunny-free${options?.agentName ? ` — agent: ${options.agentName}` : ''}: ${String(nimResult?.error || 'null result').slice(0, 120)}`)
   }
 
   let zenModel = model
-  if (provider !== 'zen' && model !== KIMI_K3_NIM_ID && model !== DEEPSEEK_V41_FLASH_NIM_ID && model !== NEMOTRON_550B_NIM_ID) {
-    // Model NIM cũ (chứa '/') hoặc id lạ → map về model zen PHIÊN 7: space-bunny-free
-    // cho TẤT CẢ agent (Task 37 — model free duy nhất mở cho oc_sk API key).
-    // (kimi-k3 + deepseek-v4.1-flash + nemotron-550b đã xử lý ở nhánh riêng
-    // phía trên — không rơi vào normalize này.)
-    zenModel = isZenModelId(model) ? model : 'space-bunny-free'
-    console.warn(`[LLM] Agent cấu hình provider "${provider}/${model}" không còn dùng cho agents (NIM matrix — chỉ kimi-k3 + deepseek-v4.1-flash + nemotron-550b còn mở) → route Zen ${zenModel}${options?.agentName ? ` (agent: ${options.agentName})` : ''}`)
-  }
-  if (model === KIMI_K3_NIM_ID || model === DEEPSEEK_V41_FLASH_NIM_ID || model === NEMOTRON_550B_NIM_ID) {
-    // NIM model fail NIM → chạy chuỗi Zen với model chính space-bunny-free
-    zenModel = isZenModelId(zenModel) ? zenModel : 'space-bunny-free'
-  }
 
   // P6-M3 (§P6-M3, mục #15): softmax(τ) chọn điểm khởi đầu khi
   // RUNTIME_MODEL_POLICY=softmax (mặc định OFF — điểm dừng #5) — agent có
-  // override tườ minh ← giữ model cấu hình. Failover chuỗi cũ bên dưới
-  // GIỮ NGUYÊN TOÀN BỘ — softmax chỉ đổi điểm khởi đầu (zenModel).
+  // override tường minh ← giữ model cấu hình. R19: chuỗi failover bên dưới
+  // đã DỠ — softmax giờ chỉ đổi điểm khởi đầu (zenModel).
   zenModel = await maybeApplySoftmaxModelPolicy(zenModel, options)
 
   // Zen HTTP (kèm reasoning_effort chế độ cao nhất — Task 33)
@@ -6271,106 +6098,17 @@ export async function callLLMForAgent(
     console.log(`[LLM] Agent dùng OpenCode CLI ${zenModel} ✓ (${tcCount} tool_calls, ${cliResult.tokensUsed ?? 0} tokens)`)
     return cliResult
   }
-  // 2026-10-27 (phiên 4) — ZEN MODEL FAILOVER: model zen cấu hình fail cả
-  // HTTP + CLI (vd muse-spark-1.3-contributor-free bị RegionError geo-block
-  // trên server ngoài VN; chạy trực tiếp OK ở môi trường local VN của user)
-  // → thử 1 model zen dự phòng KHÁC (default space-bunny-free — stealth model
-  // ẩn danh, ctx 1M, zero-retention; CHÍNH THỨC là model của 2 agent debug
-  // SENTINEL/LISMA từ Task 33, đồng thời là safety net cho agent khác) trước
-  // khi trả lỗi. Giữ agents sống ngay cả khi model chính không khả dụng ở
-  // vùng này — model cấu hình vẫn là model chính (agent dùng model dự phòng
-  // chỉ khi model chính thất bại hoàn toàn, có log rõ ràng để truy vết).
-  const zenFailoverModel = process.env.ZEN_FAILOVER_MODEL?.trim() || 'space-bunny-free'
-  if (zenModel !== zenFailoverModel) {
-    console.warn(`[LLM] Agent Zen ${zenModel} thất bại cả HTTP + CLI — thử ZEN FAILOVER model ${zenFailoverModel}`)
-    const foHttp = await callZenProvider(prompt, systemPrompt, zenFailoverModel, options, `agent-failover:${zenFailoverModel}`)
-    if (foHttp && (foHttp.content || (foHttp.tool_calls && foHttp.tool_calls.length > 0))) {
-      console.log(`[LLM] Agent dùng ZEN FAILOVER ${zenFailoverModel} ✓ (model chính ${zenModel} không khả dụng ở vùng này) — ${foHttp.tool_calls?.length ?? 0} tool_calls`)
-      return foHttp
-    }
-    const foCli = await callOpenCodeCLIProvider(prompt, systemPrompt, zenFailoverModel, options, `agent-failover:${zenFailoverModel}`)
-    if (foCli && (foCli.content || (foCli.tool_calls && foCli.tool_calls.length > 0))) {
-      console.log(`[LLM] Agent dùng ZEN FAILOVER (CLI) ${zenFailoverModel} ✓ (model chính ${zenModel} không khả dụng ở vùng này) — ${foCli.tool_calls?.length ?? 0} tool_calls`)
-      return foCli
-    }
-    console.warn(`[LLM] ZEN FAILOVER ${zenFailoverModel} cũng thất bại — sang LAST RESORT (r73 BUG2-018)`)
-  }
-  // r73 (BUG2-018 — kiến trúc failover chéo model trong free tier): model
-  // chính + failover đều chết (đặc biệt khi model chính == space-bunny-free ==
-  // failover → rung failover bị skip) → thử lần lượt các model free KHÁC qua
-  // CLI native (HTTP bị Zen chặn free-tier với mọi model ngoài SBF — bằng
-  // chứng 2026-10-09: nemotron/ling/mimo HTTP = FreeTierError 403, CLI OK).
-  // Pool mặc định = các model ĐÃ VERIFY battery r73 (coding/reasoning/agentic).
-  // Chỉ thử ĐƯỜNG CLI (HTTP đã biết chết — không đốt timeout mạng lại). Agent
-  // chỉ chết khi TOÀN BỘ pool free chết. Override bằng env ZEN_LAST_RESORT_MODELS.
-  for (const lrModel of parseZenLastResortModels(process.env.ZEN_LAST_RESORT_MODELS, zenModel, zenFailoverModel)) {
-    console.warn(`[LLM] LAST RESORT (r73 BUG2-018): model chính ${zenModel} + failover ${zenFailoverModel} đều thất bại — thử model free CLI-native ${lrModel}...`)
-    const lrCli = await callOpenCodeCLIProvider(prompt, systemPrompt, lrModel, options, `agent-last-resort:${lrModel}`)
-    if (lrCli && (lrCli.content || (lrCli.tool_calls && lrCli.tool_calls.length > 0))) {
-      console.log(`[LLM] Agent dùng LAST RESORT ${lrModel} ✓ (${lrCli.tool_calls?.length ?? 0} tool_calls — model chính ${zenModel} chết, agent vẫn sống)`)
-      return lrCli
-    }
-  }
-  // ===== NIM RESCUE (2026-10-13 — live-probe phiên Task 28) =====
-  // Zen chặn free-tier TOÀN CỘC cho oc_sk key (403 FreeTierError cả 3 đường:
-  // HTTP + CLI custom provider opencode-k* + CLI native — bằng chứng live-probe
-  // 2026-10-13; matrix 2026-10-09 CLI native còn trả lời → policy Zen đổi giữa
-  // 2 ngày, KHÔNG phải lỗi cấu hình phía máy). kimi-k3 NIM cùng ngày 429 kéo
-  // dài/hang toàn chuỗi key. Toàn bộ chuỗi Zen chết → agent KHÔNG chết (nguyên
-  // tắc thiết kế xuyên suốt của file này): thử lõi NIM deepseek-v4.1-flash
-  // (ALIVE — live-probe 2026-10-13 trả lời ~2s; KHÔNG thuộc danh sách EOL user
-  // directive 2026-11-30 — danh sách đó là deepseek-v4-pro-0813/v4-flash-0731
-  // dòng v4.0, v4.1-flash là model khác vẫn mở trên NIM). Tier CUỐI — chỉ chạy
-  // khi MỌI rung phía trên thất bại; Zen sống lại (vd user nạp credit hoặc
-  // OAuth login mở free tier) thì chuỗi trên return trước, không bao giờ chạm
-  // tới đây. Override bằng env NIM_RESCUE_MODEL; đặt rỗng = tắt hẳn tier này.
-  const lastResortList = parseZenLastResortModels(process.env.ZEN_LAST_RESORT_MODELS, zenModel, zenFailoverModel).join('/')
-  // R17: default rescue đổi sang nemotron-550b (deepseek-flash treo 15/10)
-  const nimRescueModel = (process.env.NIM_RESCUE_MODEL ?? NEMOTRON_550B_NIM_ID).trim()
-  if (nimRescueModel) {
-    console.warn(`[LLM] NIM RESCUE (2026-10-13): toàn chuỗi Zen chết (free-tier 403 toàn cục cho oc_sk + failover ${zenFailoverModel} + last-resort ${lastResortList}) — thử NIM ${nimRescueModel} giữ agent sống${options?.agentName ? ` — agent: ${options.agentName}` : ''}...`)
-    const rescue = await callModelWithKeyRotation(
-      nimRescueModel,
-      prompt,
-      systemPrompt,
-      options,
-      { taskLabel: `agent-nim-rescue:${nimRescueModel}` },
-    )
-    if (rescue && (rescue.content || (rescue.tool_calls && rescue.tool_calls.length > 0))) {
-      const tcCount = rescue.tool_calls?.length ?? 0
-      console.warn(`[LLM] Agent dùng NIM RESCUE ${nimRescueModel} ✓ (${tcCount} tool_calls, ${rescue.tokensUsed ?? 0} tokens — model chính ${zenModel} + toàn chuỗi Zen chết 2026-10-13)`)
-      return rescue
-    }
-    console.warn(`[LLM] NIM RESCUE ${nimRescueModel} cũng thất bại: ${String(rescue?.error || 'null result').slice(0, 120)}`)
-  }
-  // TASK 33: hết chuỗi Zen (HTTP → CLI → failover → last-resort → NIM rescue)
-  // → trả lỗi rõ ràng cho caller nhìn thấy nguyên nhân thật.
+  // R19: hết đường cùng model (Zen HTTP → CLI) → trả lỗi rõ ràng cho caller
+  // hiển thị cho user — KHÔNG tự chuyển model khác (bỏ ZEN FAILOVER +
+  // LAST RESORT + NIM RESCUE cũ theo user directive 2026-10-15).
   const lastError = zen?.error || cliResult?.error || 'unknown'
-  console.warn(`[LLM] Agent Zen ${zenModel} thất bại toàn chuỗi (HTTP + CLI${zenModel !== zenFailoverModel ? ` + failover ${zenFailoverModel}` : ''} + last-resort ${lastResortList}${nimRescueModel ? ` + NIM rescue ${nimRescueModel}` : ''}) — trả lỗi: ${String(lastError).slice(0, 200)}`)
+  console.warn(`[LLM] Agent model ${zenModel} thất bại (Zen HTTP + CLI — không fallback R19) — trả lỗi: ${String(lastError).slice(0, 200)}`)
   return {
     content: '',
     provider: 'zen',
     model: zenModel,
-    error: `Zen model "${zenModel}" thất bại toàn chuỗi (HTTP + CLI${zenModel !== zenFailoverModel ? ` + failover ${zenFailoverModel}` : ''} + last-resort${nimRescueModel ? ` + NIM rescue ${nimRescueModel}` : ''}): ${String(lastError).slice(0, 300)}`,
+    error: `Model "${zenModel}" gọi thất bại (Zen HTTP + CLI — không tự fallback R19): ${String(lastError).slice(0, 300)}. Nếu model đang bị chặn/lỗi, chọn model khác trong khung chat rồi gửi lại.`,
   }
-}
-
-/**
- * r73 (BUG2-018) — parse danh sách model LAST-RESORT (pure — export cho test).
- *  - env ZEN_LAST_RESORT_MODELS = "model-a, model-b,..." (override); thiếu/rỗng
- *    → pool mặc định đã verify battery r73.
- *  - LOẠI model chính + model failover (đã thử ở rung trên — không lặp lại).
- *  - Cap 3 model/lần (mỗi model 1 đường CLI ≤ OPENCODE_CLI_TIMEOUT_MS — chống
- *    đốt 15+ phút khi cả pool chết).
- */
-export function parseZenLastResortModels(envRaw: string | undefined, ...exclude: string[]): string[] {
-  const defaults = ['ling-3.1-flash-free', 'mimo-v2.6-flash-free', 'big-pickle']
-  const excluded = new Set(exclude.map(m => (m || '').trim()).filter(m => m.length > 0))
-  const raw = (envRaw || '').trim()
-  const pool = (raw ? raw.split(',') : defaults)
-    .map(m => m.trim())
-    .filter(m => m.length > 0 && !excluded.has(m))
-  return pool.slice(0, 3)
 }
 
 // ==================== UTILITY EXPORTS ====================

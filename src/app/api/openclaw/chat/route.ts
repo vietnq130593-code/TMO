@@ -998,7 +998,8 @@ export async function POST(request: NextRequest) {
 
     // Phase 3+: Agent with configured provider/model → use ReAct loop for tool execution
     // This enables agents like Omega to actually USE their declared tools (opencode, knowledge_search, tavily, etc.)
-    // instead of just having them in prompts. Falls back to /api/query if the ReAct loop fails.
+    // instead of just having them in prompts. R19: ReAct loop fail → trả lỗi 500 rõ ràng
+    // (KHÔNG còn fallback /api/query cho agent path — user directive bỏ model fallback).
     // (hasAgentProviderModel declared earlier — Phase A procedural guard)
 
     if (hasAgentProviderModel) {
@@ -1087,7 +1088,7 @@ export async function POST(request: NextRequest) {
               .slice(-6)
               .map((m: { role: string; content: string }) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.slice(0, 500)}`)
               .join('\n')
-            const fastSystemPrompt = `${systemPrompt}\n\n═══ 🎯 FAST-PATH — GIÁO THỨC THẦY (trả lời trực tiếp) ═══\nYêu cầu dưới đây là câu hỏi/hội thoại đơn giản. Trả lời TRỰC TIẾP trong 1 lượt: đầy đủ, chính xác, đúng trọng tâm, bằng TIẾNG VIỆT, văn xuôi sạch (markdown tối thiểu — nhấn mạnh bằng CHỮ IN HOA, không bọc ** hay \`).\nNgữ cảnh phiên: model cấu hình = ${agentModel} (${agentProvider}). Nếu được hỏi "bạn là model gì / đang chạy model nào" — trả lời đúng theo metadata này, và lưu ý hệ thống có thể tự failover sang model dự phòng (space-bunny-free) khi model chính không khả dụng (metadata kèm response ghi rõ model thực tế đã phục vụ).\nKHÔNG gọi tool. KHÔNG lập kế hoạch. KHÔNG viết todo.\nNếu nhận ra câu hỏi thật sự CẦN khảo sát hệ thống/file/DB mới trả lời được — viết dòng đầu tiên đúng là NEEDS_FULL_PIPELINE rồi nêu ngắn cần khảo sát gì; hệ thống sẽ chuyển sang bộ máy đầy đủ.`
+            const fastSystemPrompt = `${systemPrompt}\n\n═══ 🎯 FAST-PATH — GIÁO THỨC THẦY (trả lời trực tiếp) ═══\nYêu cầu dưới đây là câu hỏi/hội thoại đơn giản. Trả lời TRỰC TIẾP trong 1 lượt: đầy đủ, chính xác, đúng trọng tâm, bằng TIẾNG VIỆT, văn xuôi sạch (markdown tối thiểu — nhấn mạnh bằng CHỮ IN HOA, không bọc ** hay \`).\nNgữ cảnh phiên: model cấu hình = ${agentModel} (${agentProvider}). Nếu được hỏi "bạn là model gì / đang chạy model nào" — trả lời đúng theo metadata này (hệ thống KHÔNG tự đổi sang model khác — R19: model cấu hình lỗi sẽ báo lỗi để user tự chọn lại, nên metadata luôn là model thật đang phục vụ).\nKHÔNG gọi tool. KHÔNG lập kế hoạch. KHÔNG viết todo.\nNếu nhận ra câu hỏi thật sự CẦN khảo sát hệ thống/file/DB mới trả lời được — viết dòng đầu tiên đúng là NEEDS_FULL_PIPELINE rồi nêu ngắn cần khảo sát gì; hệ thống sẽ chuyển sang bộ máy đầy đủ.`
             const fastResult = await callLLMForAgent(
               `${recentTurns ? `Ngữ cảnh hội thoại gần đây:\n${recentTurns}\n\n` : ''}Câu hỏi hiện tại của user: ${lastUserContent}`,
               { provider: agentProvider, model: agentModel },
@@ -1556,7 +1557,7 @@ export async function POST(request: NextRequest) {
           kbConfidence: kbSearchResult?.confidence || undefined,
         })
       } catch (err) {
-        console.warn('[OpenClaw Chat] Goal loop error, falling back to /api/query:', err instanceof Error ? err.message : String(err))
+        console.warn('[OpenClaw Chat] Goal loop error (R19: trả lỗi — không fallback /api/query):', err instanceof Error ? err.message : String(err))
         // CI-2 (Task 11-a) — CRASH-PATH HONEST CLOSE: goal loop văng exception
         // (trước khi endAgentRun chạy) → todo của run đang dở phải được đóng
         // trung thực NGAY: in_progress → 'failed' (đã bắt tay làm mà run chết),
@@ -1599,7 +1600,16 @@ export async function POST(request: NextRequest) {
             }
           } catch { /* non-blocking — không được phép che lỗi gốc */ }
         }
-        // Fall through to /api/query fallback below
+        // R19 (2026-10-15 — user directive bỏ fallback): goal loop văng
+        // exception → trả lỗi NGAY cho user. Trước đây rơi xuống /api/query
+        // chạy lại chuỗi model lần 2 — nhân đôi thời gian chờ + RAM khi model
+        // chết (một trong những nguồn 502/504 + request ma user phàn nàn).
+        return NextResponse.json(
+          {
+            error: `Tác vụ agent gặp lỗi — không fallback (R19): ${err instanceof Error ? err.message : String(err)}. Thử gửi lại hoặc chọn model khác trong khung chat.`,
+          },
+          { status: 500 },
+        )
       }
     }
 
@@ -1691,12 +1701,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // /api/query fallback path — used for:
-    //   - Agent with configured provider/model when ReAct loop fails (fallback)
-    //   - Gateway offline fallback (no agent config)
-    if (hasAgentProviderModel) {
-      console.log(`[OpenClaw Chat] ReAct loop failed, falling back to /api/query for agent (${agentProvider}/${agentModel})`)
-    }
+    // /api/query fallback path — R19 (2026-10-15): CHỈ còn phục vụ nhánh
+    // KHÔNG có agent config (gateway offline fallback). Agent path đã return
+    // ở trên (thành công / 409 mutex / 500 lỗi R19) — không còn chạy lại
+    // chuỗi model lần 2 qua /api/query.
     try {
       const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'
       const queryRes = await fetch(`${baseUrl}/api/query`, {

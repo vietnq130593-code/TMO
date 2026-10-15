@@ -434,3 +434,21 @@
 - **Phát hiện lũy kế qua giao thức: 114 + 5 = 119** (R18: BUG2-262..266 — 1 P1 · 3 P2 · 1 P3).
 - Gate kiểm thử: **1727/1727** (không test mới — theo directive phiên; pin hành vi qua E2E browser có bằng chứng screenshot + DB + trail).
 - Ghi chú: 1 vòng OOM-recompile xuất hiện giữa E2E (kernel OOM-kill next-server RSS 2.47GB lúc recompile sau edit — ràng buộc box 4GB đã ghi R16/R17, app tự hồi phục, run bị gián đoạn được salvage đúng cơ chế).
+
+### ĐỢT R19 — 3 yêu cầu user (mở khóa chọn model + bỏ toàn bộ model fallback + thiết lập lại đăng nhập OpenCode) — KHÉP KẾT SAU 3 SUBAGENT EXPLORE SONG SONG + PHẪU THUẬT llm.ts 4 HÀM ENTRY + 2 BUG PHÁT HIỆN E2E
+
+| Vòng | Phát hiện mới | Xác minh |
+|---|---|---|
+| R19 (3 subagent Explore song song: fallback-chain-map · model-selector-flow · opencode-oauth; fix chính session) | **2** (BUG2-267: nút chọn model disable toàn bộ — P1 · BUG2-268: probe tự gãy auth.json CLI — P2) + 1 user directive lớn (dỡ toàn bộ model fallback) | tsc 0 · lint 0 · full **1729/1729** (r73-3 + r74 viết lại pin hành vi mới) · E2E browser desktop 1920 + mobile 390: dropdown 2 nhóm + chọn model zen cho agent nvidia + model phục vụ đúng + model lạ lỗi 1.5s + cliOk hiển thị đúng + 0 console error |
+
+- **BUG2-267 (P1 — "không thể chọn model"):** thủ phạm đúng 1 dòng `canPick = ... shown.provider === 'zen'` — mọi agent sau R16/R17 là nvidia → nút disable → màn đăng nhập OpenCode (sống trong dropdown) cũng kẹt theo. Fix: canPick mở cả nvidia + dropdown nhóm "OpenCode free" / "NVIDIA NIM" + provider suy từ MODEL khi gửi (`chosenModelOpt?.provider` — chọn model zen cho agent nvidia vẫn route đúng) + trigger đăng nhập cho MỌI model zen (cũ bỏ sót big-pickle vì chỉ match /free|bunny/).
+- **USER DIRECTIVE "bỏ model fallback":** dỡ sạch 5 tầng (ZEN FAILOVER + LAST RESORT + NIM RESCUE + normalize âm thầm SBF + /api/query fallback cấp route) khỏi 4 hàm entry llm.ts; extraction NIM thuần; utility zen thuần; xoay NIM giảm 12 attempts → 1 lượt/key + dừng khi 2 lỗi model-tầng liên tiếp (hết "RAMPAGE giữ request 3-5 phút"). Mọi lỗi model trả NGAY kèm nguyên nhân + "Chọn model khác trong khung chat" (E2E model lạ: 1.5s, 0 call). callModelWithKeyRotation trả error-result thay null mù.
+- **BUG2-268 (probe tự gãy CLI):** route probe ghi đè auth.json bằng OAuth session (bị chặn IP datacenter) TRƯỚC khi đo CLI — tự tay phá oc_sk đang chạy free-tier CLI tốt (policy Zen MỞ LẠI lần 4 từ 15/10 — bằng chứng `opencode run` cost 0). Fix: bỏ ghi đè ở nhánh HTTP-fail, CLI probe chạy với auth.json hiện trạng → cliOk phản ánh đúng; UI dropdownBlockedLineR6 nhận cliOk → "🔓 HTTP bị chặn nhưng transport CLI chạy lõi free OK — DÙNG ĐƯỢC ngay" (emerald); khôi phục auth.json oc_sk + verify CLI "OK" 10147 tokens cost 0.
+- **Đăng nhập OpenCode "thiết lập lại":** flow device-code hoạt động end-to-end (E2E: POST /login trả userCode VBKN-BDLR + link opencode.ai console thật; status đúng trạng thái; logout khôi phục oc_sk; poll tự probe + tự clear block-cache khi unlock). Trên máy user IP cá nhân VN: sau Approve, probe sẽ unlock (hoặc cliOk) → lõi free dùng được; không cần cấu hình gì thêm.
+- **Bài học truyền lại:** (11) **Điều kiện canPick/disable của UI phải theo NĂNG LỰC (provider hỗ trợ) chứ không theo GIÁ TRỊ STATE hiện tại** (provider zen cũ) — ghim theo state khiến nút chết âm thầm khi vận hành đổi state hợp lệ; (12) **Không ghi đè credential đang chạy trước khi biết credential mới có hoạt động không** — probe phải đo với hiện trạng, chỉ bridge credential mới SAU khi nó được chứng minh unlock; (13) **fallback là nợ kỹ thuật vận hành ngược tinh thần debug**: mỗi tầng fallback che nguyên nhân thật thêm 1 lớp (model chết → 4 model khác thử → RAM/request ma) — user directive "báo lỗi để tự chọn" vừa nhanh hơn vừa debug được.
+
+### TỔNG KẾT LŨY KẾ (cập nhật sau R19)
+
+- **Phát hiện lũy kế qua giao thức: 119 + 2 = 121** (R19: BUG2-267 P1 · BUG2-268 P2).
+- Gate kiểm thử: **1729/1729** (2 file test r73/r74 viết lại pin hành vi no-fallback — thay 5 pin pool last-resort cũ bằng behavioral pin mới).
+- Ghi chú: policy Zen free-tier CLI keyless MỞ LẠI 15/10 (lần 4) — ghi nhận qua probe cost 0; OAuth session datacenter vẫn bị chặn (đúng phân tích IP-based R16/R17).

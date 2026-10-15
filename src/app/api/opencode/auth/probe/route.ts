@@ -30,10 +30,18 @@ export async function POST() {
     } else {
       // R6 (user report 2026-10-31) — HTTP probe fail → đo thêm transport CLI
       // trên MÁY CHẠY APP (cliOk): HTTP session có thể bị Zen từ chối nhưng lõi
-      // free vẫn chạy qua CLI native — llm.ts tự failover, message phải nói đúng
-      // "vẫn dùng được qua CLI" thay vì dead-end "bị chặn".
+      // free vẫn chạy qua CLI native — message phải nói đúng "vẫn dùng được
+      // qua CLI" thay vì dead-end "bị chặn".
+      // R19 FIX (2026-10-15 — phát hiện E2E): KHÔNG ghi đè auth.json bằng
+      // OAuth session ở nhánh này! Trước đây writeAuthJsonForCli(session) chạy
+      // TRƯỚC CLI probe — nếu session bị Zen chặn theo IP (datacenter) trong
+      // khi auth.json cũ (oc_sk) đang chạy free-tier CLI tốt thì probe tự tay
+      // GÃY đường CLI đang sống (bằng chứng E2E 07:44: call agent CLI OK 32K
+      // tokens → probe ghi session → CLI thủ công 403 FreeTierError ngay sau
+      // đó). Bridge session vào CLI CHỈ khi nó thực sự unlock (nhánh trên).
+      // CLI probe giờ chạy với auth.json hiện trạng — cliOk phản ánh đúng
+      // môi trường thật.
       try {
-        writeAuthJsonForCli(session) // CLI probe dùng session hiện tại (như đã login opencode)
         const cli = await probeZenFreeTierViaCli(30_000)
         freeTier.cliOk = cli.ok
         if (cli.ok) {

@@ -26,7 +26,6 @@ import { join } from 'path'
 import {
   zenModelBlockSummary,
   markZenFreeTierBlocked,
-  parseZenLastResortModels,
 } from '../src/lib/llm'
 import { PROVIDER_MODELS } from '../src/lib/agent-constants'
 
@@ -117,12 +116,16 @@ describe('r74 — UI dropdown "nói thật" (source-scan smolab-module.tsx)', ()
     expect(src).toContain('// r74 (BUG2-033): mở dropdown → refetch trạng thái chặn')
   })
 
-  test('model bị chặn CẢ http+cli → badge ⚠ + hàng mờ + tooltip fallback SBF', () => {
+  test('model bị chặn CẢ http+cli → badge ⚠ + hàng mờ + tooltip nói thật R19 (gọi sẽ BÁO LỖI, không tự fallback)', () => {
     const src = read('src/components/smolab/smolab-module.tsx')
     expect(src).toContain("m.blockedTransports.includes('http') && m.blockedTransports.includes('cli')")
     expect(src).toContain('allBlocked ? \'text-stone-500\'') // hàng mờ
-    expect(src).toContain('title="Bị chặn free-tier — sẽ fallback về space-bunny-free"')
-    expect(src).toContain('sẽ tự chuyển tiếp về space-bunny-free (failover)') // tooltip nói thật
+    // R19 — tooltip/badge nói đúng hành vi mới: model bị chặn sẽ BÁO LỖI khi
+    // gọi (fallback đã dỡ theo user directive 2026-10-15)
+    expect(src).toContain('gọi sẽ báo lỗi (không tự đổi model — R19)') // badge ⚠ title
+    expect(src).toContain('Chọn model này sẽ nhận LỖI khi gọi (đã bỏ fallback R19 — không tự đổi model)') // tooltip nói thật
+    expect(src).not.toContain('sẽ tự chuyển tiếp về space-bunny-free') // pin cũ đã chết theo R19
+    expect(src).not.toContain('sẽ fallback về space-bunny-free') // pin cũ đã chết theo R19
     expect(src).toContain('· ⚠ bị chặn') // header chú thích
   })
 
@@ -160,10 +163,11 @@ describe('r74 — đính chính chẩn đoán r73 (chống diễn giải lỗi t
     expect(sbf?.caps).toEqual({ coding: true, reasoning: true, agentic: false })
   })
 
-  test('last-resort pool r73 GIỮ NGUYÊN (SBF vẫn là failover đích — pool chết chỉ tốn re-probe bị cache chặn)', () => {
-    // Pool mặc định không đổi — policy có thể mở lại; block-cache short-circuit
-    // đã giới hạn thiệt hại (đúng phân tích BUG2-033).
-    expect(parseZenLastResortModels(undefined, 'space-bunny-free', 'space-bunny-free'))
-      .toEqual(['ling-3.1-flash-free', 'mimo-v2.6-flash-free', 'big-pickle'])
+  test('R19 (2026-10-15) — fallback model đã DỠ hoàn toàn: llm.ts không còn tầng rescue/failover nào (user directive "tự chọn model thủ công")', () => {
+    // Pin hành vi mới thay pin pool last-resort r73 (đã dỡ cùng tầng).
+    const llmSrc = read('src/lib/llm.ts')
+    expect(llmSrc).not.toContain('agent-last-resort:')
+    expect(llmSrc).not.toContain('agent-nim-rescue:')
+    expect(llmSrc).not.toContain('parseZenLastResortModels')
   })
 })

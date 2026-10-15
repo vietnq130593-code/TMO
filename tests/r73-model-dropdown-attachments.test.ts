@@ -16,7 +16,6 @@ import { describe, expect, test, afterAll } from 'bun:test'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { PROVIDER_MODELS } from '../src/lib/agent-constants'
-import { parseZenLastResortModels } from '../src/lib/llm'
 import {
   classifySmolabAttachment,
   sanitizeSmolabAttachmentName,
@@ -194,37 +193,74 @@ describe('r73-2b — nút "+" tải tệp đính kèm cho agents', () => {
   })
 })
 
-// ==================== (3) BUG2-018 — LAST-RESORT FAILOVER CHÉO MODEL ====================
+// ==================== (3) R19 — BỎ TOÀN BỘ MODEL FALLBACK (user directive 2026-10-15) ====================
 
-describe('r73-3 — last-resort failover chéo model trong free tier (BUG2-018 kiến trúc)', () => {
-  test('pool mặc định = 3 model ĐÃ VERIFY battery r73 (ling + mimo + big-pickle)', () => {
-    expect(parseZenLastResortModels(undefined, 'space-bunny-free', 'space-bunny-free'))
-      .toEqual(['ling-3.1-flash-free', 'mimo-v2.6-flash-free', 'big-pickle'])
-  })
-
-  test('loại model chính + model failover (đã thử rung trên — không lặp lại call chết)', () => {
-    // Model chính ling → pool rơi xuống mimo + big-pickle (2 model kế)
-    expect(parseZenLastResortModels(undefined, 'ling-3.1-flash-free', 'space-bunny-free'))
-      .toEqual(['mimo-v2.6-flash-free', 'big-pickle'])
-  })
-
-  test('env ZEN_LAST_RESORT_MODELS override pool', () => {
-    expect(parseZenLastResortModels('step-5-preview-free,nemotron-3-ultra-free', 'space-bunny-free', 'space-bunny-free'))
-      .toEqual(['step-5-preview-free', 'nemotron-3-ultra-free'])
-  })
-
-  test('cap 3 model/lần (chống đốt >15 phút CLI timeout khi cả pool chết)', () => {
-    expect(parseZenLastResortModels('a,b,c,d,e', 'x', 'y')).toHaveLength(3)
-  })
-
-  test('mục rỗng/khoảng trắng bị lọc sạch', () => {
-    expect(parseZenLastResortModels(' a , ,b ,  ', 'x', 'y')).toEqual(['a', 'b'])
-  })
-
-  test('llm.ts gọi parseZenLastResortModels trong chuỗi failover (source scan)', () => {
+// R19 (2026-10-15 — user: "bỏ tính năng model fallback đi, nếu model nào gọi
+// bị lỗi thì báo lỗi là được, tôi tự chọn model khác thủ công"): toàn bộ tầng
+// fallback chéo model bị dỡ — thay pin cũ (parse pool last-resort r73) bằng
+// pin hành vi MỚI: mọi task-label fallback phải BIẾN MẤT khỏi llm.ts, lỗi model
+// phải trả về kèm nguyên nhân + hướng dẫn chọn model khác (behavioral pin —
+// bài học fixbug #5-#6: pin hành vi thật, không pin comment).
+describe('r73-3 → R19 — model fallback đã dỡ hoàn toàn (user directive 2026-10-15)', () => {
+  test('callLLMForAgent KHÔNG còn tầng failover/last-resort/NIM-rescue (source scan — task-label cũ biến mất)', () => {
     const llmSrc = readFileSync(join(REPO, 'src/lib/llm.ts'), 'utf8')
-    expect(llmSrc).toContain('parseZenLastResortModels(process.env.ZEN_LAST_RESORT_MODELS, zenModel, zenFailoverModel)')
-    expect(llmSrc).toContain('agent-last-resort:')
+    expect(llmSrc).not.toContain('agent-failover:')
+    expect(llmSrc).not.toContain('agent-last-resort:')
+    expect(llmSrc).not.toContain('agent-nim-rescue:')
+    expect(llmSrc).not.toContain('utility-nim-rescue:')
+    expect(llmSrc).not.toContain('utility-failover:')
+    expect(llmSrc).not.toContain('extraction-failover:')
+  })
+
+  test('env fallback cũ không còn được đọc trong llm.ts (ZEN_FAILOVER_MODEL / ZEN_LAST_RESORT_MODELS / NIM_RESCUE_MODEL / UTILITY_NIM_RESCUE / EXTRACTION_ZEN_MODEL)', () => {
+    const llmSrc = readFileSync(join(REPO, 'src/lib/llm.ts'), 'utf8')
+    expect(llmSrc).not.toContain('ZEN_FAILOVER_MODEL')
+    expect(llmSrc).not.toContain('ZEN_LAST_RESORT_MODELS')
+    expect(llmSrc).not.toContain('NIM_RESCUE_MODEL')
+    expect(llmSrc).not.toContain('UTILITY_NIM_RESCUE')
+    expect(llmSrc).not.toContain('EXTRACTION_ZEN_MODEL')
+  })
+
+  test('parseZenLastResortModels đã XÓA (dead-code cùng tầng last-resort)', () => {
+    const llmSrc = readFileSync(join(REPO, 'src/lib/llm.ts'), 'utf8')
+    expect(llmSrc).not.toContain('parseZenLastResortModels')
+  })
+
+  test('lỗi model trả NGAY kèm nguyên nhân + hướng dẫn chọn model khác (behavioral pin R19)', () => {
+    const llmSrc = readFileSync(join(REPO, 'src/lib/llm.ts'), 'utf8')
+    // 3 đường: NIM agent / model lạ org-name / zen HTTP+CLI
+    expect(llmSrc).toContain('NIM model "${model}" gọi thất bại — không tự fallback (R19)')
+    expect(llmSrc).toContain('không nằm trong danh sách model NIM được hỗ trợ')
+    expect(llmSrc).toContain('Model "${zenModel}" gọi thất bại (Zen HTTP + CLI — không tự fallback R19)')
+    expect(llmSrc).toContain('Chọn model khác trong khung chat')
+  })
+
+  test('normalize âm thầm về space-bunny-free đã XÓA — model lạ dạng org/name giờ báo lỗi rõ', () => {
+    const llmSrc = readFileSync(join(REPO, 'src/lib/llm.ts'), 'utf8')
+    expect(llmSrc).not.toContain("zenModel = isZenModelId(model) ? model : 'space-bunny-free'")
+  })
+
+  test('chat route KHÔNG còn fallback /api/query cho agent path (goal-loop exception → 500 lỗi rõ)', () => {
+    const src = readFileSync(join(REPO, 'src/app/api/openclaw/chat/route.ts'), 'utf8')
+    expect(src).toContain('không fallback (R19)')
+    expect(src).not.toContain('falling back to /api/query for agent')
+  })
+
+  test('callModelWithKeyRotation fail-fast: 1 lượt/key (KHÔNG còn 3 lượt × 4 key = 12 attempts)', () => {
+    const llmSrc = readFileSync(join(REPO, 'src/lib/llm.ts'), 'utf8')
+    expect(llmSrc).toContain('const maxAttempts = validIndices.length')
+    expect(llmSrc).toContain('2 lần liên tiếp')
+    // vòng xoay 3 lượt cũ phải biến mất khỏi callModelWithKeyRotation
+    expect(llmSrc).not.toContain('for (let round = 0; round < KEY_FAILURES_PER_KEY; round++)')
+  })
+
+  test('UI mở khóa chọn model cho agent provider nvidia (canPick) + dropdown nhóm OpenCode free / NVIDIA NIM', () => {
+    const smolabSrc = readFileSync(join(REPO, 'src/components/smolab/smolab-module.tsx'), 'utf8')
+    expect(smolabSrc).toContain("shown.provider === 'zen' || shown.provider === 'nvidia'")
+    expect(smolabSrc).toContain('OpenCode free — đăng nhập OpenCode account để dùng')
+    expect(smolabSrc).toContain('NVIDIA NIM — API key NVIDIA_API_KEY_1..4')
+    // provider suy từ MODEL khi gửi (không theo profile agent)
+    expect(smolabSrc).toContain('chosenModelOpt?.provider')
   })
 })
 

@@ -788,11 +788,15 @@ function cliOkLineR6(cliOk?: boolean): string {
   return ''
 }
 
-/** Dòng dropdown model khi đã đăng nhập nhưng free-tier vẫn bị chặn (kèm egress ngắn). */
-function dropdownBlockedLineR6(email?: string, eg?: Pick<R6EgressInfo, 'org' | 'isDatacenter'> | null): string {
-  const base = `⚠ Đã đăng nhập OpenCode${email ? ` (${email})` : ''} — nhưng free-tier vẫn bị chặn`
-  if (!eg) return base
-  return `${base} (egress: ${eg.org}${eg.isDatacenter ? ' · datacenter' : ' · không phải datacenter'})`
+/** Dòng dropdown model khi đã đăng nhập nhưng free-tier vẫn bị chặn (kèm egress ngắn).
+ *  R19: cliOk=true (probe route đo transport CLI trên máy chạy app) → nói rõ
+ *  "lõi free vẫn dùng được qua CLI" thay vì dead-end "bị chặn". */
+function dropdownBlockedLineR6(email?: string, eg?: Pick<R6EgressInfo, 'org' | 'isDatacenter'> | null, cliOk?: boolean): string {
+  const egPart = eg ? ` (egress: ${eg.org}${eg.isDatacenter ? ' · datacenter' : ' · không phải datacenter'})` : ''
+  if (cliOk) {
+    return `🔓 HTTP bị chặn${egPart} — nhưng transport CLI (opencode CLI) trên máy này đang chạy lõi free OK — hệ thống tự dùng CLI khi HTTP fail, model free DÙNG ĐƯỢC ngay.`
+  }
+  return `⚠ Đã đăng nhập OpenCode${email ? ` (${email})` : ''} — nhưng free-tier vẫn bị chặn${egPart}`
 }
 
 /** ROUND-42 — màu chữ theo agent (name ưu tiên, position fallback) */
@@ -2158,12 +2162,17 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   // phân loại ⚡coding/🧠reasoning/🤖agentic từ battery r73.
   // r74 (BUG2-033 — "dropdown nói thật"): model kèm thêm blockedTransports
   // (live từ free-tier block cache của llm.ts) — model bị chặn CẢ http LẪN cli
-  // hiển thị badge ⚠ + đổi màu (biết trước là sẽ fallback về space-bunny-free
-  // thay vì phát hiện âm thầm trong log). Refetch mỗi lần MỞ dropdown — trạng
-  // thái chặn có TTL (http 60s / cli 300s) nên cần tươi, không dùng bản mount.
+  // hiển thị badge ⚠ + đổi màu (R19: chọn model bị chặn sẽ nhận LỖI khi gọi —
+  // không còn tự fallback; nói thật trước để user không bất ngờ). Refetch mỗi
+  // lần MỞ dropdown — trạng thái chặn có TTL nên cần tươi, không dùng bản mount.
   const [zenModelOptions, setZenModelOptions] = useState<Array<{
     id: string
     label?: string
+    // R19 — provider của model (zen = OpenCode free, nvidia = NIM): UI dùng để
+    // (a) suy agentProvider ĐÚNG khi gửi chat (user chọn model zen cho agent
+    // nvidia → gửi provider 'zen'), (b) nhóm dropdown, (c) kích hoạt yêu cầu
+    // đăng nhập OpenCode khi chọn lõi free.
+    provider?: 'zen' | 'nvidia'
     caps?: { coding?: boolean; reasoning?: boolean; agentic?: boolean }
     blockedTransports?: string[]
     // R5 (2026-10-14 — đồng bộ tự động danh sách model free):
@@ -2203,7 +2212,13 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         const zen = providers.find(p => p.key === 'zen')?.models || []
         const nvidiaChat = (providers.find(p => p.key === 'nvidia')?.models || [])
           .filter(m => !/embed/i.test(m.id))
-        const merged = [...zen, ...nvidiaChat]
+        // R19: gắn provider cho từng item — dropdown nhóm theo OpenCode free /
+        // NVIDIA NIM + lúc gửi chat suy agentProvider từ MODEL được chọn (không
+        // theo profile agent — user có thể chọn model zen cho agent nvidia).
+        const merged = [
+          ...zen.map(m => ({ ...m, provider: 'zen' as const })),
+          ...nvidiaChat.map(m => ({ ...m, provider: 'nvidia' as const })),
+        ]
         if (merged.length > 0) setZenModelOptions(merged)
         setQAdvice(data?.advice ?? null)
         // R5: trạng thái sync kèm theo response — hiển thị ở dropdown + nút sync
@@ -5608,7 +5623,14 @@ ${manifest}` : rawText
           chatBody.agentMaxTokens = agent.maxTokens
           chatBody.agentProfileId = agent.id
           chatBody.agentProfileName = agent.name
-          chatBody.agentProvider = agent.provider
+          // R19 — provider HIỆU DỤNG suy từ MODEL được chọn (không theo profile
+          // agent): user chọn model zen free cho agent nvidia (hoặc ngược lại)
+          // → gửi đúng provider của model đó. Heuristic dự phòng khi danh sách
+          // model chưa tải: id dạng "org/name" = NIM, id trần = zen (backend
+          // callLLMForAgent route theo model-id nên luôn gọi đúng model).
+          const chosenModelOpt = zenModelOptions.find(m => m.id === selectedModel)
+          const effectiveProvider = chosenModelOpt?.provider ?? (selectedModel.includes('/') ? 'nvidia' : agent.provider)
+          chatBody.agentProvider = effectiveProvider
           // r73 (mục 1 user): model HIỆU DỤNG = dropdown chọn (mặc định = model
           // agent — set lúc chọn agent; user đổi qua dropdown → GHI ĐÈ cho
           // phiên chat này, không đổi AgentProfile DB)
@@ -6528,8 +6550,110 @@ ${manifest}` : rawText
                 const shown = agent || tl
                 if (!shown) return null
                 const overridden = !!(agent && selectedModel && selectedModel !== agent.model)
-                const canPick = chatMode === 'single' && shown.provider === 'zen'
+                // R19 (2026-10-15 — user report "không thể chọn model trong khung
+                // chat"): trước đây canPick chỉ cho provider 'zen' — mọi agent
+                // chuyển sang nvidia từ R16/R17 → nút DISABLED hoàn toàn. Giờ
+                // mở cho cả zen lẫn nvidia (cả 2 provider VALID_PROVIDERS).
+                // Model chọn ghi đè phiên chat; provider gửi đi được suy từ
+                // MODEL (xem khối gửi chat — không theo profile agent).
+                const canPick = chatMode === 'single' && (shown.provider === 'zen' || shown.provider === 'nvidia')
                 const zenModels = zenModelOptions
+                // R19 — item render dùng chung cho 2 nhóm (OpenCode free /
+                // NVIDIA NIM) — tách hàm để dropdown hiện section header rõ ràng.
+                const renderModelItem = (m: typeof zenModels[number]) => {
+                  // r74 (BUG2-033): model bị Zen chặn free-tier trên CẢ http
+                  // LẪN cli → R19: chọn sẽ nhận LỖI khi gọi (đã bỏ fallback) —
+                  // badge ⚠ + mờ + tooltip nói thật, không để user bất ngờ.
+                  const allBlocked = !!(m.blockedTransports && m.blockedTransports.includes('http') && m.blockedTransports.includes('cli'))
+                  const partialBlocked = !allBlocked && !!(m.blockedTransports && m.blockedTransports.length > 0)
+                  return (
+                  <button
+                    key={m.id}
+                    onClick={() => {
+                      setSelectedModel(m.id)
+                      setShowModelSelect(false)
+                      // 2026-10-14 (user request: "mỗi lần dùng lõi free sẽ
+                      // hiện ra thông tin yêu cầu tôi đăng nhập tài khoản")
+                      // + R19 mở rộng: MỌI model zen là lõi free (không chỉ id
+                      // chứa 'free'/'bunny') — chọn lõi free mà chưa đăng nhập
+                      // OpenCode account (hoặc đã đăng nhập nhưng free-tier
+                      // chưa mở) → tự kích hoạt yêu cầu đăng nhập ngay (device
+                      // flow hiện link + mã bên dưới model button).
+                      const isZenFreeCore = m.provider !== 'nvidia'
+                      // R19: cliOk=true (probe đo transport CLI trên máy này OK)
+                      // → lõi free dùng được qua CLI — KHÔNG nhắc đăng nhập nữa.
+                      if (isZenFreeCore && !(ocAuth?.loggedIn && (ocAuth.freeTier?.unlocked || ocAuth.freeTier?.cliOk))) {
+                        if (!ocAuth?.loggedIn) {
+                          toast({
+                            title: '🔐 Lõi free cần đăng nhập OpenCode account',
+                            description: 'Đang tạo mã đăng nhập — mở link hiện bên dưới trên máy bạn, đăng nhập rồi phê duyệt.',
+                          })
+                          void startOcLogin()
+                        } else {
+                          toast({
+                            title: 'Lõi free vẫn bị chặn sau đăng nhập',
+                            description: ocAuth?.freeTier?.detail || 'Bấm "Thử lại" trong danh sách model để probe lại (policy Zen hay đổi).',
+                          })
+                        }
+                      }
+                    }}
+                    className={`w-full text-left px-3 py-1.5 text-xs hover:bg-cyan-500/10 transition-colors flex items-center gap-2 ${
+                      selectedModel === m.id ? 'text-cyan-400' : allBlocked ? 'text-stone-500' : 'text-stone-300'
+                    }`}
+                    title={
+                      allBlocked
+                        ? `${m.label || m.id} — ⚠ Hiện bị Zen chặn free-tier (HTTP + CLI). Chọn model này sẽ nhận LỖI khi gọi (đã bỏ fallback R19 — không tự đổi model). Chọn nếu muốn thử lại/khi policy mở lại.`
+                        : partialBlocked
+                          ? `${m.label || m.id} — 1 transport đang bị chặn (${m.blockedTransports!.join('+')}) — hệ thống tự dùng transport còn lại.`
+                          : (m.label || m.id)
+                    }
+                  >
+                    <span className="w-3.5 flex-shrink-0 inline-flex">
+                      {selectedModel === m.id && <Check className="h-3 w-3" />}
+                    </span>
+                    <span className="truncate flex-1">{m.id}</span>
+                    {allBlocked && (
+                      <span className="text-[10px] text-amber-400/90 flex-shrink-0" title="Bị chặn free-tier — gọi sẽ báo lỗi (không tự đổi model — R19)">⚠</span>
+                    )}
+                    {/* R5 (2026-10-14): badge đồng bộ — model vừa thêm ở
+                        lần sync gần nhất (⇄ mới) / model đã rời danh sách
+                        free (nói thật — KHÔNG xoá khỏi catalog). */}
+                    {m.justAdded && !allBlocked && !m.noLongerListed && (
+                      <span
+                        className="text-[9px] text-emerald-400 border border-emerald-400/40 rounded px-1 flex-shrink-0"
+                        role="img"
+                        aria-label="Model mới từ đồng bộ models.dev"
+                        title="Vừa được thêm ở lần đồng bộ gần nhất (models.dev) — chưa battery r73"
+                      >⇄ mới</span>
+                    )}
+                    {m.noLongerListed && !m.justAdded && (
+                      <span
+                        className="text-[9px] text-stone-500 border border-stone-700/60 rounded px-1 flex-shrink-0"
+                        role="img"
+                        aria-label="Model đã rời danh sách free"
+                        title="Không còn trong danh sách free models.dev ở lần đồng bộ gần nhất — giữ để tham chiếu"
+                      >đã rời</span>
+                    )}
+                    {/* P6-M4 — badge "Q học được đề xuất" trên model top-Q
+                        (tương tự badge blockedTransports r74 — advisory). */}
+                    {qAdvice?.top?.[0] && qAdvice.top[0].model === m.id && qAdvice.top[0].visits > 0 && qAdvice.top[0].q > 0 && (
+                      <span
+                        className="text-[9px] text-cyan-400 border border-cyan-400/40 rounded px-1 flex-shrink-0"
+                        role="img"
+                        aria-label={`Q học được đề xuất (P6): model này có phần thưởng trung bình cao nhất (${qAdvice.top[0].q.toFixed(2)}, ${qAdvice.top[0].visits} runs) — tham khảo, không bắt buộc.`}
+                        title={`Q học được đề xuất (P6): model này có phần thưởng trung bình cao nhất (${qAdvice.top[0].q.toFixed(2)}, ${qAdvice.top[0].visits} runs) — tham khảo, không bắt buộc.`}
+                      >Q</span>
+                    )}
+                    {(m.caps?.coding || m.caps?.reasoning || m.caps?.agentic) && (
+                      <span className="text-[10px] text-stone-500 flex-shrink-0 flex gap-1 items-center">
+                        {m.caps?.coding && <span title="coding">⚡</span>}
+                        {m.caps?.reasoning && <span title="reasoning">🧠</span>}
+                        {m.caps?.agentic && <span title="agentic">🤖</span>}
+                      </span>
+                    )}
+                  </button>
+                  )
+                }
                 return (
                   <div className="mt-2 relative">
                     <button
@@ -6556,7 +6680,7 @@ ${manifest}` : rawText
                           ? 'cursor-pointer bg-slate-950/40 border-cyan-400/30 hover:border-cyan-400/60 hover:bg-slate-950/60 text-stone-300'
                           : 'cursor-default bg-slate-950/30 border-stone-700/20 text-stone-400'
                       }`}
-                      title={canPick ? 'Bấm để chọn model free khác cho phiên chat này' : undefined}
+                      title={canPick ? 'Bấm để chọn model (OpenCode free / NVIDIA NIM) cho phiên chat này' : undefined}
                       aria-label={canPick ? 'Chọn model cho phiên chat' : undefined}
                     >
                       <span className="flex items-center gap-1.5 flex-wrap">
@@ -6583,7 +6707,7 @@ ${manifest}` : rawText
                         style={{ scrollbarWidth: 'thin' }}
                       >
                         <div className="px-3 py-1 text-[9px] font-semibold uppercase tracking-wide text-cyan-500/70 border-b border-cyan-400/20 sticky top-0 bg-slate-950/95">
-                          Model agent (Zen + NVIDIA: kimi-k3 · deepseek-v4.1-flash) · ⚡ coding · 🧠 reasoning · 🤖 agentic · ⚠ bị chặn
+                          Chọn model phiên chat — OpenCode free + NVIDIA NIM · không fallback: model lỗi sẽ BÁO LỖI để bạn tự chọn · ⚡ coding · 🧠 reasoning · 🤖 agentic · ⚠ bị chặn
                         </div>
                         {/* ===== OPENCODE ACCOUNT LOGIN (user request 2026-10-14) —
                             lõi free bị Zen chặn FreeTierError với oc_sk key →
@@ -6593,7 +6717,7 @@ ${manifest}` : rawText
                           {!ocAuth?.loggedIn ? (
                             <>
                               <div className="text-[10px] text-stone-400 leading-relaxed">
-                                🔐 <span className="text-stone-300">Lõi free bị Zen chặn với API key</span> (FreeTierError "free tier can only be used from within OpenCode") — đăng nhập tài khoản OpenCode để mở khóa.
+                                🔐 <span className="text-stone-300">Lõi free cần đăng nhập OpenCode account</span> (free tier chỉ mở khi gọi từ trong OpenCode — API key oc_sk bị chặn FreeTierError) — đăng nhập để mở khóa, hoặc chọn model NVIDIA NIM bên dưới.
                               </div>
                               <button
                                 type="button"
@@ -6609,10 +6733,10 @@ ${manifest}` : rawText
                             </>
                           ) : (
                             <div className="text-[10px] leading-relaxed flex items-center justify-between gap-2">
-                              <span className={ocAuth.freeTier?.unlocked ? 'text-emerald-300' : 'text-amber-300'}>
+                              <span className={ocAuth.freeTier?.unlocked || ocAuth.freeTier?.cliOk ? 'text-emerald-300' : 'text-amber-300'}>
                                 {ocAuth.freeTier?.unlocked
                                   ? `🔓 Đã đăng nhập OpenCode${ocAuth.email ? ` (${ocAuth.email})` : ''} — lõi free đã mở khóa`
-                                  : dropdownBlockedLineR6(ocAuth.email, ocAuth.freeTier?.egress)}
+                                  : dropdownBlockedLineR6(ocAuth.email, ocAuth.freeTier?.egress, ocAuth.freeTier?.cliOk)}
                               </span>
                               <span className="flex items-center gap-1 shrink-0">
                                 {!ocAuth.freeTier?.unlocked && (
@@ -6706,101 +6830,21 @@ ${manifest}` : rawText
                             {syncingModels || freeModelsSync?.syncing ? <Loader2 className="h-3 w-3 animate-spin" /> : '⟳'} Đồng bộ ngay
                           </button>
                         </div>
-                        {zenModels.map((m) => {
-                          // r74 (BUG2-033): model bị Zen chặn free-tier trên CẢ
-                          // http LẪN cli → chọn model này agent sẽ tự chuyển tiếp
-                          // về space-bunny-free (failover nhiều lớp r73) — badge ⚠
-                          // + mờ + tooltip nói thật, không để user bất ngờ.
-                          const allBlocked = !!(m.blockedTransports && m.blockedTransports.includes('http') && m.blockedTransports.includes('cli'))
-                          const partialBlocked = !allBlocked && !!(m.blockedTransports && m.blockedTransports.length > 0)
-                          return (
-                          <button
-                            key={m.id}
-                            onClick={() => {
-                              setSelectedModel(m.id)
-                              setShowModelSelect(false)
-                              // 2026-10-14 (user request: "mỗi lần dùng lõi free sẽ
-                              // hiện ra thông tin yêu cầu tôi đăng nhập tài khoản")
-                              // — chọn lõi FREE mà chưa đăng nhập OpenCode account
-                              // (hoặc đã đăng nhập nhưng free-tier chưa mở) → tự
-                              // kích hoạt yêu cầu đăng nhập ngay (device flow hiện
-                              // link + mã bên dưới model button).
-                              const isFreeCore = /free|bunny/i.test(m.id)
-                              if (isFreeCore && !(ocAuth?.loggedIn && ocAuth.freeTier?.unlocked)) {
-                                if (!ocAuth?.loggedIn) {
-                                  toast({
-                                    title: '🔐 Lõi free cần đăng nhập OpenCode account',
-                                    description: 'Đang tạo mã đăng nhập — mở link hiện bên dưới trên máy bạn, đăng nhập rồi phê duyệt.',
-                                  })
-                                  void startOcLogin()
-                                } else {
-                                  toast({
-                                    title: 'Lõi free vẫn bị chặn sau đăng nhập',
-                                    description: ocAuth?.freeTier?.detail || 'Bấm "Thử lại" trong danh sách model để probe lại (policy Zen hay đổi).',
-                                  })
-                                }
-                              }
-                            }}
-                            className={`w-full text-left px-3 py-1.5 text-xs hover:bg-cyan-500/10 transition-colors flex items-center gap-2 ${
-                              selectedModel === m.id ? 'text-cyan-400' : allBlocked ? 'text-stone-500' : 'text-stone-300'
-                            }`}
-                            title={
-                              allBlocked
-                                ? `${m.label || m.id} — ⚠ Hiện bị Zen chặn free-tier (HTTP + CLI). Agents vẫn nhận model này nhưng sẽ tự chuyển tiếp về space-bunny-free (failover) — chọn nếu muốn thử lại/khi policy mở lại.`
-                                : partialBlocked
-                                  ? `${m.label || m.id} — 1 transport đang bị chặn (${m.blockedTransports!.join('+')}) — hệ thống tự dùng transport còn lại.`
-                                  : (m.label || m.id)
-                            }
-                          >
-                            <span className="w-3.5 flex-shrink-0 inline-flex">
-                              {selectedModel === m.id && <Check className="h-3 w-3" />}
-                            </span>
-                            <span className="truncate flex-1">{m.id}</span>
-                            {allBlocked && (
-                              <span className="text-[10px] text-amber-400/90 flex-shrink-0" title="Bị chặn free-tier — sẽ fallback về space-bunny-free">⚠</span>
-                            )}
-                            {/* R5 (2026-10-14): badge đồng bộ — model vừa thêm ở
-                                lần sync gần nhất (⇄ mới) / model đã rời danh sách
-                                free (nói thật — KHÔNG xoá khỏi catalog). */}
-                            {m.justAdded && !allBlocked && !m.noLongerListed && (
-                              <span
-                                className="text-[9px] text-emerald-400 border border-emerald-400/40 rounded px-1 flex-shrink-0"
-                                role="img"
-                                aria-label="Model mới từ đồng bộ models.dev"
-                                title="Vừa được thêm ở lần đồng bộ gần nhất (models.dev) — chưa battery r73"
-                              >⇄ mới</span>
-                            )}
-                            {m.noLongerListed && !m.justAdded && (
-                              <span
-                                className="text-[9px] text-stone-500 border border-stone-700/60 rounded px-1 flex-shrink-0"
-                                role="img"
-                                aria-label="Model đã rời danh sách free"
-                                title="Không còn trong danh sách free models.dev ở lần đồng bộ gần nhất — giữ để tham chiếu"
-                              >đã rời</span>
-                            )}
-                            {/* P6-M4 — badge "Q học được đề xuất" trên model top-Q
-                                (tương tự badge blockedTransports r74 — advisory).
-                                FB-P6-R1-C-05: chỉ hiện khi Q DƯƠNG — "phần thưởng cao
-                                nhất" trong nhóm toàn âm gây hiểu nhầm; FB-P6 ghi chú ③:
-                                aria-label cho screen reader (title chỉ tới được bằng hover). */}
-                            {qAdvice?.top?.[0] && qAdvice.top[0].model === m.id && qAdvice.top[0].visits > 0 && qAdvice.top[0].q > 0 && (
-                              <span
-                                className="text-[9px] text-cyan-400 border border-cyan-400/40 rounded px-1 flex-shrink-0"
-                                role="img"
-                                aria-label={`Q học được đề xuất (P6): model này có phần thưởng trung bình cao nhất (${qAdvice.top[0].q.toFixed(2)}, ${qAdvice.top[0].visits} runs) — tham khảo, không bắt buộc.`}
-                                title={`Q học được đề xuất (P6): model này có phần thưởng trung bình cao nhất (${qAdvice.top[0].q.toFixed(2)}, ${qAdvice.top[0].visits} runs) — tham khảo, không bắt buộc.`}
-                              >Q</span>
-                            )}
-                            {(m.caps?.coding || m.caps?.reasoning || m.caps?.agentic) && (
-                              <span className="text-[10px] text-stone-500 flex-shrink-0 flex gap-1 items-center">
-                                {m.caps?.coding && <span title="coding">⚡</span>}
-                                {m.caps?.reasoning && <span title="reasoning">🧠</span>}
-                                {m.caps?.agentic && <span title="agentic">🤖</span>}
-                              </span>
-                            )}
-                          </button>
-                          )
-                        })}
+                        {/* R19 — nhóm 1: OPENCODE FREE (cần đăng nhập OpenCode
+                            account để mở khóa; model bị chặn sẽ nhận lỗi khi gọi). */}
+                        {zenModels.filter(m => m.provider !== 'nvidia').length > 0 && (
+                          <div className="px-3 py-1 text-[9px] font-semibold uppercase tracking-wide text-emerald-500/70 border-b border-stone-700/30 bg-slate-950/95">
+                            🆓 OpenCode free — đăng nhập OpenCode account để dùng
+                          </div>
+                        )}
+                        {zenModels.filter(m => m.provider !== 'nvidia').map(renderModelItem)}
+                        {/* R19 — nhóm 2: NVIDIA NIM (dùng API key NVIDIA_API_KEY_1..4). */}
+                        {zenModels.filter(m => m.provider === 'nvidia').length > 0 && (
+                          <div className="px-3 py-1 text-[9px] font-semibold uppercase tracking-wide text-amber-500/70 border-b border-stone-700/30 bg-slate-950/95">
+                            ⚡ NVIDIA NIM — API key NVIDIA_API_KEY_1..4
+                          </div>
+                        )}
+                        {zenModels.filter(m => m.provider === 'nvidia').map(renderModelItem)}
                         {zenModels.length === 0 && (
                           <div className="px-3 py-2 text-xs text-stone-500">Chưa tải được danh sách model — thử lại sau.</div>
                         )}
