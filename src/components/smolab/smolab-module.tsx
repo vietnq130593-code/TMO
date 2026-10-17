@@ -1856,16 +1856,18 @@ export const SMOLAB_MODEL_GROUPS = [
     provider: 'NVIDIA',
     icon: '🎮',
     models: [
-      // USER DIRECTIVE 2026-11-30 — kimi-k3 giữ lại như 1 LỰA CHỌN model agent
-      // tạm thời (chọn → route NIM thật; NIM chết → tự fallback space-bunny-free).
-      { id: 'moonshotai/kimi-k3', label: 'Kimi K3 (NVIDIA NIM — tạm thời, chậm ~2 phút/call)' },
-      // USER REQUEST 2026-10-14 — deepseek-v4.1-flash vào danh sách lựa chọn
-      // (lõi NIM nhanh ~2s/call — live-probe Task 28; chọn → route NIM thật).
-      { id: 'deepseek-ai/deepseek-v4.1-flash', label: 'DeepSeek v4.1 Flash (NVIDIA NIM — ⚡ nhanh ~2s/call)' },
-      // Lõi extraction (triết tách) — nemotron-550b (kimi-k3 bị cấm cho extraction)
-      { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (extraction chính)' },
-      // ĐÃ LOẠI BỎ (410 EOL 2026-11-30): gpt-oss-120b, minimax-m3,
-      // deepseek-v4-pro-0813, deepseek-v4-flash-0731.
+      // R25 (2026-10-18 — probe NIM trực tiếp + user report): GLM 5.3 Flash
+      // là MODEL CHÍNH (200/~0,7s — nhanh nhất catalog còn sống).
+      { id: 'z-ai/glm-5.3-flash', label: 'GLM 5.3 Flash (NVIDIA NIM — ⚡ nhanh ~1s/call; model chính)' },
+      // GLM 5.3 — siêu model reasoning, chậm (timeout riêng 600s phía server).
+      { id: 'z-ai/glm-5.3', label: 'GLM 5.3 (NVIDIA NIM — siêu model reasoning; rất chậm, quan sát 504)' },
+      // DeepSeek v4.1 Flash — giữ (user request 2026-10-14); R25: reasoning
+      // chậm ~135s prompt tối giản → timeout slow-model 600s.
+      { id: 'deepseek-ai/deepseek-v4.1-flash', label: 'DeepSeek v4.1 Flash (NVIDIA NIM — reasoning chậm ~2 phút/call)' },
+      // Nemotron-550b — từng là model chính R17 + lõi extraction; R25: NIM
+      // quá tải 503 liên tục — giữ làm lựa chọn, breaker fail-fast khi bệnh.
+      { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (⚠ thường quá tải 503)' },
+      // kimi-k3 ĐÃ EOL 410 (2026-10-15) — GỠ khỏi dropdown.
     ],
   },
 ]
@@ -2018,9 +2020,9 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   // thống (nút + openclaw route + goal-loop + workflow-engine + tool-executor
   // + durable types + wrapper budget tương ứng). System prompt chỉ còn trần
   // env hệ thống SYSTEM_PROMPT_BUDGET_CHARS — xem src/lib/prompt-budget.ts.
-  // MODEL POLICY 2026-11-30: space-bunny-free (Zen) là mặc định agents + chat;
-  // kimi-k3 (NVIDIA NIM) là lựa chọn tạm thời trong dropdown (minimax/deepseek
-  // đã EOL 410 — loại bỏ toàn bộ theo user directive).
+  // MODEL POLICY R25 (2026-10-18): space-bunny-free (Zen) là mặc định agents +
+  // chat; NIM dropdown: GLM 5.3 Flash (chính) + GLM 5.3 + DS v4.1 Flash +
+  // nemotron-550b (kimi-k3 EOL 410 — đã gỡ).
   const [selectedModel, setSelectedModel] = useState(restoredCtx.selectedModel || 'space-bunny-free')
   // r73 (mục 1 user): dropdown chọn model free ngay trên dòng model indicator
   const [showModelSelect, setShowModelSelect] = useState(false)
@@ -2196,9 +2198,10 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
     syncing: boolean
   } | null>(null)
   const [syncingModels, setSyncingModels] = useState(false)
-  // 2026-11-30 (user directive): dropdown model agent = các model ZEN (như cũ)
-  // + kimi-k3 (NVIDIA NIM — lựa chọn tạm thời "bấm chọn k3 sẽ chuyển qua dùng
-  // k3"). Lõi embed (id chứa '/embed-') bị lọc ra — không phải LLM chat.
+  // R25 (2026-10-18): dropdown model agent = các model ZEN (như cũ) + 4 model
+  // NIM (glm-5.3-flash chính / glm-5.3 / ds-v4.1-flash / nemotron-550b —
+  // chọn model nào route NIM đúng model đó, R19 không fallback). Lõi embed
+  // (id chứa '/embed-') bị lọc ra — không phải LLM chat.
   // P6-M4 (BLUEPRINT-STATS-LEARNING §P6-M4): lời khuyên Q học được (advice từ
   // /api/agents/models — top model theo Q-value của state runtime agent).
   // Badge "Q đề xuất" trên model đứng đầu — chỉ khi đã CÓ dữ liệu học

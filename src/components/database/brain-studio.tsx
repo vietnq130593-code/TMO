@@ -38,7 +38,9 @@
  * (18-b giữ nguyên props contract — 18-c render <BrainStudio> cùng props.)
  *
  * Draft ≠ runtime (§9.1-1): không có gì ở đây chạm BrainModel.active.
- * Cờ UI_BRAIN_EDIT off → chỉ xem (editor ẩn, y hệt trước UX-1).
+ * Cờ UI_BRAIN_EDIT off → CHỈ XEM nhưng vẫn HIỆN ĐẦY ĐỦ chuỗi lớp planned
+ * (R25-a — trước đây chỉ 1 dòng chữ, user tưởng layers mất); on → editor
+ * đầy đủ (stepper nơ-ron · dropdown activation · thêm/xóa lớp · lưu nháp).
  */
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -487,9 +489,56 @@ export function BrainStudio({
           )}
         </div>
       ) : (
-        <p className="rounded-lg border border-slate-800/80 bg-slate-950/40 px-2.5 py-1.5 text-[9.5px] text-stone-500">
-          Editor kiến trúc đang TẮT (cờ UI_BRAIN_EDIT — tab Tham số runtime). Bật để chỉnh lớp ẩn/nơ-ron/activation và lưu nháp.
-        </p>
+        <div className="space-y-1.5 rounded-lg border border-slate-800/80 bg-slate-950/40 px-2.5 py-2">
+          {/* R25-a: chế độ CHỈ XEM vẫn HIỆN ĐẦY ĐỦ các lớp (trước đây chỉ 1
+              dòng chữ — user tưởng layers biến mất). Trạng thái hiển thị =
+              planned.layers của registry (đúng nguồn hiển thị dormant —
+              precedent R23); nút chỉnh bị khóa, mở bằng cờ UI_BRAIN_EDIT. */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <p className="text-[11px] font-semibold text-stone-200">Kiến trúc — chỉ xem</p>
+            <span className="rounded bg-slate-900 px-1.5 py-0.5 font-mono text-[9px] text-stone-500">
+              🔒 khóa chỉnh — cờ UI_BRAIN_EDIT đang off
+            </span>
+          </div>
+          <div className="flex flex-wrap items-stretch gap-1" aria-label="Chuỗi lớp kiến trúc (chỉ xem)">
+            {/* Lớp input — khóa theo inputMode (§9.1-2); planned.layers[0] là
+                lớp input (activation '') — unitsLabel mô tả chế độ (vd "1-hot cfg") */}
+            <div className="flex min-w-[86px] flex-col justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2 py-1.5" title="Lớp đầu vào — khóa theo inputMode (§9.1-2)">
+              <span className="text-[9px] uppercase tracking-wide text-stone-500">Input 🔒</span>
+              <span className="font-mono text-[11px] text-stone-300">{inputUnits ?? 'D động'}</span>
+              {(brain.planned.layers?.[0]?.unitsLabel || brain.planned.layers?.[0]?.activation) && (
+                <span className="font-mono text-[9px] text-stone-600">{brain.planned.layers[0].unitsLabel ?? brain.planned.layers[0].activation}</span>
+              )}
+            </div>
+            {/* Lớp ẩn planned (bỏ lớp đầu=input, lớp cuối=output) */}
+            {(brain.planned.layers ?? []).slice(1, -1).map((l, i) => (
+              <Fragment key={`ro-${i}`}>
+                <span className="shrink-0 self-center text-stone-600" aria-hidden="true">→</span>
+                <div className="flex min-w-[76px] flex-col justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2 py-1.5" title="Lớp ẩn (planned spec chuẩn)">
+                  <span className="text-[9px] uppercase tracking-wide text-stone-500">Ẩn {i + 1}</span>
+                  <span className="font-mono text-[11px] text-stone-300">
+                    {l.unitsLabel ?? (l.units > 0 ? l.units : '?')}<span className="text-stone-500">·{l.activation || '—'}</span>
+                  </span>
+                </div>
+              </Fragment>
+            ))}
+            <span className="shrink-0 self-center text-stone-600" aria-hidden="true">→</span>
+            {/* Lớp output — khóa (§9.1-2); planned.layers[cuối] mô tả đầu ra */}
+            <div className="flex max-w-[190px] flex-col justify-center rounded-lg border border-slate-800 bg-slate-950/60 px-2 py-1.5" title="Lớp đầu ra — khóa theo hợp đồng pipeline (§9.1-2)">
+              <span className="text-[9px] uppercase tracking-wide text-stone-500">Output 🔒</span>
+              <span className="font-mono text-[10px] leading-tight text-stone-300">{rule.outputLabel}</span>
+              {(() => {
+                const last = brain.planned.layers?.[brain.planned.layers.length - 1]
+                if (!last) return null
+                const detail = [last.unitsLabel, last.activation].filter(Boolean).join(' · ')
+                return detail ? <span className="font-mono text-[9px] text-stone-600">{detail}</span> : null
+              })()}
+            </div>
+          </div>
+          <p className="text-[9.5px] text-stone-500">
+            Editor kiến trúc đang TẮT (cờ <span className="font-mono">UI_BRAIN_EDIT</span> — bật tại tab <b>Tham số runtime</b> trong console bên dưới, mục UI_BRAIN_EDIT). Bật để chỉnh lớp ẩn/nơ-ron/activation, thêm/xóa lớp và lưu nháp.
+          </p>
+        </div>
       )}
 
       {/* ── Khối 4 · Phiên bản đã train (nén 1-2 dòng — giữ dữ liệu 3 thẻ cũ) ── */}

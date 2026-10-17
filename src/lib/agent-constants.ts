@@ -1,13 +1,15 @@
 /**
  * Agent Constants — Shared provider/model data and validation constants
  *
- * ⚠ MODEL MATRIX (USER DIRECTIVE 2026-11-30 — single source of truth):
- *   - NVIDIA NIM chỉ giữ: LÕI EMBED (embeddings.ts, nemotron-3-embed-1b) +
- *     LÕI EXTRACTION nemotron-3-ultra-550b (llm.ts callLLMSlot NIM-first) +
- *     KIMI-K3 như 1 LỰA CHỌN model agent TẠM THỜI (chọn → route NIM thật,
- *     fail → tự fallback Zen space-bunny-free).
- *   - ĐÃ LOẠI BỎ TOÀN BỘ (410 EOL — live-probe 2026-11-30): minimax-m3,
- *     deepseek-v4-pro-0813, deepseek-v4-flash-0731, gpt-oss-120b.
+ * ⚠ MODEL MATRIX (R25 2026-10-18 — single source of truth, probe NIM trực tiếp):
+ *   - NVIDIA NIM giữ: LÕI EMBED (embeddings.ts, nemotron-3-embed-1b) +
+ *     LÕI EXTRACTION z-ai/glm-5.3-flash (llm.ts callLLMSlot — R25 đổi từ
+ *     nemotron-550b đang 503 quá tải liên tục) + 4 LỰA CHỌN model agent:
+ *     GLM 5.3 Flash (chính) · DeepSeek v4.1 Flash · GLM 5.3 · Nemotron-550B.
+ *   - kimi-k3 ĐÃ EOL 410 trên NIM (2026-10-15T08:00Z — probe R25 xác nhận
+ *     "Gone") — GỠ khỏi danh sách.
+ *   - ĐÃ LOẠI BỎ TRƯỚC ĐÓ (410 EOL): minimax-m3, deepseek v4.0 (pro/flash),
+ *     gpt-oss-120b, glm-5.2.
  *   - Lõi LLM mặc định của agents: OpenCode Zen space-bunny-free.
  *
  * Used by:
@@ -21,30 +23,28 @@
 // ==================== PROVIDER + MODEL DATA ====================
 
 /** EXTRACTION models — lõi trích xuất (triết tách) tài liệu (callLLMSlot)
- *  (user directive 2026-11-30: NIM nemotron-3-ultra-550b LÕI CHÍNH — fail toàn
- *   chuỗi key → fallback chuỗi Zen space-bunny-free; kimi-k3 TUYỆT ĐỐI không
- *   dùng cho trích xuất tài liệu — directive 2026-09-05 giữ nguyên)
+ *  (R25 2026-10-18: lõi chính z-ai/glm-5.3-flash — probe 200/~0,7s;
+ *   nemotron-3-ultra-550b 503 quá tải liên tục từ 2026-10-17, khôi phục qua
+ *   env EXTRACTION_MODEL khi NIM khỏe lại)
  *  Đã bỏ (404/410): llama-3.1-nemotron-ultra-253b-v1, nemotron-4-340b-instruct,
  *  gpt-oss-120b (EOL 2026-09-03)
  */
 export const EXTRACTION_MODELS: Record<string, Array<{ id: string; label: string }>> = {
-  // USER DIRECTIVE 2026-11-30: extraction (triết tách) NIM-FIRST — lõi chính
-  // nvidia/nemotron-3-ultra-550b (llm.ts callLLMSlot gọi NIM xoay 4 key trước),
-  // fail toàn chuỗi → fallback chuỗi Zen space-bunny-free (override
-  // EXTRACTION_ZEN_MODEL). gpt-oss-120b (lõi fallback NIM cũ) đã EOL 410 — gỡ.
+  // R25: extraction (triết tách) NIM-FIRST — lõi chính z-ai/glm-5.3-flash
+  // (llm.ts callLLMSlot gọi NIM xoay 4 key; R19 không fallback — document
+  // retry sau). Khôi phục nemotron: env EXTRACTION_MODEL=nvidia/nemotron-3-ultra-550b-a55b.
   nvidia: [
-    { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (extraction chính — NIM)' },
+    { id: 'z-ai/glm-5.3-flash', label: 'glm-5.3-flash (extraction chính — NIM, R25)' },
+    { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (extraction cũ — 503 quá tải, khôi phục bằng env EXTRACTION_MODEL)' },
   ],
   zen: [
     { id: 'space-bunny-free', label: 'space-bunny-free (extraction fallback — zen)' },
   ],
 }
 
-/** Lõi agents — mặc định OpenCode Zen (space-bunny-free); NVIDIA NIM chỉ giữ
- *  kimi-k3 (lựa chọn tạm thời 2026-11-30) + lõi embed. Toàn bộ minimax-m3 /
- *  deepseek-v4-pro-0813 / deepseek-v4-flash-0731 / gpt-oss-120b ĐÃ LOẠI BỎ
- *  (410 EOL — live-probe 2026-11-30). kimi-k3 bị cấm ở pipeline trích xuất
- *  tài liệu (directive 2026-09-05 giữ nguyên).
+/** Lõi agents — mặc định OpenCode Zen (space-bunny-free); NVIDIA NIM giữ 4
+ *  lựa chọn model agent R25 (glm-5.3-flash chính / ds-v4.1-flash / glm-5.3 /
+ *  nemotron-550b) + lõi embed. kimi-k3 ĐÃ EOL 410 (2026-10-15) — gỡ toàn bộ.
  */
 export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string; caps?: { coding?: boolean; reasoning?: boolean; agentic?: boolean } }>> = {
   // ===== OPENCODE ZEN (FIX 2026-09-25 — E2E tool audit) =====
@@ -155,40 +155,40 @@ export const PROVIDER_MODELS: Record<string, Array<{ id: string; label: string; 
     },
   ],
   nvidia: [
-    // 2026-11-30 — KIMI-K3 là lựa chọn model agent NIM TẠM THỜI (user
-    // directive: "nếu kimi k3 sống được thì giữ lại như 1 lựa chọn"; "đảm bảo
-    // tôi bấm chọn k3 sẽ chuyển qua dùng k3 được"). Live-probe 2026-11-30:
-    // ALIVE nhưng chậm (~120s/call tối giản). Chọn kimi-k3 → callLLMForAgent
-    // route NIM thật; NIM 429 kéo dài/EOL → tự fallback chuỗi Zen
-    // space-bunny-free (agent không chết).
+    // R25 (2026-10-18 — user report: "NIM không còn Kimi K3, ngoài DS v4.1
+    // còn GLM 5.3 Flash và GLM 5.3"; probe trực tiếp xác nhận catalog) —
+    // GLM 5.3 FLASH là MODEL AGENT NIM CHÍNH: 200/~0,7s (nhanh nhất catalog
+    // còn sống), reasoning model (content + reasoning_content). Chọn →
+    // callLLMForAgent route NIM thật; fail → báo lỗi R19 (không fallback).
     {
-      id: 'moonshotai/kimi-k3',
-      label: 'Kimi K3 (NVIDIA NIM — tạm thời; chậm ~2 phút/call; NIM chết → tự fallback space-bunny-free)',
+      id: 'z-ai/glm-5.3-flash',
+      label: 'GLM 5.3 Flash (NVIDIA NIM — ⚡ nhanh ~1s/call; model chính R25)',
       caps: { coding: true, reasoning: true, agentic: true },
     },
-    // 2026-10-14 (user request "thêm deepseek-v4.1-flash vào danh sách lựa
-    // chọn") — lõi NIM ĐÃ VERIFY sống (live-probe Task 28: trả lời ~2s/call,
-    // nhanh nhất trong các lõi NIM còn mở; KHÔNG thuộc EOL list 2026-11-30 —
-    // dòng EOL là deepseek-v4-pro-0813 / v4-flash-0731 của v4.0, v4.1-flash là
-    // model khác). Trước đây chỉ là tier NIM RESCUE cuối chuỗi callLLMForAgent;
-    // giờ nâng lên thành LỰA CHỌN chính thức trong dropdown: chọn → route NIM
-    // thật (xoay 4 key); NIM chết → tự fallback chuỗi Zen space-bunny-free.
+    // GLM 5.3 — siêu model reasoning (user muốn có sẵn). Probe R25: >150s
+    // cho prompt tối giản → timeout slow-model 600s (NIM_SLOW_MODEL_TIMEOUT_MS).
+    {
+      id: 'z-ai/glm-5.3',
+      label: 'GLM 5.3 (NVIDIA NIM — siêu model reasoning; rất chậm, quan sát 504 kéo dài)',
+      caps: { coding: true, reasoning: true, agentic: true },
+    },
+    // 2026-10-14 (user request) — giữ lựa chọn. Probe R25: sống nhưng reasoning
+    // chậm (~135s prompt tối giản) → timeout slow-model 600s.
     {
       id: 'deepseek-ai/deepseek-v4.1-flash',
-      label: 'DeepSeek v4.1 Flash (NVIDIA NIM — ⚡ nhanh ~2s/call; rescue tier của toàn chuỗi)',
+      label: 'DeepSeek v4.1 Flash (NVIDIA NIM — reasoning chậm ~2 phút/call)',
       caps: { coding: true, reasoning: true, agentic: true },
     },
-    // R17 (2026-10-15) — deepseek-v4.1-flash treo hoàn toàn 15/10 (probe
-    // 3/3 abort 30s — lỗi phía NVIDIA); nemotron-3-ultra-550b là lõi chat NIM
-    // duy nhất còn sống (200/2-3.5s + tool_calls chuẩn OpenAI format). Trước
-    // đây chỉ là lõi extraction — giờ nâng thành MODEL AGENT CHÍNH (17/17
-    // AgentProfile R17) + NIM rescue mặc định. deepseek-flash sống lại → đổi
-    // lại qua dropdown được.
+    // R17 từng là model agent chính; R25: NIM quá tải 503 liên tục từ
+    // 2026-10-17 — giữ làm lựa chọn (breaker fail-fast khi bệnh; từng là lõi
+    // extraction — R25 chuyển extraction sang glm-5.3-flash).
     {
       id: 'nvidia/nemotron-3-ultra-550b-a55b',
-      label: 'Nemotron-3 Ultra 550B (NVIDIA NIM — 🛡 R17 model chính; lõi NIM duy nhất còn sống 15/10)',
+      label: 'Nemotron-3 Ultra 550B (NVIDIA NIM — ⚠ thường quá tải 503; từng là model chính R17)',
       caps: { coding: true, reasoning: true, agentic: true },
     },
+    // kimi-k3 ĐÃ EOL 410 (2026-10-15T08:00Z — probe R25 "Gone") — GỠ. Agent
+    // cũ còn cấu hình kimi-k3 nhận lỗi rõ ràng kèm hướng dẫn (llm.ts EOL_NIM_MODELS).
     // Lõi embed KHÔNG phải LLM agent — giữ để hiển thị/đối chiếu (UI chat
     // dropdown lọc mục này ra).
     { id: 'nvidia/nemotron-3-embed-1b', label: 'nemotron-3-embed-1b (CHỈ lõi embed — không phải LLM agent)' },
@@ -204,7 +204,7 @@ export const PROVIDER_DATA = [
   },
   {
     key: 'nvidia',
-    label: 'NVIDIA NIM (kimi-k3 + deepseek-v4.1-flash + nemotron-550b + embed + extraction)',
+    label: 'NVIDIA NIM (GLM 5.3 Flash chính + GLM 5.3 + DeepSeek v4.1 Flash + Nemotron-550B + embed + extraction)',
     icon: '🎮',
     models: PROVIDER_MODELS.nvidia,
   },

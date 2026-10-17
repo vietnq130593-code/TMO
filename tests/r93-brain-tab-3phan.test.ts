@@ -371,18 +371,23 @@ describe('r93 · C source-scan wiring 3 SECTION — pin chống hồi quy cấu 
     expect(tabCode).not.toContain('DESKTOP_BREAKPOINT')
   })
 
-  test("brain-tab: 4 tab console ('train' | 'tuning' | 'log' | 'ref') — PIN UPDATE Task 26: BỎ tab 'observation' (Quan sát chuyển lên SECTION 1 selector) + tab 'ref' render BrainReference + 2 chuỗi chốt r92-E còn nguyên", () => {
-    // 4 giá trị tab — type state (Task 26 bỏ 'observation' theo chỉ thị user
-    // 2026-10-13; 18-c gốc chỉ 4 giá trị, Task 25 từng thêm 'observation')
-    expect(tabCode).toContain("'train' | 'tuning' | 'log' | 'ref'")
+  test("brain-tab: 5 tab console ('train' | 'tuning' | 'log' | 'ref' | 'evo') — PIN UPDATE Task 26 bỏ 'observation'; PIN UPDATE R25-c: thêm 'evo' (Tiến hoá — blueprint §5.1-4 lộ trình 4→5 tab, nút chỉ hiện khi cờ brain_evolve=on) + tab 'ref' render BrainReference + 2 chuỗi chốt r92-E còn nguyên", () => {
+    // 5 giá trị tab — type state (Task 26 bỏ 'observation' theo chỉ thị user
+    // 2026-10-13; R25-c 2026-10-18 thêm 'evo' — tab Tiến hoá — HyperNAS/EVO UI)
+    expect(tabCode).toContain("'train' | 'tuning' | 'log' | 'ref' | 'evo'")
     expect(tabCode).not.toContain("'train' | 'tuning' | 'log' | 'ref' | 'observation'")
-    // Entry tab 'ref' + nhãn hiển thị + nhánh render
+    // Entry tab 'ref' + nhãn hiển thị + nhánh render (R25-c đổi consoleTab
+    // → consoleTabActive: guard cờ tắt đưa 'evo' về 'train' — tab ẩn hoàn toàn)
     expect(tabCode).toContain("['ref', 'Hàm & công thức']")
-    expect(tabCode).toContain("consoleTab === 'ref'")
+    expect(tabCode).toContain("consoleTabActive === 'ref'")
     // Task 26: KHÔNG còn tab Quan sát trong SECTION 3 (chống hồi quy)
     expect(tabCode).not.toContain("['observation', 'Quan sát']")
-    expect(tabCode).not.toContain("consoleTab === 'observation'")
+    expect(tabCode).not.toContain("consoleTabActive === 'observation'")
     expect(tabCode).not.toContain('ObservationTabContent')
+    // R25-c: tab Tiến hoá — nút điều kiện cờ brain_evolve + EvolveTab render
+    expect(tabCode).toContain("['evo', 'Tiến hoá']")
+    expect(tabCode).toContain("consoleTabActive === 'evo'")
+    expect(tabCode).toContain("import { EvolveTab } from '@/components/database/evolve-tab'")
     // BrainReference — bảng tham chiếu (18-c NEW FILE) import + render
     expect(tabCode).toContain("import { BrainReference } from '@/components/smolab/brain-reference'")
     expect(tabCode).toContain('<BrainReference />')

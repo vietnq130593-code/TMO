@@ -2291,13 +2291,16 @@ export function CodeTabContent() {
     { label: 'Optimize', icon: Zap, prompt: 'Optimize this code for better performance' },
   ]
 
-  // Model options (user directive 2026-11-30): space-bunny-free (Zen — lõi
-  // chính) + kimi-k3 (NVIDIA NIM — lựa chọn tạm thời, chọn là chạy thật
-  // kimi-k3; NIM 429 kéo dài → tự fallback space-bunny-free phía server).
-  // minimax-m3 + dòng deepseek đã EOL 410 — loại bỏ toàn bộ.
+  // Model options (R25 2026-10-18): space-bunny-free (Zen — lõi chính) + 4
+  // model NIM (glm-5.3-flash chính + glm-5.3 + ds-v4.1-flash + nemotron-550b
+  // — chọn là chạy đúng model đó qua NIM, R19 không fallback).
+  // kimi-k3 EOL 410 (2026-10-15) — đã gỡ.
   const MODEL_OPTIONS = [
     { value: 'space-bunny-free', label: 'space-bunny-free (Zen — lõi chính)' },
-    { value: 'moonshotai/kimi-k3', label: 'Kimi K3 (NVIDIA NIM — tạm thời)' },
+    { value: 'z-ai/glm-5.3-flash', label: 'GLM 5.3 Flash (NVIDIA NIM — ⚡ nhanh)' },
+    { value: 'z-ai/glm-5.3', label: 'GLM 5.3 (NVIDIA NIM — rất chậm/504)' },
+    { value: 'deepseek-ai/deepseek-v4.1-flash', label: 'DeepSeek v4.1 Flash (NVIDIA NIM — chậm)' },
+    { value: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'Nemotron-550B (NVIDIA NIM — ⚠ 503)' },
   ]
 
   return (

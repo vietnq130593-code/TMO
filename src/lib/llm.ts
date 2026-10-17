@@ -1,29 +1,40 @@
 /**
  * Shared LLM Calling Module for GraphRAG
  *
- * ⚠ MODEL MATRIX (USER DIRECTIVE 2026-11-30 — thay thế toàn bộ chính sách cũ):
- *   NVIDIA NIM dễ 429 kéo dài với tác vụ phức tạp/dài hạn → NIM CHỈ giữ 2 vai trò:
+ * ⚠ MODEL MATRIX (CẬP NHẬT R25 2026-10-18 — probe trực tiếp NIM /v1/models):
+ *   NVIDIA NIM giữ 3 vai trò:
  *     1. LÕI EMBED (src/lib/embeddings.ts — nvidia/nemotron-3-embed-1b)
- *     2. LÕI TRÍCH XUẤT (triết tách) — nvidia/nemotron-3-ultra-550b-a55b là lõi
- *        extraction CHÍNH (callLLMSlot: NIM nemotron-550b trước, fail toàn chuỗi
- *        key → fallback chuỗi Zen space-bunny-free cho pipeline không chết)
- *   - kimi-k3 (moonshotai/kimi-k3) GIỮ LẠI như 1 LỰA CHỌN model agent TẠM THỜI
- *     (dropdown Smolab/Agents chọn kimi-k3 → callLLMForAgent route THẬT qua NIM
- *     kimi-k3; NIM chết/429 kéo dài → tự fallback chuỗi Zen space-bunny-free)
- *   - ĐÃ LOẠI BỎ TOÀN BỘ (user directive 2026-11-30 "toàn bộ loại bỏ luôn" —
- *     xác nhận 410 EOL live-probe 2026-11-30):
- *     minimaxai/minimax-m3 (EOL 2026-09-09), deepseek-ai/deepseek-v4-pro-0813
- *     (EOL 2026-09-14), deepseek-ai/deepseek-v4-flash-0731 (EOL 2026-09-21),
- *     openai/gpt-oss-120b (EOL 2026-09-03 — lõi extraction fallback cũ).
+ *     2. LÕI TRÍCH XUẤT (triết tách) — z-ai/glm-5.3-flash LÕI CHÍNH MỚI
+ *        (probe R25: 200/~0,7s — nhanh; nemotron-3-ultra-550b cũ bị NIM
+ *        quá tải 503 liên tục nhiều ngày → hạ xuống lựa chọn, khôi phục qua
+ *        env EXTRACTION_MODEL=nvidia/nemotron-3-ultra-550b-a55b khi khỏe lại)
+ *     3. MODEL AGENT/CHAT — 4 lựa chọn dropdown: GLM 5.3 Flash (z-ai/glm-5.3-flash
+ *        — nhanh, chính) · DeepSeek v4.1 Flash (deepseek-ai/deepseek-v4.1-flash
+ *        — reasoning chậm ~135s/call tối giản) · GLM 5.3 (z-ai/glm-5.3 — siêu
+ *        model reasoning, rất chậm, timeout riêng 600s) · Nemotron-3-Ultra-550B
+ *        (nvidia/nemotron-3-ultra-550b-a55b — thường quá tải 503).
+ *   - moonshotai/kimi-k3 ĐÃ EOL 410 trên NIM (2026-10-15T08:00Z — probe R25
+ *     xác nhận "Gone") → GỠ khỏi mọi danh sách; agent cũ cấu hình kimi-k3
+ *     nhận lỗi rõ ràng kèm hướng dẫn chọn model khác.
+ *   - LÝ DO "BÁO LỖI LIÊN TỤC" (user report R25): (a) 14 AgentProfile đều
+ *     cấu hình nemotron-550b đang 503; (b) kimi-k3 còn nằm dropdown → 410;
+ *     (c) BUG CODE thật: NIM reasoning models (GLM 5.3/DS v4.1) trả
+ *     content=null + reasoning_content khi max_tokens cạn trong reasoning →
+ *     code cũ xếp 'empty_response' → trip breaker oan "model HANG". Cả 3
+ *     đã chữa trong đợt R25.
+ *   - ĐÃ LOẠI BỎ TRƯỚC ĐÓ (410 EOL): minimax-m3, deepseek v4.0 (pro/flash),
+ *     gpt-oss-120b, glm-5.2 (2026-08-21), kimi-k3 (2026-10-15).
  *   - Mọi lõi LLM khác (agents + chat + utility + judges fallback) route qua
  *     OPENCODE ZEN (HTTP → CLI → ZEN FAILOVER space-bunny-free → last-resort).
  *
- * Lịch sử đã hồi phục/EOL (giữ làm ghi chú): glm-5.2 (410 2026-08-21),
- *   glm-5.3 (không tồn tại), kimi-k2.6, glm-5.1, minimax-m2.7, qwen3.5-397b
+ * Lịch sử đã hồi phục/EOL (giữ làm ghi chú): glm-5.3 ("không tồn tại" lúc
+ *   2026-08 — NIM ĐĂNG KÝ LẠI 2026-10 với id z-ai/glm-5.3 + z-ai/glm-5.3-flash),
+ *   kimi-k2.6 (vẫn listed nhưng deprecated), glm-5.1, minimax-m2.7, qwen3.5-397b
  *
  * FAILOVER ORDER (MODEL TRƯỚC, KEY SAU — giữ từ 2026-09-06 cho các lõi NIM còn sống):
- *   extraction: NIM nemotron-550b xoay vòng 4 key × 3 lần → (fail toàn chuỗi) → chuỗi Zen
- *   agent chọn kimi-k3: NIM kimi-k3 xoay vòng 4 key × 3 lần → (fail toàn chuỗi) → chuỗi Zen
+ *   extraction: NIM glm-5.3-flash xoay 4 key (R19: 1 lượt/key, fail-fast)
+ *   agent chọn model NIM: xoay 4 key (R19: 1 lượt/key, model-level fail-fast,
+ *   KHÔNG fallback model khác — user tự chọn)
  *   Circuit breaker/model + timeout-strike giúp lõi NIM hang/429 fail NGAY (ms).
  *
  * Key assignment (AUTO mode, least-loaded-first):
@@ -34,10 +45,10 @@
  * Token tracking: NVIDIA NIM + OpenCode Zen (theo provider của call)
  *
  * (2026-09-27 TASK 33) Z-AI SDK provider gỡ bỏ toàn bộ + (2026-11-30 UPDATE:
- * NIM mở lại 2 NGOẠI LỆ theo user directive — lõi extraction nemotron-550b +
- * lựa chọn agent tạm thời kimi-k3; mô tả đầy đủ ở đầu file). Mọi lõi LLM khác
- * (agents + chat + utility + judges fallback) route qua OPENCODE ZEN
- * (HTTP → CLI → ZEN FAILOVER space-bunny → error, KHÔNG fallback NIM khác).
+ * NIM mở lại theo user directive; R25 2026-10-18 cập nhật matrix model theo
+ * catalog NIM sống thật). Mọi lõi LLM khác (agents + chat + utility + judges
+ * fallback) route qua OPENCODE ZEN (HTTP → CLI → ZEN FAILOVER space-bunny →
+ * error, KHÔNG fallback NIM khác).
  */
 
 // ==================== TOKEN EVENT EMITTER (SSE REALTIME) ====================
@@ -228,7 +239,7 @@ export interface LLMCallOptions {
    *  khi có tools) — MỌI caller khác không đặt cờ này nên không đổi hành vi.
    *  Caller kiểm soát bằng env TMO_GOAL_LOOP_NATIVE_TOOLS. */
   skipNativeTools?: boolean
-  /** Phase 4 SMOLAB Prop 11' — explicit model override (e.g. 'moonshotai/kimi-k3').
+  /** Phase 4 SMOLAB Prop 11' — explicit model override (vd R25: 'z-ai/glm-5.3-flash').
    *  When provided, callLLM() calls ONLY this NVIDIA NIM model (round-robin across
    *  all 4 keys) instead of the rotating chat pool. No rotation fallback — if the
    *  model fails, the error result is returned (callers decide how to fail-open).
@@ -319,18 +330,18 @@ const modelRotationCounters: Record<string, number> = {
  *
  *  NOTE: For EXTRACTION models, rotation is DISABLED (user Option C — 2026-08-21,
  *  reaffirmed as single-core directive 2026-08-25).
- *  nemotron-3-ultra-550b is the ONLY extraction core.
+ *  R25: glm-5.3-flash is the ONLY extraction core.
  */
 function getRotatedModels(provider: string, models: string[]): string[] {
-  // EXTRACTION models: no rotation — the single nemotron-550b core
+  // EXTRACTION models: no rotation — the single glm-5.3-flash core (R25)
   // Compare by reference — if it's the extraction list, skip rotation
   if (models === NVIDIA_EXTRACTION_MODELS) {
-    return models // Fixed order: [nemotron-550b] — lõi extraction duy nhất (2026-11-30)
+    return models // Fixed order: [glm-5.3-flash] — lõi extraction duy nhất (R25)
   }
-  // AGENT/CHAT models (2026-11-30: chỉ còn kimi-k3 — lựa chọn NIM tạm thời):
-  // no rotation — thứ tự cố định, không load-balance.
+  // AGENT/CHAT models (R25: glm-5.3-flash chính + ds-v4.1-flash + glm-5.3 +
+  // nemotron-550b): no rotation — thứ tự cố định, không load-balance.
   if (models === NVIDIA_AGENT_MODELS) {
-    return models // Always [kimi-k3] — lựa chọn agent NIM tạm thời (2026-11-30)
+    return models // Thứ tự cố định theo danh sách R25 — không xoay
   }
   // Legacy lists: rotate as before
   const offset = modelRotationCounters[provider] % models.length
@@ -339,97 +350,111 @@ function getRotatedModels(provider: string, models: string[]): string[] {
   return [...models.slice(offset), ...models.slice(0, offset)]
 }
 
-/** NVIDIA NIM EXTRACTION models (user directive 2026-11-30 — cập nhật từ 2026-09-05):
- *  CHÍNH SÁCH: trích xuất (triết tách) tài liệu dùng nemotron-3-ultra-550b làm
- *  LÕI CHÍNH DUY NHẤT — KHÔNG BAO GIỜ dùng kimi-k3 cho trích xuất tài liệu.
+/** NVIDIA NIM EXTRACTION models (R25 2026-10-18 — cập nhật từ probe trực tiếp):
+ *  CHÍNH SÁCH: trích xuất (triết tách) tài liệu dùng z-ai/glm-5.3-flash làm
+ *  LÕI CHÍNH (probe R25: HTTP 200 / ~0,7s — nhanh nhất trong catalog NIM
+ *  còn sống; 550B nemotron cũ bị NIM quá tải 503 liên tục từ 2026-10-17,
+ *  sóng 503/502 kéo dài nhiều ngày — nguồn lỗi extraction liên tục).
+ *  Khôi phục nemotron khi NIM khỏe lại: env EXTRACTION_MODEL=nvidia/nemotron-3-ultra-550b-a55b
  *  R19 (2026-10-15 — bỏ model fallback): lõi NIM fail → callLLMSlot trả lỗi,
  *  document sẽ retry sau (KHÔNG còn chuỗi fallback Zen cũ).
  *
- *  nvidia/nemotron-3-ultra-550b-a55b: 550B MoE (55B active) ✓ ALIVE —
- *    live-probe 2026-11-30 HTTP 200 (4/4 key OK từ matrix 2026-10-16).
+ *  nvidia/nemotron-3-ultra-550b-a55b: 550B MoE (55B active) — còn Listed
+ *    nhưng 503 "Service temporarily overloaded" liên tục (probe R25).
  *  openai/gpt-oss-120b (lõi fallback cũ) → ĐÃ LOẠI (HTTP 410 GONE — EOL
- *    2026-09-03, xác nhận live-probe 2026-11-30).
+ *    2026-09-03).
  *
  *  Đã bỏ cũ: llama-3.1-nemotron-ultra-253b-v1, nemotron-4-340b-instruct (404),
  *  meta/llama-3.3-70b-instruct (chất lượng kém hơn 550b), gpt-oss-120b (410).
  */
 const NVIDIA_EXTRACTION_MODELS = [
-  'nvidia/nemotron-3-ultra-550b-a55b',
+  'z-ai/glm-5.3-flash',
 ]
 
-/** NVIDIA NIM AGENT/CHAT models (user directive 2026-11-30 + user request
- *  2026-10-14):
- *  - kimi-k3 — giữ lại như 1 LỰA CHỌN model agent TẠM THỜI ("nếu kimi k3
- *    sống được thì giữ lại như 1 lựa chọn"). Chọn kimi-k3 → agent route THẬT
- *    qua NIM kimi-k3; NIM 429 kéo dài/hang → fallback chuỗi Zen SBF.
- *  - deepseek-ai/deepseek-v4.1-flash — THÊM 2026-10-14 theo user request
- *    "thêm deepseek-v4.1-flash vào danh sách lựa chọn". Lõi NIM sống nhanh
- *    (~2s/call — live-probe Task 28), từ trước là tier NIM RESCUE cuối chuỗi,
- *    giờ là lựa chọn dropdown chính thức (route NIM thật, fail → fallback Zen).
- *
- *  Live-probe 2026-11-30: kimi-k3 ALIVE nhưng CHẬM (~120s cho prompt tối giản
- *  — verified curl 200 sau 2p0s); deepseek-v4.1-flash ALIVE nhanh ~2s. Toàn
- *  bộ lõi khác ĐÃ LOẠI BỎ theo user directive ("toàn bộ loại bỏ luôn" — xác
- *  nhận 410 EOL live-probe 2026-11-30):
- *    minimaxai/minimax-m3 (EOL 2026-09-09) · deepseek-ai/deepseek-v4-pro-0813
- *    (EOL 2026-09-14) · deepseek-ai/deepseek-v4-flash-0731 (EOL 2026-09-21).
- *  (Lịch sử: minimax-m3 từng là lõi chính tạm thời 2026-10-16 — đã EOL.)
+/** NVIDIA NIM AGENT/CHAT models (R25 2026-10-18 — catalog NIM sống thật,
+ *  user report: "NIM không còn Kimi K3, ngoài DS v4.1 còn GLM 5.3 Flash và
+ *  GLM 5.3"):
+ *  - z-ai/glm-5.3-flash — LÕI AGENT NIM CHÍNH MỚI (probe R25: 200/~0,7s,
+ *  reasoning model — content về kèm reasoning_content).
+ *  - deepseek-ai/deepseek-v4.1-flash — giữ (user request 2026-10-14); R25
+ *    probe: sống nhưng reasoning chậm (~135s prompt tối giản) → timeout
+ *    slow-model 600s.
+ *  - z-ai/glm-5.3 — siêu model reasoning (user muốn có sẵn); R25 probe:
+ *    >150s prompt tối giản → timeout slow-model 600s.
+ *  - nvidia/nemotron-3-ultra-550b-a55b — giữ làm lựa chọn (R17 model chính
+ *    cũ); R25 probe: 503 quá tải liên tục — breaker sẽ fail-fast khi bệnh.
+ *  - moonshotai/kimi-k3 ĐÃ EOL 410 (2026-10-15T08:00Z) — GỠ KHỎI DANH SÁCH;
+ *    cấu hình cũ còn trỏ kimi-k3 nhận lỗi rõ ràng (EOL_NIM_MODELS dưới).
  */
 const NVIDIA_AGENT_MODELS = [
-  'moonshotai/kimi-k3',
+  'z-ai/glm-5.3-flash',
   'deepseek-ai/deepseek-v4.1-flash',
-  // R17: nemotron-550b — model agent NIM chính (deepseek-flash treo 15/10)
+  'z-ai/glm-5.3',
   'nvidia/nemotron-3-ultra-550b-a55b',
 ]
 
-/** Kimi K3 NIM id — lựa chọn model agent NIM tạm thời (user directive
- *  2026-11-30). Dùng bởi callLLMForAgent (route NIM thật) + UI/agents
- *  (validation + boot migration phải TÔN TRỌNG giá trị này, không normalize). */
-export const KIMI_K3_NIM_ID = 'moonshotai/kimi-k3'
+/** GLM 5.3 Flash NIM id — LÕI AGENT NIM CHÍNH MỚI (R25 2026-10-18) + lõi
+ *  extraction (NVIDIA_EXTRACTION_MODELS). Dùng bởi callLLMForAgent (route
+ *  NIM thật) + UI/agents (validation phải TÔN TRỌNG giá trị này). */
+export const GLM_53_FLASH_NIM_ID = 'z-ai/glm-5.3-flash'
+
+/** GLM 5.3 NIM id — siêu model reasoning (R25): lựa chọn dropdown; chậm
+ *  (>150s prompt tối giản) → timeout slow-model 600s (NIM_SLOW_MODEL_TIMEOUT_MS). */
+export const GLM_53_NIM_ID = 'z-ai/glm-5.3'
 
 /** DeepSeek v4.1 Flash NIM id — lựa chọn dropdown chính thức (user request
- *  2026-10-14). Cùng pattern KIMI_K3_NIM_ID: chọn → callLLMForAgent route NIM
- *  thật; NIM chết → fallback chuỗi Zen. */
+ *  2026-10-14; giữ nguyên R25 — reasoning chậm → slow-model timeout). */
 export const DEEPSEEK_V41_FLASH_NIM_ID = 'deepseek-ai/deepseek-v4.1-flash'
 
-/** Nemotron-3-Ultra-550B NIM id — MODEL AGENT CHÍNH R17 (2026-10-15):
- *  live-probe R16 (14/10) deepseek-v4.1-flash còn 200/4.3s, nhưng 15/10 treo
- *  HOÀN TOÀN (3/3 lần abort 30s — lỗi phía NVIDIA, cùng tình trạng kimi-k3
- *  từ 14/10). Nemotron-550b là lõi chat NIM duy nhất còn sống: 200/2-3.5s,
- *  tool_calls chuẩn OpenAI format (probe read_file {"path":...} ✓). Trước
- *  đây là lõi extraction (NVIDIA_EXTRACTION_MODELS) — R17 nâng thành lựa chọn
- *  agent chính thức (R19: không còn vai trò NIM RESCUE — fallback đã dỡ). */
+/** Nemotron-3-Ultra-550B NIM id — lựa chọn agent (R17 từng là model chính;
+ *  R25: NIM quá tải 503 liên tục — giữ làm lựa chọn, breaker fail-fast).
+ *  Trước đây là lõi extraction — R25 chuyển extraction sang glm-5.3-flash. */
 export const NEMOTRON_550B_NIM_ID = 'nvidia/nemotron-3-ultra-550b-a55b'
 
+/** Model NIM đã EOL — cấu hình agent cũ còn trỏ các id này nhận lỗi rõ ràng
+ *  kèm hướng dẫn (thay vì message generic "model lạ"). Thêm entry khi NIM
+ *  decommission model tiếp theo. */
+const EOL_NIM_MODELS: Readonly<Record<string, string>> = {
+  'moonshotai/kimi-k3': 'Kimi K3 đã kết thúc vòng đời (EOL) trên NVIDIA NIM từ 2026-10-15 — chọn model khác (GLM 5.3 Flash / GLM 5.3 / DeepSeek v4.1 Flash / Nemotron-550B)',
+}
+
+/** Message lỗi cho model EOL — undefined nếu model còn sống. */
+export function eolNimModelMessage(model: string): string | undefined {
+  return EOL_NIM_MODELS[model]
+}
+
 /**
- * KIMI-K3 TIMEOUT RIÊNG (user directive 2026-12-01: "kimi-k3 là siêu model
- * nên chậm là bình thường, dù sao hệ thống được xây dựng để các agents vận
- * hành liên tục hàng tiếng đồng hồ... nên có chậm vài phút tôi chẳng quan
- * tâm").
+ * SLOW-NIM-MODEL TIMEOUT RIÊNG (khái quát hóa KIMI_K3_TIMEOUT_MS cũ — user
+ * directive 2026-12-01: "kimi-k3 là siêu model nên chậm là bình thường... có
+ * chậm vài phút tôi chẳng quan tâm" — áp dụng cho mọi siêu model reasoning).
  *
- * Live 2026-11-30 (task-85 E2E): kimi-k3 ~120s cho prompt tối giản, ~2-6 phút
- * cho agent cycle context lớn (42k token) — call chậm-hợp-lệ bị base timeout
- * 240s (LLM_TIMEOUT_MS) giết giữa chừng → đếm TIMEOUT-STRIKE → breaker trip
- * oan → ép fallback space-bunny-free dù model đang sống. Base timeout riêng
- * cho ĐÚNG KIMI_K3_NIM_ID: 600s (10 phút — dư dả cho 2-6 phút quan sát được;
- * env KIMI_K3_TIMEOUT_MS, floor 60s). Model NIM khác (nemotron-550b
- * extraction ~5s live) giữ LLM_TIMEOUT_MS. Áp dụng tập trung tại
- * callModelWithKeyRotation (mọi đường kimi-k3 — agent callLLMForAgent, judge
- * callLLM override — đều qua đây). Budget xoay key 15' (KEY_ROTATION_BUDGET_MS)
- * giữ nguyên: hang thật vẫn bị cắt trong 15' rồi fallback Zen.
+ * R25 probe (2026-10-18): deepseek-v4.1-flash ~135s + z-ai/glm-5.3 >150s cho
+ * prompt tối giản — call chậm-hợp-lệ bị base timeout 240s (LLM_TIMEOUT_MS)
+ * giết giữa chừng → đếm TIMEOUT-STRIKE → breaker trip oan → báo lỗi liên
+ * tục dù model đang sống. Base timeout riêng cho CÁC model chậm: 600s (10
+ * phút; env NIM_SLOW_MODEL_TIMEOUT_MS, floor 60s; tương thích ngược: env
+ * KIMI_K3_TIMEOUT_MS cũ vẫn được tôn trọng nếu set). Model NIM khác
+ * (glm-5.3-flash ~0,7s) giữ LLM_TIMEOUT_MS. Áp dụng tại
+ * callModelWithKeyRotation (mọi đường agent/judge/override đều qua đây).
+ * Budget xoay key 15' (KEY_ROTATION_BUDGET_MS) giữ nguyên: hang thật vẫn bị
+ * cắt trong 15'.
  */
-const KIMI_K3_TIMEOUT_MS = Math.max(
-  parseInt(process.env.KIMI_K3_TIMEOUT_MS || '600000', 10) || 600_000,
+const NIM_SLOW_MODEL_TIMEOUT_MS = Math.max(
+  parseInt(process.env.NIM_SLOW_MODEL_TIMEOUT_MS || process.env.KIMI_K3_TIMEOUT_MS || '600000', 10) || 600_000,
   60_000,
 )
 
+/** Tập model NIM chậm-hợp-lệ (reasoning model lớn) — dùng timeout 600s. */
+function isSlowNimModel(model: string): boolean {
+  return model === GLM_53_NIM_ID || model === DEEPSEEK_V41_FLASH_NIM_ID
+}
+
 /**
- * NVIDIA_MODELS (updated 2026-11-30 + 2026-10-14): = NVIDIA_AGENT_MODELS (2
- * lõi chat — kimi-k3 tạm thời + deepseek-v4.1-flash). nemotron-3-ultra-550b
- * KHÔNG thuộc danh sách này — lõi extraction duy nhất
- * (NVIDIA_EXTRACTION_MODELS).
- * Deprecated (404/410): kimi-k2.6, glm-5.1, minimax-m2.7, qwen3.5-397b,
- * minimax-m3 + dòng deepseek v4.0 (đã loại bỏ toàn bộ 2026-11-30).
+ * NVIDIA_MODELS (R25 2026-10-18): = NVIDIA_AGENT_MODELS (4 lõi chat —
+ * glm-5.3-flash chính + ds-v4.1-flash + glm-5.3 + nemotron-550b).
+ * Extraction tách riêng (NVIDIA_EXTRACTION_MODELS — glm-5.3-flash).
+ * Deprecated (404/410): kimi-k3 (2026-10-15), kimi-k2.6, glm-5.1,
+ * glm-5.2, minimax-m2.7/m3, qwen3.5-397b, dòng deepseek v4.0, gpt-oss-120b.
  */
 // Alias of NVIDIA_AGENT_MODELS — same chat core(s), same failover order.
 // (Kept as a separate export because getNvidiaModels() + the pool log line
@@ -1961,7 +1986,10 @@ if (!process.env.LLM_QUIET_INIT) {
   // dev.log strip ANSI ăn mất chuỗi "[m" (SGR reset rỗng) → "[moonshotai/..."
   // thành "oonshotai/..." (đã từng gây hiểu lầm cấu hình sai trong rà soát
   // 2026-09-04). Dùng ": model1 → model2" không bracket.
-  console.log(`[LLM] NVIDIA (user directive 2026-11-30): embed (embeddings.ts) + extraction nemotron-550b (callLLMSlot NIM-first, fallback Zen) + agent/chat ${NVIDIA_AGENT_MODELS.join(' / ')} (lựa chọn tạm thời — chọn kimi-k3 route NIM thật, fail → Zen space-bunny-free). ĐÃ LOẠI: minimax-m3 + dòng deepseek (410 EOL) + gpt-oss-120b (410 EOL)`)
+  // (R25: đọc env TRỰC TIẾP tại đây — EXTRACTION_MODEL_OVERRIDE khai báo
+  // sau log này ở module scope; top-level log phải theo thứ tự khai báo TDZ.)
+  const extractionCore = process.env.EXTRACTION_MODEL || NVIDIA_EXTRACTION_MODELS[0]
+  console.log(`[LLM] NVIDIA (R25 2026-10-18 — catalog NIM probe trực tiếp): embed (embeddings.ts) + extraction ${extractionCore} (callLLMSlot, override env EXTRACTION_MODEL) + agent/chat ${NVIDIA_AGENT_MODELS.join(' / ')} (glm-5.3-flash chính — chọn model route NIM thật, fail → báo lỗi R19 không fallback). ĐÃ EOL: kimi-k3 (410 — 2026-10-15) + minimax-m3 + deepseek v4.0 + gpt-oss-120b + glm-5.2`)
 }
 
 // ==================== NVIDIA KEY ROTATION (giữ từ KIMI K3 POLICY 2026-08-31) ====================
@@ -1969,25 +1997,25 @@ if (!process.env.LLM_QUIET_INIT) {
 // Agents, mọi tác vụ từ giờ sẽ sử dụng lõi Kimi k3, nếu gặp vấn đề thì chuyển
 // API key của NVIDIA NIM, xoay vòng mỗi key 3 đủ 3 lần thì mới dừng lại... tới
 // khi chuyển qua cả 4 key lại về key đầu tiên, đến khi mỗi key đều đủ 3 lần
-// thì mới dừng lại" — cơ chế xoay key áp cho kimi-k3 (agent) lẫn nemotron-550b
-// (extraction).
+// thì mới dừng lại" — cơ chế xoay key áp cho mọi lõi NIM (agent + extraction).
 //
-// USER DIRECTIVE 2026-11-30 (MODEL MATRIX MỚI — thay thế chuỗi fallback NIM):
-//   - NIM chỉ giữ: embed + nemotron-550b (extraction) + kimi-k3 (lựa chọn agent
-//     tạm thời). minimax-m3 + cả dòng deepseek ĐÃ LOẠI BỎ toàn bộ (410 EOL).
-//   - Không còn FALLBACK CHAIN NIM (kimi → ds → minimax): khi lõi NIM cạn chuỗi
-//     xoay key → fallback sang chuỗi Zen space-bunny-free.
+// USER DIRECTIVE 2026-11-30 + R25 2026-10-18 (MODEL MATRIX — catalog sống):
+//   - NIM giữ: embed + extraction (glm-5.3-flash — R25, override env
+//     EXTRACTION_MODEL) + 4 model agent (glm-5.3-flash chính / ds-v4.1-flash
+//     / glm-5.3 / nemotron-550b). kimi-k3 EOL 410 (2026-10-15) — ĐÃ GỠ.
+//   - Không có FALLBACK CHAIN NIM: lõi NIM cạn chuỗi xoay key (R19: 1 lượt/
+//     key, model-level fail-fast) → BÁO LỖI kèm nguyên nhân — user tự chọn.
 //
 // Chính sách xoay key:
-//   1. Lõi NIM được gọi (kimi-k3 khi agent chọn / nemotron-550b cho extraction)
+//   1. Lõi NIM được gọi (model agent user chọn / lõi extraction cấu hình)
 //      theo cấu hình — KHÔNG override mọi agent về 1 lõi.
 //   2. Khi 1 attempt gặp vấn đề (429 rate-limit, 5xx, 401/403, timeout, network...)
 //      → CHUYỂN NGAY sang key kế tiếp: key1→key2→key3→key4→key1→key2→...
-//   3. MỖI key được thử tối đa KEY_FAILURES_PER_KEY (3) lần trong 1 chuỗi xoay vòng.
-//      Chỉ khi MỌI key đều đã fail đủ 3 lần (4 key × 3 = 12 attempts) mới dừng.
-//   4. Extraction pipeline dùng lõi riêng (user directive 2026-09-05 + 2026-11-30):
-//      nemotron-3-ultra-550b qua callLLMSlot (NIM-first, fallback chuỗi Zen),
-//      TUYỆT ĐỐI không dùng kimi-k3; override bằng env EXTRACTION_MODEL.
+//   3. R19: mỗi key đúng 1 lượt trong 1 chuỗi; lỗi model-tầng lặp 2 lần liên
+//      tiếp → dừng NGAY (fail-fast). R25: reasoning hết max_tokens → retry
+//      cùng model 1 lần với max_tokens ×2 (length_exceeded).
+//   4. Extraction pipeline dùng lõi riêng (R25: glm-5.3-flash qua callLLMSlot;
+//      khôi phục nemotron-550b qua env EXTRACTION_MODEL khi NIM hết quá tải).
 
 /** Lõi model CHÍNH của AGENT STACK (mặc định ZEN — user directive Task 33
  *  2026-09-27: NIM bỏ hoàn toàn khỏi tác vụ agents).
@@ -2048,9 +2076,9 @@ const EXTRACTION_MODEL_OVERRIDE = process.env.EXTRACTION_MODEL || ''
  *  về 1 lõi NIM chung không còn tồn tại — agents dùng đúng model zen cấu hình
  *  riêng (DB AgentProfile), runtime chỉ còn đường Zen (HTTP → CLI → failover). */
 
-/** (2026-11-30) Chuỗi backup cores NIM deepseek/minimax đã EOL TOÀN BỘ — loại
- *  bỏ khỏi matrix. callAgentModelWithFallbackChain() giờ là legacy không-caller
- *  (chain zen bên trong); runtime thật = callLLMForAgent (Zen + nhánh kimi-k3 NIM). */
+/** (R25) kimi-k3 EOL 410 (2026-10-15) — đã gỡ khỏi matrix.
+ *  callAgentModelWithFallbackChain() là legacy không-caller (chain zen bên
+ *  trong); runtime thật = callLLMForAgent (Zen + nhánh NIM theo NVIDIA_AGENT_MODELS). */
 
 /**
  * [LEGACY — KHÔNG còn caller từ Task 33 (giữ làm tư liệu]: gọi lõi agent theo
@@ -2123,6 +2151,7 @@ type NvidiaAttemptStatus =
   | 'timeout'          // hết timeoutMs
   | 'network_error'    // fetch throw khác
   | 'empty_response'   // 200 nhưng không có content lẫn tool_calls
+  | 'length_exceeded'  // R25: reasoning model hết max_tokens trong reasoning (content=null + finish='length' + reasoning_content) — retry cùng model với max_tokens ×2
 
 /**
  * SURROGATE SANITIZE (fix NIM 400-block 2026-09-30) — loại lone surrogate
@@ -2240,10 +2269,17 @@ async function attemptNvidiaOnce(params: {
     }
 
     if (response.ok) {
+      // R25 FIX (reasoning models — GLM 5.3 / DS v4.1): NIM trả message
+      // content: null kèm reasoning_content khi model tiêu hết max_tokens
+      // trong bước suy luận (finish_reason 'length'). Code cũ type content
+      // là string → null falsy → xếp 'empty_response' → 2 lần liên tiếp →
+      // dừng chuỗi kèm thông điệp sai "model treo/chết phía NVIDIA" → trip
+      // breaker oan — nguồn "báo lỗi liên tục" user report R25.
       const data = await response.json() as {
         choices: Array<{
           message: {
-            content: string
+            content: string | null
+            reasoning_content?: string | null
             tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>
           }
           finish_reason?: string | null
@@ -2252,9 +2288,23 @@ async function attemptNvidiaOnce(params: {
       }
       const choice = data.choices?.[0]
       const content = choice?.message?.content
+      const reasoning = choice?.message?.reasoning_content
       const nativeToolCalls = choice?.message?.tool_calls
       const finishReason = choice?.finish_reason ?? null
       const totalTokens = data.usage?.total_tokens ?? ((data.usage?.prompt_tokens ?? 0) + (data.usage?.completion_tokens ?? 0))
+
+      // R25: content=null + finish='length' + có reasoning → reasoning hết
+      // budget — KHÔNG phải empty-response của model chết. Caller thấy status
+      // 'length_exceeded' sẽ retry CÙNG model 1 lần với max_tokens ×2
+      // (cơ chế same-model retry — không phải model fallback R19).
+      if (!content && !(nativeToolCalls && nativeToolCalls.length > 0)
+        && finishReason === 'length' && reasoning) {
+        return {
+          status: 'length_exceeded',
+          httpStatus: 200,
+          errorMessage: `model reasoning hết max_tokens=${maxTokens} (reasoning ${(reasoning.length / 1000).toFixed(1)}K chars, chưa kịp viết câu trả lời) — cần max_tokens lớn hơn`,
+        }
+      }
 
       if (content || (nativeToolCalls && nativeToolCalls.length > 0)) {
         // Token tracking — giống tryProviderWithSlotKey (per-slot + per-agent)
@@ -2602,37 +2652,39 @@ export function getModelBlockBreakers(): Array<{ model: string; blockedUntil: nu
 // Fail-open tuyệt đối; timer unref'd (không giữ process); globalThis guard
 // chống double-register khi Next dev HMR reload.
 
-// TASK 33 (2026-09-27): default OFF. 2026-11-30 UPDATE: NIM mở lại 2 vai trò
-// (extraction nemotron-550b + agent kimi-k3 tạm thời) → prober giờ probe ĐÚNG
-// các lõi NIM đang dùng (probeTargets bên dưới). Bật bằng LLM_MODEL_PROBER=true
-// để trip breaker nền cho lõi hang thật (0-byte). Lưu ý 2026-12-01: kimi-k3
-// chậm ~120s/call là trạng thái BÌNH THƯỜNG (siêu model — user directive
+// TASK 33 (2026-09-27): default OFF. 2026-11-30 UPDATE: NIM mở lại vai trò
+// agent; R25 UPDATE: prober probe ĐÚNG các lõi NIM đang dùng (probeTargets
+// bên dưới — glm-5.3-flash + extraction). Bật bằng LLM_MODEL_PROBER=true
+// để trip breaker nền cho lõi hang thật (0-byte). Lưu ý: siêu model reasoning
+// chậm-hợp-lệ (glm-5.3/ds-v4.1 ~135-150s+ cho prompt tối giản — user directive
 // "chậm là bình thường... có chậm vài phút tôi chẳng quan tâm"), KHÔNG phải
-// hang → probe kimi-k3 dùng floor 300s (probeTimeoutFor) để không trip oan.
+// hang → slow models probe floor 300s (probeTimeoutFor) để không trip oan.
 const PROBER_ENABLED = (process.env.LLM_MODEL_PROBER ?? '0').trim().toLowerCase() === 'true'
 const PROBE_INTERVAL_MS = Math.max(60_000, parseInt(process.env.LLM_PROBE_INTERVAL_MS || '300000', 10) || 300_000)
 const PROBE_TIMEOUT_MS = Math.max(10_000, parseInt(process.env.LLM_PROBE_TIMEOUT_MS || '90000', 10) || 90_000)
 const PROBER_BOOT_DELAY_MS = Math.max(0, parseInt(process.env.LLM_PROBER_BOOT_DELAY_MS || '30000', 10) || 30_000)
 
-/** Các lõi NIM được probe (2026-11-30): kimi-k3 (lựa chọn agent tạm thời) +
- *  nemotron-550b (extraction). Các lõi zen trong AGENT_FALLBACK_CHAIN không
- *  probe được qua NIM pool — bỏ khỏi danh sách (chúng có block-cache riêng). */
+/** Các lõi NIM được probe (R25): glm-5.3-flash (lõi agent chính + extraction)
+ *  + glm-5.3 (siêu model chậm — dùng probe floor riêng). Các lõi zen trong
+ *  AGENT_FALLBACK_CHAIN không probe được qua NIM pool — bỏ khỏi danh sách
+ *  (chúng có block-cache riêng). */
 function probeTargets(): string[] {
   const targets = [
-    KIMI_K3_NIM_ID,
+    GLM_53_FLASH_NIM_ID,
     EXTRACTION_MODEL_OVERRIDE || NVIDIA_EXTRACTION_MODELS[0],
   ]
   return [...new Set(targets)]
 }
 
-/** Probe timeout theo model — kimi-k3 chậm-hợp-lệ ~120s/call (live
- *  2026-11-30; directive 2026-12-01 "chậm là bình thường") nên probe 90s
- *  mặc định sẽ trip breaker oan model đang sống. Floor riêng 300s cho đúng
- *  KIMI_K3_NIM_ID (env KIMI_K3_PROBE_TIMEOUT_MS); model khác giữ
- *  PROBE_TIMEOUT_MS (nemotron-550b ~5s live — 90s dư dả). */
+/** Probe timeout theo model — các siêu model reasoning chậm-hợp-lệ (R25:
+ *  glm-5.3 >150s, ds-v4.1-flash ~135s cho prompt tối giản; directive
+ *  2026-12-01 "chậm là bình thường") nên probe 90s mặc định sẽ trip breaker
+ *  oan model đang sống. Floor riêng 300s cho slow models (env
+ *  NIM_SLOW_PROBE_TIMEOUT_MS; tương thích KIMI_K3_PROBE_TIMEOUT_MS cũ);
+ *  model khác giữ PROBE_TIMEOUT_MS (glm-5.3-flash ~0,7s live — 90s dư dả). */
 function probeTimeoutFor(model: string): number {
-  return model === KIMI_K3_NIM_ID
-    ? Math.max(PROBE_TIMEOUT_MS, parseInt(process.env.KIMI_K3_PROBE_TIMEOUT_MS || '300000', 10) || 300_000)
+  return isSlowNimModel(model)
+    ? Math.max(PROBE_TIMEOUT_MS, parseInt(process.env.NIM_SLOW_PROBE_TIMEOUT_MS || process.env.KIMI_K3_PROBE_TIMEOUT_MS || '300000', 10) || 300_000)
     : PROBE_TIMEOUT_MS
 }
 
@@ -2780,19 +2832,20 @@ async function callModelWithKeyRotation(
   // max_tokens (dùng giới hạn output mặc định của model); timeout scale đã
   // xử lý <= 0 an toàn (trả baseMs).
   const rawMaxTokens = rotationOpts?.maxTokens ?? options?.maxTokens ?? 4096
-  const maxTokens = rawMaxTokens > 0 ? rawMaxTokens : 0
+  let maxTokens = rawMaxTokens > 0 ? rawMaxTokens : 0
   // FIX (R2-a #2): timeout co giãn theo maxTokens — chống breaker đánh sập
   // model healthy khi sinh output dài hợp lệ.
-  // USER DIRECTIVE 2026-12-01: kimi-k3 chậm-hợp-lệ (2-6 phút/call) là bình
-  // thường — base timeout riêng 600s cho đúng KIMI_K3_NIM_ID thay vì 240s
-  // chung (đ anti trip-breaker oan; xem KIMI_K3_TIMEOUT_MS phía trên).
-  const timeoutMs = scaleTimeoutByMaxTokens(
-    rotationOpts?.timeoutMs
-      ?? (model === KIMI_K3_NIM_ID
-        ? KIMI_K3_TIMEOUT_MS
-        : parseInt(process.env.LLM_TIMEOUT_MS || '240000', 10)),
-    maxTokens,
-  )
+  // USER DIRECTIVE 2026-12-01 (khái quát hóa R25): siêu model reasoning chậm-
+  // hợp-lệ (R25: glm-5.3 >150s, ds-v4.1-flash ~135s prompt tối giản) là
+  // bình thường — base timeout riêng 600s cho slow models (isSlowNimModel)
+  // thay vì 240s chung (đ anti trip-breaker oan; xem NIM_SLOW_MODEL_TIMEOUT_MS
+  // phía trên).
+  const baseTimeoutMs = rotationOpts?.timeoutMs
+    ?? (isSlowNimModel(model)
+      ? NIM_SLOW_MODEL_TIMEOUT_MS
+      : parseInt(process.env.LLM_TIMEOUT_MS || '240000', 10))
+  // R25: let — recompute khi length_exceeded retry nhân đôi max_tokens
+  let timeoutMs = scaleTimeoutByMaxTokens(baseTimeoutMs, maxTokens)
   const temperature = rotationOpts?.temperature ?? options?.temperature ?? 0.1
 
   // R19 (2026-10-15 user directive — "bỏ model fallback, model lỗi thì báo
@@ -2813,6 +2866,10 @@ async function callModelWithKeyRotation(
   const deadKeys = new Set<number>()   // daily-quota / auth-dead trong chuỗi này
   const startedAt = Date.now()
   let attemptNo = 0
+  // R25: reasoning model hết max_tokens → retry CÙNG model 1 lần với budget
+  // ×2 (cơ chế same-model retry — không phải model fallback R19; precedent
+  // "Retry transient 1 lần + effort-ladder (CÙNG model)").
+  let lengthRetryDone = false
 
   console.log(`[LLM] 🔄 ${model} (${taskLabel}): xoay vòng 1 lượt × ${validIndices.length} key = tối đa ${maxAttempts} attempts (R19 fail-fast)`)
 
@@ -2859,6 +2916,33 @@ async function callModelWithKeyRotation(
       })
       // TASK 22 — model timeout health (fast-fail khi model HANG)
       noteModelAttempt(model, attempt.status)
+
+      // ===== R25 — REASONING HẾT max_tokens (length_exceeded) =====
+      // Deterministic theo (model, prompt, max_tokens) — xoay key với CÙNG
+      // body cũng fail y hệt. Retry CÙNG model đúng 1 lần với max_tokens ×2
+      // (cap 32768 — same-model retry, KHÔNG phải model fallback R19); vẫn
+      // length sau retry → lỗi rõ ràng kèm hướng dẫn tăng max_tokens.
+      if (attempt.status === 'length_exceeded') {
+        if (lengthRetryDone || maxTokens >= 32768) {
+          console.warn(`[LLM] 🔄 ${model} ✗ key#${keyIdx + 1} → length_exceeded (max_tokens=${maxTokens}${lengthRetryDone ? ' — đã retry ×2' : ''}) — ${attempt.errorMessage?.slice(0, 140)}`)
+          return {
+            content: '',
+            provider: 'nvidia',
+            model,
+            error: `NIM "${model}": model reasoning tiêu hết max_tokens=${maxTokens} trước khi viết câu trả lời (kể cả sau khi nhân đôi budget) — tăng max_tokens cho call này hoặc chọn model khác`,
+          }
+        }
+        const nextMax = maxTokens > 0 ? Math.min(maxTokens * 2, 32768) : 8192
+        maxTokens = nextMax
+        lengthRetryDone = true
+        // Timeout co giãn theo budget mới (R2-a #2 — nhân đôi max_tokens cần
+        // thêm thời gian sinh output)
+        timeoutMs = scaleTimeoutByMaxTokens(baseTimeoutMs, maxTokens)
+        console.log(`[LLM] 🔄 ${model} (${taskLabel}): reasoning hết max_tokens → retry cùng model với max_tokens=${nextMax} (R25 same-model retry)`)
+        // KHÔNG mark fail cho key — lỗi không do key; vòng lặp chuyển key kế
+        // với budget mới (key hiện tại không bị cooldown oan)
+        continue
+      }
 
       if (attempt.status === 'success' && attempt.result) {
         pool.markSuccess(keyInfo.key, attempt.result.tokensUsed)
@@ -3568,13 +3652,16 @@ export async function callLLMSlot(
 ): Promise<LLMResult> {
   const taskLabel = task || 'general'
 
-  // ===== USER DIRECTIVE 2026-11-30 — EXTRACTION NIM-FIRST =====
-  // "Tôi chỉ sử dụng lõi embed từ Nvidia Nim và nemotron-3-ultra-550b cho công
-  // việc triết tách" — nemotron-3-ultra-550b là lõi extraction CHÍNH.
-  // kimi-k3 TUYỆT ĐỐI không dùng cho extraction (directive 2026-09-05 giữ nguyên).
+  // ===== EXTRACTION NIM-FIRST (directive 2026-11-30 + cập nhật R25 2026-10-18) =====
+  // Directive gốc: "Tôi chỉ sử dụng lõi embed từ Nvidia Nim và nemotron-3-
+  // ultra-550b cho công việc triết tách". R25: nemotron-550b bị NIM quá tải
+  // 503 liên tục nhiều ngày (sóng 503/502 từ 2026-10-17 — nguồn lỗi extraction
+  // liên tục) → lõi extraction MẶC ĐỊNH chuyển sang z-ai/glm-5.3-flash (probe
+  // R25: 200/~0,7s — nhanh và khỏe). Khôi phục nemotron đúng 1 dòng env:
+  // EXTRACTION_MODEL=nvidia/nemotron-3-ultra-550b-a55b (khi NIM hết quá tải).
   // slotIndex (document key assignment cũ) giữ làm startKeyIndex gợi ý xoay key.
   // R19 (2026-10-15 — user directive bỏ model fallback): extraction dùng ĐÚNG 1
-  // model (EXTRACTION_MODEL_OVERRIDE || nemotron-550b) — chuỗi fallback Zen cũ
+  // model (EXTRACTION_MODEL_OVERRIDE || glm-5.3-flash) — chuỗi fallback Zen cũ
   // (HTTP → CLI → ZEN FAILOVER) đã DỠ. Model fail → trả lỗi, document retry sau
   // (caller fail-open — không âm thầm đổi model).
   const nimExtractionModel = EXTRACTION_MODEL_OVERRIDE || NVIDIA_EXTRACTION_MODELS[0]
@@ -5962,8 +6049,9 @@ export async function callLLMForAgent(
   //   - Transport HTTP → CLI (CÙNG model — CLI native là đường dùng session
   //     OAuth của tài khoản OpenCode đã đăng nhập qua dropdown model).
 
-  // ===== NIM ROUTE — 3 model NIM được duyệt cho agent =====
-  if (model === KIMI_K3_NIM_ID || model === DEEPSEEK_V41_FLASH_NIM_ID || model === NEMOTRON_550B_NIM_ID) {
+  // ===== NIM ROUTE — các model NIM được duyệt cho agent (NVIDIA_AGENT_MODELS
+  // R25: glm-5.3-flash chính + ds-v4.1-flash + glm-5.3 + nemotron-550b) =====
+  if (NVIDIA_AGENT_MODELS.includes(model)) {
     const nimResult = await callModelWithKeyRotation(
       model,
       prompt,
@@ -5985,16 +6073,23 @@ export async function callLLMForAgent(
     }
   }
 
-  // Model dạng "org/name" ngoài 3 model NIM được duyệt → lỗi rõ ràng (trước
+  // Model dạng "org/name" ngoài danh sách NIM được duyệt → lỗi rõ ràng (trước
   // đây normalize ÂM THẦM về space-bunny-free — user không biết model thật
   // đang chạy là gì, sai với tinh thần "tự chọn model thủ công" R19).
+  // R25: model đã EOL (kimi-k3 410 2026-10-15) nhận thông điệp riêng kèm
+  // hướng dẫn — tránh message generic "model lạ" với agent cũ chưa đổi model.
   if (model.includes('/')) {
+    const eolMsg = eolNimModelMessage(model)
+    if (eolMsg) {
+      console.warn(`[LLM] Agent cấu hình model EOL "${provider}/${model}" — không tự fallback (R19) → báo lỗi kèm hướng dẫn`)
+      return { content: '', provider, model, error: eolMsg }
+    }
     console.warn(`[LLM] Agent cấu hình model lạ "${provider}/${model}" — không tự fallback (R19) → báo lỗi`)
     return {
       content: '',
       provider,
       model,
-      error: `Model "${model}" không nằm trong danh sách model NIM được hỗ trợ (${KIMI_K3_NIM_ID} · ${DEEPSEEK_V41_FLASH_NIM_ID} · ${NEMOTRON_550B_NIM_ID}). Không tự fallback (R19) — chọn model khác trong khung chat.`,
+      error: `Model "${model}" không nằm trong danh sách model NIM được hỗ trợ (${NVIDIA_AGENT_MODELS.join(' · ')}). Không tự fallback (R19) — chọn model khác trong khung chat.`,
     }
   }
 

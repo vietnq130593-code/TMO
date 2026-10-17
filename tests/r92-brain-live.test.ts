@@ -928,15 +928,18 @@ describe('r92 · F cờ UI mặc định BRAIN-LIVE — TUNING_SPECS chống h�
     expect(fx.default).toBe('on')
     expect(fx.envKey).toBe('UI_SYNAPSE_FX')
     // 2 cờ trình bày còn lại vẫn fail-open TẮT
-    expect(getTuningSpec('ui_brain_edit')!.default).toBe('off')
+    // PIN UPDATE (R25 2026-10-18 — user report editor biến mất sau DB reset):
+    // ui_brain_edit default 'off' → 'on' — user là người vận hành duy nhất,
+    // muốn thấy editor kiến trúc mặc định; cờ vẫn kill-switch qua STORE row.
+    expect(getTuningSpec('ui_brain_edit')!.default).toBe('on')
     expect(getTuningSpec('ui_hitech')!.default).toBe('off')
   })
 
-  test("getTuningEnum sau khi dọn store/env: ui_synapse_fx='on' · ui_brain_edit='off' · ui_hitech='off'", async () => {
+  test("getTuningEnum sau khi dọn store/env: ui_synapse_fx='on' · ui_brain_edit='on' · ui_hitech='off'", async () => {
     // Chuỗi hiệu lực STORE › ENV › DEFAULT — cả 2 tầng trên đã dọn ở
     // beforeAll → giá trị đọc được chính là DEFAULT của spec
     expect(getTuningEnum('ui_synapse_fx')).toBe('on') // BRAIN-LIVE 2026-10-12
-    expect(getTuningEnum('ui_brain_edit')).toBe('off')
+    expect(getTuningEnum('ui_brain_edit')).toBe('on') // R25 2026-10-18
     expect(getTuningEnum('ui_hitech')).toBe('off')
   })
 })

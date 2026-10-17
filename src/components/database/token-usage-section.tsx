@@ -16,16 +16,14 @@ import { toast } from '@/hooks/use-toast'
 import { HealthResponse, useTokenStream, TokenUsageData } from '@/components/app-shared'
 
 
-/** NVIDIA NIM model configuration (user directive 2026-11-30, cập nhật
- *  2026-10-13 theo request user "thêm Deepseek v4.1 flash vào ô Agent"):
- *  NIM chỉ giữ: embed (hiển thị ở section khác) + extraction nemotron-550b
- *  (chính — fallback qua chuỗi Zen space-bunny-free) + 2 lõi agent/chat:
- *  kimi-k3 (lựa chọn tạm thời, chậm ~2 phút/call) + deepseek-v4.1-flash
- *  (⚡ nhanh ~2s/call — live-probe Task 28; đồng thời là NIM rescue tier của
- *  toàn chuỗi Zen — token đo qua callModelWithKeyRotation xoay 4 key NIM).
- *  Dòng EOL 410 đã bỏ (live-probe 2026-11-30): minimax-m3, deepseek-v4-pro-
- *  0813, deepseek-v4-flash-0731 (bản v4.0 — KHÔNG phải v4.1-flash),
- *  gpt-oss-120b. */
+/** NVIDIA NIM model configuration (R25 2026-10-18 — probe NIM trực tiếp):
+ *  NIM giữ: embed (hiển thị ở section khác) + extraction glm-5.3-flash
+ *  (chính — R25 đổi từ nemotron-550b đang 503 quá tải liên tục) + 4 lõi
+ *  agent/chat: glm-5.3-flash (⚡ nhanh ~1s/call — model chính) +
+ *  glm-5.3 + deepseek-v4.1-flash (reasoning chậm) + nemotron-550b
+ *  (⚠ thường quá tải 503 — token đo qua callModelWithKeyRotation xoay 4 key
+ *  NIM). kimi-k3 EOL 410 (2026-10-15) — đã gỡ. Dòng EOL cũ đã bỏ: minimax-m3,
+ *  deepseek-v4-pro-0813, deepseek-v4-flash-0731 (bản v4.0), gpt-oss-120b. */
 export const NVIDIA_CORE_CONFIG = {
   extraction: {
     label: 'Trích xuất',
@@ -34,7 +32,8 @@ export const NVIDIA_CORE_CONFIG = {
     headerBg: 'bg-cyan-950/60',
     barColor: '#22d3ee',
     models: [
-      { key: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (chính)' },
+      { key: 'z-ai/glm-5.3-flash', label: 'glm-5.3-flash (chính — R25)' },
+      { key: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (cũ — 503 quá tải)' },
     ],
   },
   agent: {
@@ -44,8 +43,10 @@ export const NVIDIA_CORE_CONFIG = {
     headerBg: 'bg-amber-950/60',
     barColor: '#f59e0b',
     models: [
-      { key: 'moonshotai/kimi-k3', label: 'kimi-k3 (lựa chọn tạm thời — NVIDIA NIM)' },
-      { key: 'deepseek-ai/deepseek-v4.1-flash', label: 'deepseek-v4.1-flash (⚡ nhanh — NIM rescue)' },
+      { key: 'z-ai/glm-5.3-flash', label: 'glm-5.3-flash (⚡ nhanh — model chính R25)' },
+      { key: 'z-ai/glm-5.3', label: 'glm-5.3 (siêu model reasoning — chậm)' },
+      { key: 'deepseek-ai/deepseek-v4.1-flash', label: 'deepseek-v4.1-flash (reasoning chậm)' },
+      { key: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-550b (⚠ 503 quá tải)' },
     ],
   },
 } as const

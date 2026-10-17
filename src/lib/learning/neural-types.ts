@@ -466,16 +466,20 @@ export const TUNING_SPECS: readonly TuningSpec[] = [
   },
   {
     // BRAIN-UX §9.2 (UX-1) — cờ mở editor kiến trúc trong Brain Studio.
-    // Off = chỉ xem (read-only y hệt trước UX-1); on = editor lớp ẩn +
-    // lưu nháp BrainSpecDraft. Draft KHÔNG chạm runtime (§9.1-1).
+    // Off = chỉ xem (chuỗi lớp planned vẫn hiển thị đầy đủ — R25-a); on =
+    // editor lớp ẩn + lưu nháp BrainSpecDraft. Draft KHÔNG chạm runtime (§9.1-1).
+    // R25 (2026-10-18 — user report): default 'off' → 'on' — DB reset nhiều
+    // lần làm mất STORE row, editor biến mất sau reset dù user đã từng bật;
+    // user là người vận hành duy nhất và yêu cầu thấy editor mặc định. Cờ
+    // vẫn là kill-switch: STORE row 'off' (tab Tham số runtime) > default.
     key: 'ui_brain_edit',
     label: 'UI_BRAIN_EDIT',
     description:
-      'Bật/tắt editor kiến trúc não (Brain Studio UX-1): off = panel chỉ xem (an toàn — mặc định); on = chỉnh lớp ẩn/nơ-ron/activation + lưu bản nháp BrainSpecDraft + console train UX-2. Bản nháp KHÔNG bao giờ chạm bản active — đường lên runtime vẫn là train → thắng CV → thăng cấp.',
+      'Bật/tắt editor kiến trúc não (Brain Studio UX-1): off = chỉ xem chuỗi lớp planned (an toàn); on = chỉnh lớp ẩn/nơ-ron/activation + lưu bản nháp BrainSpecDraft + console train UX-2. Bản nháp KHÔNG bao giờ chạm bản active — đường lên runtime vẫn là train → thắng CV → thăng cấp.',
     nodeId: 'softmax-policy',
     type: 'enum',
     enumValues: ['off', 'on'],
-    default: 'off',
+    default: 'on',
     envKey: 'UI_BRAIN_EDIT',
     envMap: raw => {
       const v = raw.trim().toLowerCase()

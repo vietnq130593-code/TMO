@@ -83,6 +83,8 @@ import { TuningParamDialog, SOURCE_BADGE } from '@/components/smolab/tuning-para
 // BRAIN-TAB-3PHAN (18-c): tab "Hàm & công thức" — bảng tham chiếu trình
 // bày thuần (client-safe: ACTIVATION_MENU spec-schema + hằng optimizers).
 import { BrainReference } from '@/components/smolab/brain-reference'
+// R25-c (§5): tab console "Tiến hoá" — HyperNAS/EVO U1–U5 (cờ brain_evolve).
+import { EvolveTab } from '@/components/database/evolve-tab'
 // OBS-P3 (Task 25) → TASK 26: tab Quan sát chuyển LÊN SECTION 1 selector
 // "Chế độ quan sát" + PANEL dưới đài SECTION 2 (chỉ thị user 2026-10-13) —
 // 4 panel của observation-tab.tsx tự mount/unmount theo obsMode (poll dừng
@@ -261,8 +263,9 @@ export function BrainTabContent() {
   const [focusLayerSignal, setFocusLayerSignal] = useState<{ brain: BrainKey; layer: number; nonce: number } | null>(null)
   /// Tab đang mở của SECTION 3 (18-c mở rộng 'ref' — Hàm & công thức; Task 26
   /// BỎ 'observation' — Quan sát chuyển lên SECTION 1 selector + panel dưới
-  /// đài SECTION 2 theo chỉ thị user 2026-10-13)
-  const [consoleTab, setConsoleTab] = useState<'train' | 'tuning' | 'log' | 'ref'>('train')
+  /// đài SECTION 2 theo chỉ thị user 2026-10-13; R25-c §5 thêm 'evo' — Tiến
+  /// hoá, CHỈ render khi cờ brain_evolve on — xem evolveFlagOn dưới)
+  const [consoleTab, setConsoleTab] = useState<'train' | 'tuning' | 'log' | 'ref' | 'evo'>('train')
   /// Task 26 (chỉ thị user 2026-10-13): chế độ quan sát — chọn ở SECTION 1,
   /// hiển thị PANEL tương ứng NGAY DƯỚI đài SECTION 2 (useState đủ — không cần
   /// localStorage: chế độ mặc định "Hoạt động nơ-ron" hợp lý mỗi lần vào tab).
@@ -577,6 +580,38 @@ export function BrainTabContent() {
     }
   }, [draftsByBrain, brainData, trainBrain])
 
+  /// R25-c (§5.3 — 2 cấp áp dụng): EvolveTab "Áp dụng vào nháp / Áp dụng đề
+  /// xuất" — ghi hidden layers của ứng viên THUẦN MLP vào nháp não đang chọn
+  /// (dirty-guard confirm khi nháp đang có chỉnh chưa lưu — precedent HN §5.3).
+  /// KHÔNG đụng active — runtime chỉ lên qua train (A1/H7) như mọi chỉnh editor.
+  const applyEvoHiddenToDraft = useCallback((hidden: Array<{ units: number; activation: string }>) => {
+    if (!BRAIN_TRAINABLE_KEYS.includes(selectedBrainKey)) {
+      toast.error('Não đích chưa vào search space', {
+        description: 'Brain-D chưa vào search space (D4 §8.4) — chọn não A/B/C ở phần 1.',
+      })
+      return
+    }
+    if (dirtyBrains.has(selectedBrainKey)
+      && !window.confirm('Nháp của não này đang có chỉnh chưa lưu — ghi đè kiến trúc ứng viên tiến hoá?')) {
+      return
+    }
+    const base = draftsByBrain[selectedBrainKey] ?? defaultDraftFor(selectedBrainKey)
+    const candidate: BrainDraftSpec = {
+      ...base,
+      hidden: hidden.map(h => ({ units: h.units, activation: h.activation as BrainDraftSpec['hidden'][number]['activation'] })),
+    }
+    const inputDim = brainData?.brains.find(b => b.key === selectedBrainKey)?.inputDim ?? null
+    const v = validateBrainDraft({ ...candidate, brain: selectedBrainKey }, inputDim)
+    if (!v.ok) {
+      toast.error('Ứng viên không hợp lệ với não này', { description: v.errors.join(' · ') })
+      return
+    }
+    onDraftChange(v.normalized)
+    toast.success('Đã ghi kiến trúc ứng viên vào nháp (đề xuất — bạn duyệt)', {
+      description: 'Nháp chưa lưu — bấm Lưu cấu hình ở phần 1 để train + áp dụng như mọi chỉnh editor (A1/H7).',
+    })
+  }, [selectedBrainKey, draftsByBrain, dirtyBrains, brainData, onDraftChange])
+
   // ==================== TUNING ACTIONS (copy panel cũ) ====================
 
   const [savingKeys, setSavingKeys] = useState<Set<string>>(new Set())
@@ -647,6 +682,14 @@ export function BrainTabContent() {
   // định ON theo 15-a, ui_brain_edit mặc định off)
   const uiBrainEditOn = tuningByKey.get('ui_brain_edit')?.effectiveValue === 'on'
   const uiSynapseFxOn = tuningByKey.get('ui_synapse_fx')?.effectiveValue === 'on'
+  // R25-c (§5.1-3): tab console 'Tiến hoá' CHỈ hiện khi cờ brain_evolve = on
+  // (tuning #35 — mặc định off; cách đọc y hệt ui_brain_edit phía trên)
+  const evolveFlagOn = tuningByKey.get('brain_evolve')?.effectiveValue === 'on'
+  /// R25-c §5.1-3: cờ tắt giữa chừng khi đang mở 'evo' → hiệu lực hiển thị rơi
+  /// về 'train' (nút 'Tiến hoá' không render → EvolveTab unmount → poll dừng).
+  /// Derived-value pattern — KHÔNG setState trong effect (tránh cascading render:
+  /// react-hooks/set-state-in-effect) — state consoleTab giữ nguyên, chỉ hiển thị.
+  const consoleTabActive = consoleTab === 'evo' && !evolveFlagOn ? 'train' : consoleTab
   // Trọng số composite reward hiệu lực (§9.3 nhóm C — LOG-ONLY): đọc từ
   // tuning state, NaN/Thiếu → fallback 1/3 (trùng default TUNING_SPECS)
   const rewardWeightsEffective = useMemo(() => {
@@ -687,31 +730,43 @@ export function BrainTabContent() {
   // ── UX-4: nội dung SECTION 3 (tab console — 18-c render INLINE ở MỌI
   // viewport; trước đây dùng ở 2 nơi desktop/mobile-sheet, giờ 1 nơi duy
   // nhất nên state tab không bao giờ bị remount mất). ──
+  /// Danh sách nút tab console — nút thứ 5 "Tiến hoá" (R25-c §5.1-4) CHỈ có
+  /// khi cờ brain_evolve on (tuning #35 — off = tab ẩn hoàn toàn, 4 nút baseline).
+  const consoleTabs: ReadonlyArray<readonly ['train' | 'tuning' | 'log' | 'ref' | 'evo', string]> = evolveFlagOn
+    ? ([
+      ['train', 'Training Console'],
+      ['tuning', 'Tham số runtime'],
+      ['log', 'Nhật ký tinh chỉnh'],
+      ['ref', 'Hàm & công thức'],
+      ['evo', 'Tiến hoá'],
+    ] as const)
+    : ([
+      ['train', 'Training Console'],
+      ['tuning', 'Tham số runtime'],
+      ['log', 'Nhật ký tinh chỉnh'],
+      ['ref', 'Hàm & công thức'],
+    ] as const)
   const consolePanel = (
     <div className="space-y-2.5" role="tabpanel" aria-label="Console não vận hành">
-      {/* Thanh tab 4 nút (Task 26: bỏ tab "Quan sát" — chuyển lên SECTION 1
+      {/* Thanh tab 4–5 nút (Task 26: bỏ tab "Quan sát" — chuyển lên SECTION 1
           selector "Chế độ quan sát" + panel dưới đài SECTION 2 theo chỉ thị
-          user 2026-10-13; style giống tablist console hiện có) */}
+          user 2026-10-13; style giống tablist console hiện có; R25-c thêm
+          nút thứ 5 "Tiến hoá" theo cờ brain_evolve) */}
       <div className="flex overflow-hidden rounded-md border border-stone-700/70" role="tablist" aria-label="Bảng điều khiển não">
-        {([
-          ['train', 'Training Console'],
-          ['tuning', 'Tham số runtime'],
-          ['log', 'Nhật ký tinh chỉnh'],
-          ['ref', 'Hàm & công thức'],
-        ] as const).map(([id, label]) => (
+        {consoleTabs.map(([id, label]) => (
           <button
             key={id}
             role="tab"
-            aria-selected={consoleTab === id}
+            aria-selected={consoleTabActive === id}
             onClick={() => setConsoleTab(id)}
-            className={`min-h-[44px] md:min-h-[32px] flex-1 px-2 text-[10px] ${consoleTab === id ? 'bg-amber-500/20 text-amber-300' : 'text-stone-400 hover:text-stone-200'}`}
+            className={`min-h-[44px] md:min-h-[32px] flex-1 px-2 text-[10px] ${consoleTabActive === id ? 'bg-amber-500/20 text-amber-300' : 'text-stone-400 hover:text-stone-200'}`}
           >
             {label}
           </button>
         ))}
       </div>
 
-      {consoleTab === 'train' && (
+      {consoleTabActive === 'train' && (
         // 18-c: TrainingConsole nguyên dạng full-width 1 cột (nhóm A grid
         // 2 cột bên trong + nhóm B/C dạng hàng — đủ rộng, KHÔNG bọc grid 3).
         <TrainingConsole
@@ -733,7 +788,7 @@ export function BrainTabContent() {
         />
       )}
 
-      {consoleTab === 'tuning' && (
+      {consoleTabActive === 'tuning' && (
         <div>
           <div className="mb-2 flex flex-wrap items-center gap-1.5">
             <Zap className="h-3 w-3 shrink-0 text-violet-400" />
@@ -817,7 +872,7 @@ export function BrainTabContent() {
         </div>
       )}
 
-      {consoleTab === 'log' && (
+      {consoleTabActive === 'log' && (
         <div>
           <div className="mb-2 flex flex-wrap items-center gap-2">
             <History className="h-3.5 w-3.5 text-teal-400" />
@@ -852,11 +907,31 @@ export function BrainTabContent() {
         </div>
       )}
 
-      {consoleTab === 'ref' && (
+      {consoleTabActive === 'ref' && (
         // BRAIN-TAB-3PHAN (18-c): bảng tham chiếu hàm kích hoạt / loss /
         // reward / lan truyền tiến-ngược + đạo hàm — trả lời câu hỏi user
         // "liệu đã có thông tin để lựa chọn… có đầy đủ chưa" (audit 18-KEHOACH).
         <BrainReference />
+      )}
+
+      {consoleTabActive === 'evo' && (
+        // R25-c (§5): tab "Tiến hoá" — HyperNAS/EVO U1–U5 (state machine E1–E4
+        // + bảng ứng viên + Pareto + kill-switch). Não đích = não đang chọn
+        // SECTION 1 (single-source state — không nhân bản); poll evolve sống
+        // chết theo mount/unmount của panel này (consoleActive prop) + remount
+        // theo key={brain} khi đổi não đích (reset sạch state + poll).
+        <EvolveTab
+          key={selectedBrainKey}
+          brain={selectedBrainKey}
+          onSelectBrainQuick={selectBrain}
+          tuningByKey={tuningByKey}
+          changeLog={feed?.changeLog ?? []}
+          onSetTuning={(k, v) => { void handleSet(k, v) }}
+          savingKeys={savingKeys}
+          onApplyToDraft={applyEvoHiddenToDraft}
+          editorOn={uiBrainEditOn}
+          consoleActive={consoleTabActive === 'evo'}
+        />
       )}
     </div>
   )
