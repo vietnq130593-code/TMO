@@ -708,7 +708,19 @@ export async function POST(request: NextRequest) {
             console.log(`[Chat] Query rewrite: "${lastUserContent.slice(0, 50)}" → "${effectiveQuery.slice(0, 50)}" (HyDE ${rewrite.cacheHit ? 'cache-hit' : `${rewrite.durationMs}ms`})`)
           }
         }
-        kbSearchResult = await searchUserKB(effectiveQuery, agentProfileId || undefined, { topK: 5, embeddingOverride: hydeEmbedding })
+        // BRAIN-D1 (task R20) — bọc ALS consult-context cho lượt KB pre-search
+        // của đường chat: KbConsultLog ghi {taskType:'chat', intent, sessionId,
+        // agentId}. LOG-ONLY fail-open — KHÔNG đổi kết quả searchUserKB.
+        const { runWithKbConsultContext } = await import('@/lib/kb-routing/consult-context')
+        kbSearchResult = await runWithKbConsultContext(
+          {
+            taskType: 'chat',
+            intent,
+            sessionId: sessionId || undefined,
+            agentId: agentProfileId || undefined,
+          },
+          () => searchUserKB(effectiveQuery, agentProfileId || undefined, { topK: 5, embeddingOverride: hydeEmbedding })
+        )
         console.log(`[OpenClaw Chat] KB pre-search: ${kbSearchResult.chunks.length} chunks, ${kbSearchResult.entities.length} entities, confidence=${kbSearchResult.confidence.toFixed(2)}`)
 
         // Build dynamic KB context from search results

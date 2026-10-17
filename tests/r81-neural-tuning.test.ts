@@ -55,8 +55,10 @@ describe('r81 · TUNING_SPECS integrity', () => {
     // cảnh báo chủ động — node hist-feedback).
     // PIN UPDATE (R4-ĐIỀU TRA lượt 4): 30 → 31 — thêm cờ auto_eval_kb (xưởng
     // nhãn Brain-A tự động — node hist-feedback).
-    expect(keys.length).toBe(31)
-    expect(new Set(keys).size).toBe(31)
+    // PIN UPDATE (R20 BRAIN-D1 2026-10-17): 31 → 32 — thêm cờ kb_consult_log
+    // (LOG-ONLY KbConsultLog — node kb-access MỚI).
+    expect(keys.length).toBe(32)
+    expect(new Set(keys).size).toBe(32)
     for (const k of keys) expect(getTuningSpec(k)?.key).toBe(k)
     expect(getTuningSpec('khong-ton-tai')).toBeUndefined()
   })
@@ -105,7 +107,9 @@ describe('r81 · NEURAL_GRAPH integrity', () => {
   })
 
   test('23 node · layer trỏ có thật · hàm số khai báo file', () => {
-    expect(NEURAL_NODES.length).toBe(23)
+    // PIN UPDATE (R20 BRAIN-D1 2026-10-17): 23 → 24 — thêm node kb-access
+    // (KB Routing 4 nguồn — nhà của Brain-D tương lai).
+    expect(NEURAL_NODES.length).toBe(24)
     const layerIds = new Set(NEURAL_LAYERS.map(l => l.id))
     for (const n of NEURAL_NODES) {
       expect(layerIds.has(n.layer)).toBe(true)
@@ -114,7 +118,9 @@ describe('r81 · NEURAL_GRAPH integrity', () => {
   })
 
   test('37 cạnh · from/to trỏ node có thật · kind hợp lệ', () => {
-    expect(NEURAL_EDGES.length).toBe(37)
+    // PIN UPDATE (R20 BRAIN-D1 2026-10-17): 37 → 42 — thêm e38–e42 (chat/
+    // goal-loop → kb-access → qdrant/neo4j/sqlite dòng consult KB).
+    expect(NEURAL_EDGES.length).toBe(42)
     const nodeIds = new Set(NEURAL_NODES.map(n => n.id))
     const kinds = new Set(['data', 'reward', 'feedback', 'read'])
     for (const e of NEURAL_EDGES) {
@@ -279,7 +285,8 @@ describe('r81 · resolve STORE > ENV > DEFAULT', () => {
     // PIN UPDATE (Task 23 OBS-P1): 25 → 29 — 4 cờ quan sát V2 (node hist-feedback)
     // PIN UPDATE (Task 26-BE): 29 → 30 — cờ obs_alerts (GAP-2)
     // PIN UPDATE (R4-ĐIỀU TRA lượt 4): 30 → 31 — cờ auto_eval_kb (xưởng nhãn Brain-A)
-    expect(state.length).toBe(31)
+    // PIN UPDATE (R20 BRAIN-D1 2026-10-17): 31 → 32 — cờ kb_consult_log (LOG-ONLY)
+    expect(state.length).toBe(32)
     const iqr = state.find(s => s.key === 'anomaly_iqr_k')!
     expect(iqr.source).toBe('store')
     expect(iqr.storeValue).toBe('2.5')
@@ -448,13 +455,16 @@ describe('r81 · API /api/neural-architecture', () => {
     expect(res.status).toBe(200)
     const json = await res.json()
     expect(json.graph.layers.length).toBe(6)
-    expect(json.graph.nodes.length).toBe(23)
-    expect(json.graph.edges.length).toBe(37)
+    // PIN UPDATE (R20 BRAIN-D1 2026-10-17): node 23→24 + cạnh 37→42 + tuning
+    // 31→32 (kb-access node + e38–e42 + cờ kb_consult_log).
+    expect(json.graph.nodes.length).toBe(24)
+    expect(json.graph.edges.length).toBe(42)
     // PIN UPDATE (r88-r91 task, Task 11 worklog): 19 → 25 (BRAIN-UX §9 +6 key)
     // PIN UPDATE (Task 23 OBS-P1): 25 → 29 — 4 cờ quan sát V2
     // PIN UPDATE (Task 26-BE): 29 → 30 — cờ obs_alerts (GAP-2)
     // PIN UPDATE (R4-ĐIỀU TRA lượt 4): 30 → 31 — cờ auto_eval_kb (xưởng nhãn Brain-A)
-    expect(json.tuning.length).toBe(31)
+    // PIN UPDATE (R20 BRAIN-D1 2026-10-17): 31 → 32 — cờ kb_consult_log
+    expect(json.tuning.length).toBe(32)
     expect(typeof json.live).toBe('object')
     expect(json.live['q-table'][0].label).toBe('Q entries')
     expect(json.generatedAt).toBeTruthy()

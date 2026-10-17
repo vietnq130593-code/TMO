@@ -2425,7 +2425,33 @@ export interface ToolExecutionResult {
  *                 2026-08-27: Terminal phải thấy rõ agent đang chạy gì).
  * @returns Execution result with success status
  */
+/**
+ * BRAIN-D1 (BLUEPRINT-EVO-NAO §8.1 — task R20) — public executeTool bọc
+ * AsyncLocalStorage consult-context cho MỌI tool call: tool nào consult KB
+ * bên trong (knowledge_search/knowledge_graph qua knowledge-bridge, hoặc
+ * tool tương lai) → KbConsultLog ghi đúng ngữ cảnh {taskType: 'tool:<tên>',
+ * agentId, sessionId, runId}. LOG-ONLY — ALS rẻ (~ns), KHÔNG đổi hành vi
+ * tool; fail-open tuyệt đối (consult-context không bao giờ throw).
+ * Thân gốc chuyển thành executeToolImpl (giữ nguyên logic).
+ */
 export async function executeTool(
+  toolName: string,
+  args: Record<string, unknown>,
+  context?: Parameters<typeof executeToolImpl>[2]
+): Promise<ToolExecutionResult> {
+  const { runWithKbConsultContext } = await import('@/lib/kb-routing/consult-context')
+  return runWithKbConsultContext(
+    {
+      taskType: `tool:${toolName}`,
+      agentId: context?.agentName ?? undefined,
+      sessionId: context?.sessionId ?? undefined,
+      runId: (context?.delegationRunId || context?.runId) ?? undefined,
+    },
+    () => executeToolImpl(toolName, args, context)
+  )
+}
+
+async function executeToolImpl(
   toolName: string,
   args: Record<string, unknown>,
   context?: {

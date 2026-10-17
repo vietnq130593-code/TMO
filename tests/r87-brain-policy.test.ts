@@ -1001,7 +1001,9 @@ describe('r87 · H cờ P4 + kill-switch — TUNING_SPECS/NEURAL_NODES/route/reg
     // cảnh báo chủ động stall/token-burn/job-stale).
     // PIN UPDATE (R4-ĐIỀU TRA lượt 4): 30 → 31 — cờ auto_eval_kb (xưởng nhãn
     // Brain-A — node hist-feedback).
-    expect(TUNING_SPECS).toHaveLength(31)
+    // PIN UPDATE (R20 BRAIN-D1 2026-10-17): 31 → 32 — cờ kb_consult_log
+    // (LOG-ONLY KbConsultLog — node kb-access, ngoài nhóm 4 cờ P4 pin dưới).
+    expect(TUNING_SPECS).toHaveLength(32)
     const keys = TUNING_SPECS.map(s => s.key)
     for (const k of P4_FLAG_KEYS) expect(keys).toContain(k)
     for (const key of P4_FLAG_KEYS) {

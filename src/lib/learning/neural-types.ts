@@ -681,6 +681,30 @@ export const TUNING_SPECS: readonly TuningSpec[] = [
     },
     appliesTo: 'maybeRunAutoKbEval (src/lib/eval/auto-eval.ts) — gọi từ tick worker impact.ts',
   },
+  // BRAIN-D1 (BLUEPRINT-EVO-NAO-P1-P5 §8.1 — task R20, tái lập sau reset):
+  // cờ thứ 32 — LOG-ONLY mọi lượt KB consult (Step-1 retrieval) vào bảng
+  // KbConsultLog. Đây là "bộ não quan sát" của Brain-D "Tri Thức": dữ liệu
+  // này là ĐIỀU KIỆN thức tỉnh của D2 (baseline ≥100 log) + D3 (policy head
+  // ≥300 log có Outcome*). Default ON vì thuần observation — không đổi bất
+  // kỳ kết quả trả về nào của pipeline KB (fail-open tuyệt đối: lỗi ghi log
+  // không bao giờ làm hỏng truy xuất).
+  {
+    key: 'kb_consult_log',
+    label: 'KB_CONSULT_LOG',
+    description:
+      'BRAIN-D1 LOG-ONLY: on = mỗi lượt truy xuất KB (searchUserKB — đường chung của chat + agent tools + eval) ghi 1 row KbConsultLog {taskType, intent, cấu hình truy xuất, nguồn + số hit, top-K kết quả, confidence/raw, latency, runId→Outcome*}. Tắt để đo hiệu năng thuần hoặc dừng quan sát — pipeline KB KHÔNG đổi hành vi theo cờ này.',
+    nodeId: 'kb-access',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'on',
+    envKey: 'KB_CONSULT_LOG',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' || v === '1' || v === 'true' ? 'on' : v === 'off' || v === '0' || v === 'false' ? 'off' : undefined
+    },
+    warning: 'Tắt = mất dữ liệu quan sát cho Brain-D (D2/D3 phụ thuộc log tích lũy — ngưng ghi là ngưng tích lũy). Bật lại không khôi phục các lượt đã bỏ sót.',
+    appliesTo: 'logKbConsult (src/lib/kb-routing/consult-log.ts) — gọi từ searchUserKB (kb-access.ts); ngữ cảnh từ consult-context.ts ALS',
+  },
 ] as readonly TuningSpec[]
 
 /** Tra spec theo key (O(1) qua Map dựng sẵn). */
@@ -851,6 +875,25 @@ export const NEURAL_NODES: readonly NeuralNode[] = [
       { name: 'buildMidRunSimilarErrorBlock', file: 'src/lib/episodic-memory/preact.ts', line: 243 },
     ],
     paramKeys: ['episodic_epsilon'],
+  },
+  {
+    // BRAIN-D1 (task R20) — node truy xuất KB 4 nguồn (Layer 2 pipeline
+    // kb-routing). Nhà của Brain-D "Tri Thức" tương lai (D3 policy head —
+    // BLUEPRINT-EVO-NAO §8): hôm nay là điểm đo LOG-ONLY KbConsultLog.
+    id: 'kb-access',
+    layer: 'processing',
+    title: 'KB Routing — Truy xuất 4 nguồn',
+    subtitle: 'chunks · entities · memories · communities',
+    description:
+      'Đường chung của chat + agent tools + eval: searchUserKB chạy 4 nguồn song song (Qdrant chunks + Neo4j entities + AgentMemory + Leiden communities) qua pipeline dense over-fetch → hybrid BM25+RRF → MMR → cross-encoder rerank, kèm calibration confidence (Brain-A). BRAIN-D1 ghi KbConsultLog MỖI lượt (LOG-ONLY, cờ kb_consult_log) — dữ liệu thức tỉnh D2/D3.',
+    algorithm: 'confidence = calibrated(raw heuristic) — rawConfidence tách riêng chống feedback-loop',
+    algorithmNote: 'Fail-open từng nguồn: 1 nguồn chết → nguồn khác vẫn trả, log ghi kèm errors',
+    functions: [
+      { name: 'searchUserKB', file: 'src/lib/kb-routing/kb-access.ts' },
+      { name: 'logKbConsult (D1)', file: 'src/lib/kb-routing/consult-log.ts' },
+      { name: 'runWithKbConsultContext', file: 'src/lib/kb-routing/consult-context.ts' },
+    ],
+    paramKeys: ['kb_consult_log'],
   },
 
   // ── LỚP 3 · LƯU TRỮ ──
@@ -1108,6 +1151,13 @@ export const NEURAL_EDGES: readonly NeuralEdge[] = [
   { id: 'e35', from: 'hist-feedback', to: 'sqlite', label: 'AgentRunRecord', kind: 'read' },
   { id: 'e36', from: 'agent-response', to: 'hist-feedback', label: 'run outcome → Wilson', kind: 'read' },
   { id: 'e37', from: 'anomaly', to: 'sqlite', label: 'ToolMetric scan', kind: 'read' },
+  // BRAIN-D1 (task R20) — dòng consult KB: chat + goal-loop hỏi KB, KB đọc
+  // qdrant/neo4j, log quan sát ghi về sqlite
+  { id: 'e38', from: 'chat', to: 'kb-access', label: 'query → searchUserKB', kind: 'read' },
+  { id: 'e39', from: 'goal-loop', to: 'kb-access', label: 'knowledge_search tool', kind: 'read' },
+  { id: 'e40', from: 'kb-access', to: 'qdrant', label: 'chunks + communities (đọc)', kind: 'read' },
+  { id: 'e41', from: 'kb-access', to: 'neo4j', label: 'entities (đọc)', kind: 'read' },
+  { id: 'e42', from: 'kb-access', to: 'sqlite', label: 'KbConsultLog (LOG-ONLY)', kind: 'data' },
 ]
 
 export const NEURAL_GRAPH: NeuralGraph = {

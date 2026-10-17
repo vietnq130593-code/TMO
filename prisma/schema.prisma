@@ -2760,3 +2760,55 @@ model BrainSearchCandidate {
   @@index([runId, cvScore(sort: Desc)])
 }
 
+
+/// BRAIN-D1 (BLUEPRINT-EVO-NAO-P1-P5 §8.1 — task R20) — LOG-ONLY mọi lượt
+/// KB consult (Step 1 retrieval). KHÔNG chặn pipeline: ghi qua kb-routing/
+/// consult-log.ts fail-open (lỗi ghi log KHÔNG BAO GIỜ làm hỏng truy xuất);
+/// cờ `kb_consult_log` (tuning-store, STORE > ENV > DEFAULT='on').
+///
+/// Mục đích: TẠO DỮ LIỆU TRAIN cho Brain-D "Tri Thức" (D3 policy head) +
+/// baseline đối chứng D2 (≥100 log → D2; ≥300 log có Outcome* → D3).
+/// runId nối AgentRunRecord → Outcome* (tín hiệu reward tương lai).
+/// H5 additive: bảng mới thuần observation — không đụng bảng cũ.
+model KbConsultLog {
+  id        String   @id @default(uuid())
+  createdAt DateTime @default(now())
+
+  /// Ngữ cảnh người gọi (AsyncLocalStorage consult-context): 'chat' |
+  /// 'tool:knowledge_search' | 'code-team-workflow' | 'eval' | 'redteam'…
+  taskType  String?
+  /// Nhãn intent-classifier (casual/meta/procedural/factual) — nếu caller classify
+  intent    String?
+  /// Truy vấn text đã dùng cho hybrid BM25 (sau rewrite nếu có) — rút gọn 2KB
+  queryText String?
+
+  /// Cấu hình truy xuất HIỆU LỰC: {topK, minImportance, embeddingOverride,
+  /// hybrid, mmr, rerank, denseThreshold} (JSON ≤2KB)
+  retrievalConfigJson String
+  /// Nguồn + số hit từng nguồn: {chunks, entities, memories, communities,
+  /// errors:{...}} — nguồn lỗi/trống vẫn ghi (fail-open từng nguồn) (JSON ≤2KB)
+  sourcesJson String
+  /// Top-K rút gọn [{id, source, score, denseScore?}] (JSON ≤4KB truncate+
+  /// flag truncated:true — precedent AuditEvent overflow)
+  topResultsJson String
+
+  /// Confidence SAU calibration (Brain-A) + raw heuristic TÁCH RIÊNG —
+  /// đúng UserKBResult, tránh feedback-loop (Task 20-c)
+  confidence    Float?
+  rawConfidence Float?
+  /// Step 2 (model-knowledge) có chạy không — D1 v1 để NULL (chưa đo trên
+  /// mọi đường; suy dẫn được từ confidence < CONFIDENCE_THRESHOLD khi cần D2)
+  step2Used Boolean?
+
+  /// D1 v1: 0 — API embed/rerank chưa trả usage; bổ sung khi có nguồn đo
+  tokensUsed Int @default(0)
+  latencyMs  Int
+  /// → AgentRunRecord.id → Outcome* (D3 reward signal)
+  runId      String?
+  sessionId  String?
+  agentId    String?
+
+  @@index([createdAt])
+  @@index([runId])
+  @@index([taskType])
+}

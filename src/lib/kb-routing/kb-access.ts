@@ -34,6 +34,8 @@ import { mmrSelect } from '@/lib/kb-routing/mmr'
 import { hybridFuse } from '@/lib/kb-routing/hybrid'
 import { rerankTopK } from '@/lib/kb-routing/reranker'
 import { searchCommunities, ensureCommunitiesLazy, type CommunityInfo } from '@/lib/kb-routing/communities'
+import { logKbConsult } from '@/lib/kb-routing/consult-log'
+import { getKbConsultContext } from '@/lib/kb-routing/consult-context'
 
 // ==================== CONFIG ====================
 
@@ -275,6 +277,14 @@ export async function searchUserKB(
   const memories = memoriesResult.status === 'fulfilled' ? memoriesResult.value : []
   const communities = communitiesResult.status === 'fulfilled' ? communitiesResult.value : []
 
+  // BRAIN-D1 (task R20) — LOG-ONLY: nguồn nào hỏng vẫn ghi vào log (fail-open
+  // từng nguồn — D2 cần thấy cả lượt "1 nguồn chết" để học phân phối lỗi)
+  const consultSourceErrors: Record<string, string> = {}
+  if (chunksResult.status === 'rejected') consultSourceErrors.chunks = String(chunksResult.reason).slice(0, 200)
+  if (entitiesResult.status === 'rejected') consultSourceErrors.entities = String(entitiesResult.reason).slice(0, 200)
+  if (memoriesResult.status === 'rejected') consultSourceErrors.memories = String(memoriesResult.reason).slice(0, 200)
+  if (communitiesResult.status === 'rejected') consultSourceErrors.communities = String(communitiesResult.reason).slice(0, 200)
+
   // Phase 4 SMOLAB Prop 3.5 apply — calibrate the raw heuristic confidence with
   // the trained logistic-regression model (calibration-train.ts →
   // CalibrationModel row). Falls back to the raw value when no model is trained
@@ -287,6 +297,45 @@ export async function searchUserKB(
   const durationMs = Date.now() - startTime
   const calibratedNote = confidence !== rawConfidence ? ` (calibrated from raw: ${rawConfidence.toFixed(2)})` : ''
   console.log(`[KB-Access] Step 1 user KB: ${chunks.length} chunks, ${entities.length} entities, ${memories.length} memories, ${communities.length} communities, confidence=${confidence.toFixed(2)}${calibratedNote} (${durationMs}ms)`)
+
+  // BRAIN-D1 (BLUEPRINT-EVO-NAO §8.1 — task R20) — LOG-ONLY ghi KbConsultLog.
+  // Fire-and-forget: logKbConsult KHÔNG BAO GIỜ throw (fail-open tuyệt đối —
+  // lỗi DB/cờ off không chạm kết quả trả về); ngữ cảnh (taskType/intent/
+  // runId/sessionId) đến từ AsyncLocalStorage consult-context — caller bọc
+  // bằng runWithKbConsultContext, không bọc thì field ngữ cảnh null.
+  const consultCtx = getKbConsultContext()
+  void logKbConsult({
+    taskType: consultCtx.taskType,
+    intent: consultCtx.intent,
+    queryText: query,
+    retrievalConfig: {
+      topK,
+      minImportance,
+      embeddingOverride: Boolean(options.embeddingOverride && options.embeddingOverride.length > 0),
+      hybrid: isFlagEnabled('ENABLE_HYBRID_SEARCH'),
+      mmr: isFlagEnabled('ENABLE_MMR'),
+      rerank: isFlagEnabled('ENABLE_RERANKER'),
+    },
+    sources: {
+      chunks: chunks.length,
+      entities: entities.length,
+      memories: memories.length,
+      communities: communities.length,
+      ...(Object.keys(consultSourceErrors).length > 0 ? { errors: consultSourceErrors } : {}),
+    },
+    topResults: chunks.map(c => ({
+      id: c.id,
+      source: c.source ?? 'chunk',
+      score: Number(c.score.toFixed(4)),
+      ...(c.denseScore !== undefined ? { denseScore: Number(c.denseScore.toFixed(4)) } : {}),
+    })),
+    confidence,
+    rawConfidence,
+    latencyMs: durationMs,
+    runId: consultCtx.runId,
+    sessionId: consultCtx.sessionId,
+    agentId: consultCtx.agentId ?? agentId,
+  })
 
   return {
     chunks,

@@ -61,7 +61,19 @@ export async function runSmartKB(params: {
   }
 
   // === LAYER 2: 2-step KB access (factual only) ===
-  const kbAccess = await accessKnowledgeBase(message, agentId)
+  // BRAIN-D1 (task R20) — bọc ALS consult-context: intent đã classify ở
+  // LAYER 1 truyền xuống KbConsultLog (accessKnowledgeBase → searchUserKB
+  // đọc ngữ cảnh). LOG-ONLY fail-open — pipeline không đổi.
+  const { runWithKbConsultContext } = await import('@/lib/kb-routing/consult-context')
+  const kbAccess = await runWithKbConsultContext(
+    {
+      taskType: 'smart-kb',
+      intent: intent.intent,
+      sessionId: sessionId || undefined,
+      agentId: agentId || undefined,
+    },
+    () => accessKnowledgeBase(message, agentId)
+  )
 
   // === LAYER 3: Writeback (only if Step 2 was used) ===
   const writeback = await writebackToKB({
