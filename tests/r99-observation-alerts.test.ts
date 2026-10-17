@@ -366,7 +366,7 @@ describe('r99 · C — kinds obs.alert + cờ obs_alerts (TUNING_SPECS thứ 30)
   })
 
   test('C2 spec obs_alerts — default off, đủ trường, gắn node hist-feedback (soi obs_impact)', () => {
-    expect(TUNING_SPECS.length).toBe(32) // PIN UPDATE R4: 30 → 31 (cờ auto_eval_kb xưởng nhãn Brain-A) · PIN UPDATE R20 BRAIN-D1: 31 → 32 (cờ kb_consult_log LOG-ONLY)
+    expect(TUNING_SPECS.length).toBe(36) // PIN UPDATE R24-c EVO-P4: 34 → 36 (brain_evolve + brain_search_global) // PIN UPDATE R4: 30 → 31 (cờ auto_eval_kb xưởng nhãn Brain-A) · PIN UPDATE R20 BRAIN-D1: 31 → 32 (cờ kb_consult_log LOG-ONLY) · PIN UPDATE R24-b Brain-D ghost: 32 → 34 (2 cờ kill-switch runtime_knowledge/knowledge_organ_strategy)
     const spec = getTuningSpec('obs_alerts')
     expect(spec).toBeDefined()
     expect(spec!.type).toBe('enum')

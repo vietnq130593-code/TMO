@@ -1,0 +1,261 @@
+{
+  "before": {
+    "phase": "before",
+    "measuredAt": "2026-10-17T09:10:44.747Z",
+    "totalNodes": 96354,
+    "totalRelationships": 205809,
+    "labelCounts": {
+      "Concept": 53674,
+      "Document": 17148,
+      "Person": 9806,
+      "Technology": 6333,
+      "Framework": 2349,
+      "Principle": 2056,
+      "Domain": 2027,
+      "Action": 1683,
+      "Vulnerability": 831,
+      "ErrorOccurrence": 277,
+      "Episode": 97,
+      "Session": 37,
+      "Lesson": 32,
+      "TmoMeta": 1,
+      "Project": 1,
+      "Relationship": 1,
+      "Test": 1
+    },
+    "relsByType": {
+      "CONTAINS": 135546,
+      "APPLIES_TO": 9481,
+      "USES": 9181,
+      "CREATED_BY": 8403,
+      "PART_OF": 7661,
+      "ENABLES": 7270,
+      "DOCUMENTED_IN": 7246,
+      "DEPENDS_ON": 4494,
+      "CONTRASTS_WITH": 3820,
+      "RELATED_TO": 3348,
+      "IMPLEMENTED_IN": 1661,
+      "MITIGATES": 1477,
+      "INVOLVES": 1181,
+      "EXPLOITS": 1170,
+      "EXTENDS": 997,
+      "RUNS_ON": 934,
+      "ALTERNATIVE_TO": 844,
+      "ABOUT": 387,
+      "PRODUCED": 277,
+      "PART_OF_SESSION": 92,
+      "SIMILAR_TO": 71,
+      "TAUGHT": 64,
+      "RESOLVED_BY": 59,
+      "RELATED_LINKAGE": 49,
+      "YIELDED": 37,
+      "la_thanh_phan_cua": 19,
+      "anh_huong": 15,
+      "duoc_dinh_nghia_boi": 3,
+      "anh_huong_xap_xi": 2,
+      "duoc_dinh_danh_boi": 1,
+      "triet_tieu": 1,
+      "duoc_dam_bao_boi": 1,
+      "la_thanh_phan_cua_phan_ra": 1,
+      "anh_huong_giai_he_phuong_trinh": 1,
+      "anh_huong_dau_vao": 1,
+      "chua_dung_dang_xac_suat": 1,
+      "chua_dung_tao_luc_day": 1,
+      "chua_dung_bien_roi_rac": 1,
+      "dieu_phoi_khong_loi": 1,
+      "chua_dung_xap_xi": 1,
+      "chua_dung_quan_he_cau_truc": 1,
+      "la_thanh_phan_cua_xap_xi": 1,
+      "dieu_phoi_dung_lam_ham_khoang_cach_chinh": 1,
+      "dieu_phoi_lay_hv_lam_ham_muc_tieu": 1,
+      "doi_nghich_hvi_tu_duy_tri_da_dang_khong_can_luc_day_stein": 1,
+      "dieu_phoi_su_dung_ppo_de_cap_nhat_chinh_sach_tu_feedback": 1,
+      "anh_huong_xu_ly_thong_tin_cau_truc_do_thi": 1,
+      "bo_tro_slm_giup_on_dinh_viec_hoc_do_dai_nay": 1,
+      "dieu_phoi_truc_tiep_giam_so_luong_token": 1
+    },
+    "avgDegree": 4.57
+  },
+  "lastUpdatedAt": "2026-10-17T12:12:54.334Z",
+  "after": {
+    "phase": "after",
+    "measuredAt": "2026-10-17T12:12:54.334Z",
+    "totalNodes": 96762,
+    "totalRelationships": 206970,
+    "labelCounts": {
+      "Concept": 53942,
+      "Document": 17163,
+      "Person": 9808,
+      "Technology": 6354,
+      "Framework": 2386,
+      "Principle": 2079,
+      "Domain": 2066,
+      "Action": 1683,
+      "Vulnerability": 832,
+      "ErrorOccurrence": 277,
+      "Episode": 98,
+      "Session": 38,
+      "Lesson": 32,
+      "TmoMeta": 1,
+      "Project": 1,
+      "Relationship": 1,
+      "Test": 1
+    },
+    "relsByType": {
+      "CONTAINS": 136123,
+      "APPLIES_TO": 9638,
+      "USES": 9246,
+      "CREATED_BY": 8410,
+      "PART_OF": 7732,
+      "ENABLES": 7353,
+      "DOCUMENTED_IN": 7289,
+      "DEPENDS_ON": 4564,
+      "CONTRASTS_WITH": 3858,
+      "RELATED_TO": 3351,
+      "IMPLEMENTED_IN": 1664,
+      "MITIGATES": 1495,
+      "INVOLVES": 1192,
+      "EXPLOITS": 1172,
+      "EXTENDS": 1001,
+      "RUNS_ON": 934,
+      "ALTERNATIVE_TO": 850,
+      "ABOUT": 387,
+      "PRODUCED": 277,
+      "PART_OF_SESSION": 93,
+      "SIMILAR_TO": 73,
+      "TAUGHT": 64,
+      "RESOLVED_BY": 59,
+      "RELATED_LINKAGE": 49,
+      "YIELDED": 37,
+      "la_thanh_phan_cua": 19,
+      "anh_huong": 15,
+      "duoc_dinh_nghia_boi": 3,
+      "anh_huong_xap_xi": 2,
+      "duoc_dinh_danh_boi": 1,
+      "triet_tieu": 1,
+      "duoc_dam_bao_boi": 1,
+      "la_thanh_phan_cua_phan_ra": 1,
+      "anh_huong_giai_he_phuong_trinh": 1,
+      "anh_huong_dau_vao": 1,
+      "chua_dung_dang_xac_suat": 1,
+      "chua_dung_tao_luc_day": 1,
+      "chua_dung_bien_roi_rac": 1,
+      "dieu_phoi_khong_loi": 1,
+      "chua_dung_xap_xi": 1,
+      "chua_dung_quan_he_cau_truc": 1,
+      "la_thanh_phan_cua_xap_xi": 1,
+      "dieu_phoi_dung_lam_ham_khoang_cach_chinh": 1,
+      "dieu_phoi_lay_hv_lam_ham_muc_tieu": 1,
+      "doi_nghich_hvi_tu_duy_tri_da_dang_khong_can_luc_day_stein": 1,
+      "dieu_phoi_su_dung_ppo_de_cap_nhat_chinh_sach_tu_feedback": 1,
+      "anh_huong_xu_ly_thong_tin_cau_truc_do_thi": 1,
+      "bo_tro_slm_giup_on_dinh_viec_hoc_do_dai_nay": 1,
+      "dieu_phoi_truc_tiep_giam_so_luong_token": 1
+    },
+    "avgDegree": 4.57,
+    "documentId": "c46fdb42-4bc5-4cea-8822-635c3c8efb3e",
+    "doc": {
+      "title": "SHD_NAS_EVOLUTION_002.TXT",
+      "status": "indexed",
+      "pageCount": 17,
+      "domain": "ml",
+      "contentHash": "f3dd448fe842…"
+    },
+    "docContains": 522,
+    "docRelsByType": [
+      {
+        "relType": "APPLIES_TO",
+        "cnt": 157
+      },
+      {
+        "relType": "ENABLES",
+        "cnt": 84
+      },
+      {
+        "relType": "PART_OF",
+        "cnt": 72
+      },
+      {
+        "relType": "DEPENDS_ON",
+        "cnt": 70
+      },
+      {
+        "relType": "USES",
+        "cnt": 68
+      },
+      {
+        "relType": "DOCUMENTED_IN",
+        "cnt": 43
+      },
+      {
+        "relType": "CONTRASTS_WITH",
+        "cnt": 38
+      },
+      {
+        "relType": "MITIGATES",
+        "cnt": 18
+      },
+      {
+        "relType": "CREATED_BY",
+        "cnt": 7
+      },
+      {
+        "relType": "ALTERNATIVE_TO",
+        "cnt": 6
+      },
+      {
+        "relType": "EXTENDS",
+        "cnt": 4
+      },
+      {
+        "relType": "IMPLEMENTED_IN",
+        "cnt": 3
+      },
+      {
+        "relType": "RELATED_TO",
+        "cnt": 3
+      },
+      {
+        "relType": "EXPLOITS",
+        "cnt": 2
+      }
+    ],
+    "docRelsTotal": 575,
+    "mergeSplit": [
+      {
+        "isNew": false,
+        "cnt": 520,
+        "minCreatedAt": "2026-08-23T08:20:47.034Z",
+        "maxCreatedAt": "2026-10-17T11:48:58.768Z"
+      },
+      {
+        "isNew": true,
+        "cnt": 2,
+        "minCreatedAt": "2026-10-17T11:55:27.104Z",
+        "maxCreatedAt": "2026-10-17T11:55:27.104Z"
+      }
+    ],
+    "createdNewWindow": [
+      {
+        "cnt": 2,
+        "minCreatedAt": "2026-10-17T11:55:27.104Z",
+        "maxCreatedAt": "2026-10-17T11:55:27.104Z"
+      }
+    ],
+    "trialStartCutoff": "2026-10-17T10:00:24.236Z",
+    "mergeSplitByCreatedAt": [
+      {
+        "bucket": "newInTrial",
+        "cnt": 405
+      },
+      {
+        "bucket": "preExisting",
+        "cnt": 117
+      }
+    ],
+    "sqlite": {
+      "localEntityCount": 820,
+      "localRelationshipCount": 683
+    }
+  }
+}

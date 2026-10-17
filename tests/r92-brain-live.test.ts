@@ -736,8 +736,10 @@ describe('r92 · D buildStageLayout v3 — center-align + rowStep/radius thích 
   })
 
   test('biên cấu trúc: 0 cột → rỗng + height 100 + width 340; 1 cột → colX [34] (stepX 0, height 144); [256, 8] tất định', () => {
-    // 0 cột — trả shape v3 đủ 6 trường (width sàn 340, mảng rỗng)
-    expect(buildStageLayout([])).toEqual({ neurons: [], colX: [], height: 100, width: 340, rowStep: [], radius: [] })
+    // 0 cột — trả shape v3 đủ 7 trường (width sàn 340, mảng rỗng)
+    // PIN UPDATE R24-b (Brain-D ghost §8.5.2): buildStageLayout trả thêm
+    // headGroups (additive — 0 cột không nhóm → mảng rỗng).
+    expect(buildStageLayout([])).toEqual({ neurons: [], colX: [], height: 100, width: 340, rowStep: [], radius: [], headGroups: [] })
     const single = buildStageLayout([col(5)])
     expect(single.colX).toEqual([34]) // n=1 → stepX 0, không chia 0
     expect(single.neurons).toHaveLength(5)
@@ -915,7 +917,9 @@ describe('r92 · F cờ UI mặc định BRAIN-LIVE — TUNING_SPECS chống h�
     // PIN UPDATE (R4-ĐIỀU TRA lượt 4): 30 → 31 — cờ auto_eval_kb.
     // PIN UPDATE (R20 BRAIN-D1 2026-10-17): 31 → 32 — cờ kb_consult_log (LOG-ONLY
     // KbConsultLog — node kb-access; không đụng 3 cờ UI pin dưới).
-    expect(TUNING_SPECS.length).toBe(32)
+    // PIN UPDATE (R24-b Brain-D ghost 2026-10-17): 32 → 34 — 2 cờ kill-switch
+    // runtime_knowledge + knowledge_organ_strategy (node kb-access — không đụng 3 cờ UI pin dưới).
+    expect(TUNING_SPECS.length).toBe(36) // PIN UPDATE R24-c EVO-P4: 34 → 36
     // ui_synapse_fx — default 'on' (chỉ thị user 2026-10-12: tab BRAIN là
     // đài quan sát não, hiệu ứng lan truyền là NỘI DUNG CHÍNH)
     const fx = getTuningSpec('ui_synapse_fx')!

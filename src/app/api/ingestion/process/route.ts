@@ -651,6 +651,60 @@ async function extractPDFText(buffer: Buffer): Promise<{ text: string; totalPage
   return { text: cleanedText, totalPages }
 }
 
+// ==================== TXT SUPPORT (R24-a — D0 ánh xạ knowledge/ → Neo4j) ====================
+// D0 (blueprint EVO-NAO §9, duyệt Q9): nạp 9 shard knowledge/*.TXT (2.24MB) qua
+// ingestion sẵn có. Additive — đường .pdf giữ NGUYÊN vẹn: mọi call site cũ của
+// extractPDFText giờ gọi qua extractTextForDocument, nhánh .txt chỉ kích hoạt
+// khi file_path/title kết thúc bằng .txt (case-insensitive).
+
+/** Document là file .txt? (check cả file_path lưu đĩa lẫn title gốc — đủ 1 là đủ) */
+function isTxtDocument(filePath?: string | null, title?: string | null): boolean {
+  return [filePath, title]
+    .filter((v): v is string => typeof v === 'string' && v.length > 0)
+    .some(v => v.toLowerCase().endsWith('.txt'))
+}
+
+/**
+ * Synthetic page count cho .txt (không có trang vật lý) — D0.
+ * .txt không có pageCount → KPI chunks_per_page (P5-M4, ∈ [0.3, 8]) rơi vào
+ * "chưa đo được" (thiếu đo ≠ hỏng, doc không fail) — nhưng để KPI VẪN giám sát
+ * doc .txt như doc .pdf, tổng hợp trang ảo: 1 trang ≈ 1800 tokens ≈ 7.200 ký
+ * tự (quy đổi từ 1 trang PDF dày thông thường sau khi dọn layout). Công thức
+ * max(1, round(tokens/1800)) — đối chiếu trial shard 002: ~60 chunks (domain
+ * ml, maxTokens 640/overlap 96) / ~20 trang ảo = 3.0 ∈ [0.3, 8] thoải mái cả
+ * 2 cận; chọn cách tối thiểu này thay vì 3-way (đo density thật) vì không đụng
+ * pipeline-expectations (chỉ thay nguồn số đo pageCount).
+ */
+function syntheticPageCountForText(text: string): number {
+  return Math.max(1, Math.round(estimateTokenCount(text) / 1800))
+}
+
+/**
+ * Trích text theo loại file — thay thế trực tiếp extractPDFText tại mọi call
+ * site của pipeline (fresh / rebuild / embedOnly): .txt → đọc buffer utf8 +
+ * cùng bộ làm sạch cuối extractPDFText (\f, CRLF, 3+ newline, tab, control
+ * chars); .pdf → extractPDFText như cũ (verbatim).
+ */
+async function extractTextForDocument(
+  buffer: Buffer,
+  filePath?: string | null,
+  title?: string | null
+): Promise<{ text: string; totalPages: number; pageCountSynthetic: boolean }> {
+  if (isTxtDocument(filePath, title)) {
+    const text = buffer
+      .toString('utf8')
+      .replace(/\f/g, '\n\n').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+      .replace(/\n{3,}/g, '\n\n').replace(/\t+/g, '  ').replace(/  +/g, ' ')
+      .replace(/[\u0000-\u0008\u000B\u000E-\u001F\u007F\uFFFE\uFFFF]/g, '')
+      .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')
+      .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')
+      .trim()
+    return { text, totalPages: syntheticPageCountForText(text), pageCountSynthetic: true }
+  }
+  const pdfResult = await extractPDFText(buffer)
+  return { text: pdfResult.text, totalPages: pdfResult.totalPages, pageCountSynthetic: false }
+}
+
 // ==================== DOCUMENT CLASSIFICATION ====================
 
 /**
@@ -937,7 +991,9 @@ Output ONLY the domain name in lowercase. For example: programming`
 
 // ==================== ENTITY EXTRACTION ====================
 
-function buildSystemPrompt(domain: DocumentDomain): string {
+// R24-a (D0): export cho scratch/r24-d0-measure.ts tái DÙNG prompt extraction
+// thật (single-source — KHÔNG copy prompt ra script đo).
+export function buildSystemPrompt(domain: DocumentDomain): string {
   const domainDescription: Record<DocumentDomain, string> = {
     programming: 'programming and software development', algorithm: 'algorithms and data structures',
     ml: 'machine learning and artificial intelligence', meta_cognitive: 'meta-cognitive reasoning and cognitive science',
@@ -2448,7 +2504,8 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
         }
 
         // --- Re-parse + re-chunk (same logic as fresh path) ---
-        const { text: rebuildText } = await extractPDFText(rebuildBuffer)
+        // R24-a (D0): .txt → đọc thẳng utf8; .pdf → extractPDFText như cũ
+        const { text: rebuildText } = await extractTextForDocument(rebuildBuffer, document.file_path as string, document.title as string)
         if (!rebuildText || rebuildText.trim().length === 0) {
           throw new Error('Chunk rebuild failed: PDF parsing returned no text')
         }
@@ -2541,8 +2598,10 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
       // Step 3: Parse PDF — extract raw text first (chunking happens after classification)
       steps = markStepRunning(steps, 'parse')
       await updateDocProgress(documentId, { steps })
-      const { text: rawText, totalPages: parsedPages } = await extractPDFText(pdfBuffer)
-      if (!rawText || rawText.trim().length === 0) throw new Error('PDF parsing returned no text - document may be empty or unreadable. Possible causes: (1) Scanned/image PDF without OCR text layer, (2) Encrypted/password-protected PDF, (3) Corrupted or malformed PDF file. Please ensure the PDF contains selectable text.')
+      // R24-a (D0): .txt → đọc thẳng utf8 (+ synthetic pageCount cho KPI
+      // chunks_per_page); .pdf → extractPDFText như cũ (verbatim).
+      const { text: rawText, totalPages: parsedPages, pageCountSynthetic } = await extractTextForDocument(pdfBuffer, document.file_path as string, document.title as string)
+      if (!rawText || rawText.trim().length === 0) throw new Error('PDF parsing returned no text - document may be empty or unreadable. Possible causes: (1) Scanned/image PDF without OCR text layer, (2) Encrypted/password-protected PDF, (3) Corrupted or malformed PDF file, (4) .txt rỗng/chỉ-whitespace. Please ensure the file contains selectable text.')
 
       // Step 3.5: Auto-classify domain if set to "mixed" (the default/auto selection)
       // Classification happens AFTER text extraction but BEFORE chunking,
@@ -2567,7 +2626,7 @@ async function runIngestionPipeline(documentId: string, slotIndex: number = -1):
       if (parseChunks.length === 0) throw new Error('Chunking returned no chunks - document text could not be segmented')
 
       // Save page count + mark parse step completed
-      steps = markStepCompleted(steps, 'parse', `${parsedPages} trang, ${parseTotalTokens} tokens, domain: ${domain}`)
+      steps = markStepCompleted(steps, 'parse', `${parsedPages}${pageCountSynthetic ? ' (trang ước từ tokens — .txt)' : ''} trang, ${parseTotalTokens} tokens, domain: ${domain}`)
       await updateDocProgress(documentId, { steps, pageCount: parsedPages })
       // FB-Đợt7-R4 (A1): giữ số trang run này cho P5-M4 chunks_per_page
       freshPageCount = parsedPages
@@ -4290,8 +4349,8 @@ async function runEmbedOnlyPipeline(documentId: string): Promise<Record<string, 
       processing_percent: 10,
     })
 
-    // 3. Parse PDF
-    const { text: rawText, totalPages: parsedPages } = await extractPDFText(pdfBuffer)
+    // 3. Parse PDF (R24-a D0: .txt → đọc thẳng utf8 + synthetic pageCount)
+    const { text: rawText, totalPages: parsedPages } = await extractTextForDocument(pdfBuffer, document.file_path as string, document.title as string)
     if (!rawText || rawText.trim().length === 0) {
       throw new Error('PDF parsing returned no text — document may be scanned/image-only')
     }

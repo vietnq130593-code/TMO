@@ -230,12 +230,13 @@ export function BrainTabContent() {
 
   /// Não đang chọn — mặc định 'calibration_v3'; restore từ localStorage
   /// (queueMicrotask + try/catch — fail-open giữ mặc định khi private mode).
+  /// R24-b: chấp nhận cả 'knowledge' (Brain-D ghost §8.5 — nút não thứ 4).
   const [selectedBrainKey, setSelectedBrainKey] = useState<BrainKey>('calibration_v3')
   useEffect(() => {
     queueMicrotask(() => {
       try {
         const saved = localStorage.getItem('tmo-brain-selected')
-        if (saved === 'calibration_v3' || saved === 'surrogate' || saved === 'policy') setSelectedBrainKey(saved)
+        if (saved === 'calibration_v3' || saved === 'surrogate' || saved === 'policy' || saved === 'knowledge') setSelectedBrainKey(saved)
       } catch { /* private mode — giữ mặc định */ }
     })
   }, [])
@@ -412,7 +413,8 @@ export function BrainTabContent() {
         if (!alive) return
         const nextSaved: Partial<Record<BrainKey, BrainDraftSpec | null>> = {}
         for (const d of json.drafts) {
-          if (d.brain === 'calibration_v3' || d.brain === 'surrogate' || d.brain === 'policy') {
+          // R24-b: nhận cả 'knowledge' (rule ghost §8.5 — lưu trữ thuần, chưa train)
+          if (d.brain === 'calibration_v3' || d.brain === 'surrogate' || d.brain === 'policy' || d.brain === 'knowledge') {
             nextSaved[d.brain] = d.spec
           }
         }
@@ -554,6 +556,16 @@ export function BrainTabContent() {
       // R7 — ÁP DỤNG NGAY: train theo nháp vừa lưu + force (active thật +
       // bật cờ runtime). Toast kết quả do trainBrain lo (success lẫn lỗi
       // thiếu dữ liệu) — không lặng lẽ bỏ dở việc áp dụng.
+      // R24-b §8.5: brain CHƯA có pipeline train (knowledge ghost — không
+      // nằm trong BRAIN_TRAINABLE_KEYS tới D3) → KHÔNG auto-train (POST
+      // /api/brain/train sẽ 400 "chưa có pipeline") — lưu nháp thuần lưu trữ,
+      // toast nói thẳng tránh lỗi vô nghĩa.
+      if (!BRAIN_TRAINABLE_KEYS.includes(key)) {
+        toast.info('Đã lưu nháp kiến trúc Tri Thức (ghost §8.5)', {
+          description: 'Brain-D chưa có pipeline train — model thật chỉ sống từ BRAIN-D3 (≥300 log KbConsultLog có Outcome*). Nháp giữ lại cho lúc ấy.',
+        })
+        return
+      }
       toast.info('Đã lưu cấu hình — đang huấn luyện & áp dụng ngay…', {
         description: 'Hiệu chỉnh sẽ lên runtime THẬT (bản active + cờ bật) ngay khi train xong.',
       })
@@ -654,6 +666,15 @@ export function BrainTabContent() {
   const selectedFlagValue = selectedEntry.flagTuningKey !== undefined
     ? String(tuningByKey.get(selectedEntry.flagTuningKey)?.effectiveValue ?? 'off')
     : undefined
+  // R24-b §8.5.1 — badge cờ kill-switch PHỤ (Brain-D có 2 cờ §8.3:
+  // runtime_knowledge + knowledge_organ_strategy; não A/B/C rỗng — giữ diện mạo cũ)
+  const selectedExtraFlags = useMemo(() => {
+    return (selectedEntry.extraFlagTuningKeys ?? []).map(fk => ({
+      key: fk,
+      label: getTuningSpec(fk)?.label ?? fk,
+      value: String(tuningByKey.get(fk)?.effectiveValue ?? 'off'),
+    }))
+  }, [selectedEntry.extraFlagTuningKeys, tuningByKey])
 
   // Map nodeId → title cho bảng tuning + dialog (tab BRAIN KHÔNG render đồ
   // thị 6 lớp — đọc tên nút từ NEURAL_NODES, nguồn single-source neural-types)
@@ -858,7 +879,7 @@ export function BrainTabContent() {
               <BrainCircuit className="h-3.5 w-3.5 shrink-0 text-amber-400" />
               <h4 className="text-xs font-semibold text-stone-100">1 · Chọn não &amp; kiến trúc</h4>
               <span className="text-[10px] text-stone-500">
-                3 bộ não nhỏ tự huấn luyện khi đủ mẫu · ngủ an toàn khi thiếu · thêm lớp / chỉnh nơ-ron / activation / α-β ở Editor kiến trúc
+                4 bộ não nhỏ tự huấn luyện khi đủ mẫu (Tri Thức = ghost dự kiến §8.5 — chưa học tới D3) · ngủ an toàn khi thiếu · thêm lớp / chỉnh nơ-ron / activation / α-β ở Editor kiến trúc
               </span>
               {brainData && (
                 <div className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -930,6 +951,19 @@ export function BrainTabContent() {
               >
                 {selectedEntry.flag}={selectedFlagValue ?? 'off'}
               </Badge>
+              {/* R24-b §8.5.1 — cờ kill-switch phụ của não đang chọn (Brain-D:
+                  knowledge_organ_strategy §8.3; đổi qua tab Tham số runtime —
+                  audit Nhật ký tinh chỉnh precedent tuning-store) */}
+              {selectedExtraFlags.map(f => (
+                <Badge
+                  key={f.key}
+                  variant="outline"
+                  className={`h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] border-stone-600/50 ${f.value === 'on' ? 'text-emerald-400' : 'text-stone-500'}`}
+                  title={`Cờ kill-switch phụ (§8.3) — giá trị hiệu lực thật (STORE › ENV › DEFAULT); đổi ở tab "Tham số runtime" (section Bảng thông số)`}
+                >
+                  {f.label}={f.value}
+                </Badge>
+              ))}
               <Badge variant="outline" className="h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] text-stone-400 border-stone-600/50">in: {selectedEntry.defaultInputMode}</Badge>
             </div>
 

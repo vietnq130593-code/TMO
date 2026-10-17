@@ -137,8 +137,18 @@ export async function POST(request: NextRequest) {
       }
 
       // Validate file type
-      if (!file.name.toLowerCase().endsWith('.pdf')) {
-        errors.push({ file: file.name, error: 'Only PDF files are supported' })
+      // R24-a (D0 — blueprint EVO-NAO §9): chấp nhận thêm .txt để ánh xạ 9 shard
+      // knowledge/ (2.2MB) vào Neo4j qua ingestion sẵn có. Đường .pdf giữ nguyên
+      // verbatim. Extension check case-insensitive (shard gốc dùng .TXT viết hoa);
+      // mime client gửi có thể là text/plain (browser đoán) hoặc
+      // application/octet-stream (curl không đoán được .TXT hoa) — cả 2 + rỗng
+      // đều được nhận, mime khác (vd application/pdf đổi tên đuôi) bị từ chối.
+      const lowerName = file.name.toLowerCase()
+      const fileMime = (file.type || '').split(';')[0].trim()
+      const isPdf = lowerName.endsWith('.pdf')
+      const isTxt = lowerName.endsWith('.txt') && ['', 'text/plain', 'application/octet-stream'].includes(fileMime)
+      if (!isPdf && !isTxt) {
+        errors.push({ file: file.name, error: 'Only PDF or TXT files are supported' })
         continue
       }
 

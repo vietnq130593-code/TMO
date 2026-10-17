@@ -431,9 +431,12 @@ describe('r93 · C source-scan wiring 3 SECTION — pin chống hồi quy cấu 
     expect(tabCode).toContain('json.training')
   })
 
-  test('brain-studio: segmented 3 nút (aria-pressed + sm:grid-cols-3 + b.key === selectedKey) + α/β editor (DRAFT_LIMITS alphaMin/betaMin + nhánh leakyRelu/swish + placeholder default) + KHÔNG còn selectorOpen', () => {
+  test('brain-studio: segmented chọn não (aria-pressed + b.key === selectedKey + grid responsive — PIN UPDATE R24-b: 4 nút não sau Brain-D ghost §8.5, sm:grid-cols-3 → sm:grid-cols-2 lg:grid-cols-4) + α/β editor (DRAFT_LIMITS alphaMin/betaMin + nhánh leakyRelu/swish + placeholder default) + KHÔNG còn selectorOpen', () => {
     // Segmented chọn não (18-b thay dropdown — bấm trực tiếp)
-    expect(studioCode).toContain('sm:grid-cols-3')
+    // PIN UPDATE (R24-b Brain-D ghost 2026-10-17): grid 1 cột mobile /
+    // 2 cột sm / 4 cột lg cho 4 nút não (Tri Thức là nút thứ 4 — §8.5.1).
+    expect(studioCode).toContain('sm:grid-cols-2')
+    expect(studioCode).toContain('lg:grid-cols-4')
     expect(studioCode).toContain('b.key === selectedKey')
     expect(studioCode).toContain('aria-pressed={sel}')
     // α/β editor (18-d field → 18-b UI dòng 4 chip lớp ẩn)

@@ -235,7 +235,9 @@ function findSafeSplitPoint(text: string, targetPosition: number): number {
 /**
  * Split text into chunks based on domain-specific strategy
  */
-function chunkText(text: string, domain: DocumentDomain): ParsedChunk[] {
+// R24-a (D0): export cho scratch/r24-d0-measure.ts — đo số chunks thật/shard
+// bằng đúng bộ chunking pipeline (giữ single-source, không copy sang script).
+export function chunkText(text: string, domain: DocumentDomain): ParsedChunk[] {
   const config = DOMAIN_CONFIGS[domain] || DOMAIN_CONFIGS.mixed
   const chunks: ParsedChunk[] = []
 

@@ -351,7 +351,7 @@ describe('r95 · H — source-scan wiring đợt 1+2 (OBS-P1/P2 hooks)', () => {
   })
 
   test('H5 TUNING_SPECS đủ 5 cờ obs (26–30) đúng envKey/default/nodeId', () => {
-    expect(TUNING_SPECS.length).toBe(32) // PIN UPDATE R4: 30 → 31 (cờ auto_eval_kb) · PIN UPDATE R20 BRAIN-D1: 31 → 32 (cờ kb_consult_log — node kb-access, ngoài nhóm 5 cờ obs)
+    expect(TUNING_SPECS.length).toBe(36) // PIN UPDATE R24-c EVO-P4: 34 → 36 (brain_evolve + brain_search_global) // PIN UPDATE R4: 30 → 31 (cờ auto_eval_kb) · PIN UPDATE R20 BRAIN-D1: 31 → 32 (cờ kb_consult_log — node kb-access, ngoài nhóm 5 cờ obs) · PIN UPDATE R24-b Brain-D ghost: 32 → 34 (2 cờ kill-switch runtime_knowledge/knowledge_organ_strategy — node kb-access, ngoài nhóm 5 cờ obs)
     for (const key of OBS_FLAG_KEYS) {
       const spec = getTuningSpec(key)
       expect(spec, key).toBeDefined()

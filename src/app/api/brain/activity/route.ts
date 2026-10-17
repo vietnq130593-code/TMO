@@ -297,6 +297,29 @@ export async function GET(request: Request) {
     errors.push(`agentRunInProgress: ${errMsg(err)}`)
   }
 
+  // R24-b §8.5 (mốc a ghost UI): Brain-D "Tri Thức" CHƯA có model/hoạt động
+  // thật tới D3 — trả trung thực dormant + field null (không giả tín hiệu,
+  // nguyên tắc THẬT của đài). Ghost topology render 100% từ registry ở
+  // client (planned.layers — precedent A/B/C dormant); chip Agent toàn cục
+  // + snapshot training vẫn sống để đài hiển thị trạng thái vận hành chung.
+  if (brain === 'knowledge') {
+    return NextResponse.json({
+      ok: true,
+      brain,
+      head: null,
+      status: 'dormant' as const,
+      agentRunInProgress,
+      inputVector: null,
+      activations: null,
+      featureNames: null,
+      sourceLabel: null,
+      fetchedAt: new Date().toISOString(),
+      backprop: null,
+      training,
+      ...(errors.length > 0 ? { error: errors.join('; ') } : {}),
+    })
+  }
+
   if (brain === 'calibration_v3') {
     // Bản active (loadActiveV3 fail-open nội bộ — mọi lỗi nạp → null → dormant)
     const active = await loadActiveV3()

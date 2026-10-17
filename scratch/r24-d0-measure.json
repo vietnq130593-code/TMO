@@ -1,0 +1,464 @@
+{
+  "task": "R24-a D0 bước 3 — đo khối lượng 9 shard trước ingestion",
+  "measuredAt": "2026-10-17T09:35:15.014Z",
+  "env": "sandbox AuraDB — Neo4j Aura free-tier; extraction NIM nemotron-3-ultra-550b (callLLMSlot round-robin)",
+  "domain": "ml",
+  "methodology": {
+    "tokens": "estimateTokenCount lib (chars/4) trên text đã normalize như extractTextForDocument route R24-a",
+    "chunks": "chunkText lib domain ml (640 tokens/overlap 96 — trùng route-local ml)",
+    "entityRate": "TRUNG BÌNH 2 chunk mẫu (đầu + giữa)/shard sau orphan filter — ƯỚC LƯỢNG, không phải kết quả extract đủ shard",
+    "estEntities": "entityRate × chunks — chưa trừ merge/resolver (hiệu chỉnh bằng trial shard 002)",
+    "blocks": "đếm marker ^(?:- )?(NODE_ID|RULE_ID|DYNAMIC_ID|METRIC_ID): trên text normalize"
+  },
+  "shards": [
+    {
+      "shard": "SHD_GEN_CAUSAL_HYPER_001.TXT",
+      "bytes": 208622,
+      "lines": 3569,
+      "blocks": {
+        "node": 120,
+        "rule": 69,
+        "dynamic": 69,
+        "metric": 50,
+        "total": 308
+      },
+      "estTokens": 43640,
+      "normalizedChars": 174559,
+      "chunks": 80,
+      "chunksDomainMl": 80,
+      "syntheticPages": 24,
+      "chunksPerPage": 3.3333333333333335,
+      "samples": [
+        {
+          "chunkLabel": "#0",
+          "rawEntities": 27,
+          "rawRels": 28,
+          "entitiesAfterOrphanFilter": 27,
+          "relsAfterOrphanFilter": 28,
+          "rawEntityNamesDropped": 0,
+          "finishReason": "stop",
+          "tokensUsed": 6329,
+          "parseRecovered": false,
+          "chunkIndex": 0
+        },
+        {
+          "chunkLabel": "#40",
+          "rawEntities": 28,
+          "rawRels": 34,
+          "entitiesAfterOrphanFilter": 28,
+          "relsAfterOrphanFilter": 34,
+          "rawEntityNamesDropped": 0,
+          "parseRecovered": false,
+          "chunkIndex": 40,
+          "finishReason": "stop",
+          "tokensUsed": 6552
+        }
+      ],
+      "entityRatePerChunk": 27.5,
+      "estEntitiesRaw": 2200,
+      "llmCallsOk": 2,
+      "llmCallsFailed": 0
+    },
+    {
+      "shard": "SHD_NAS_EVOLUTION_002.TXT",
+      "bytes": 146037,
+      "lines": 2945,
+      "blocks": {
+        "node": 125,
+        "rule": 48,
+        "dynamic": 40,
+        "metric": 40,
+        "total": 253
+      },
+      "estTokens": 31205,
+      "normalizedChars": 124818,
+      "chunks": 58,
+      "chunksDomainMl": 58,
+      "syntheticPages": 17,
+      "chunksPerPage": 3.411764705882353,
+      "samples": [
+        {
+          "chunkLabel": "#0",
+          "rawEntities": 14,
+          "rawRels": 11,
+          "entitiesAfterOrphanFilter": 14,
+          "relsAfterOrphanFilter": 11,
+          "rawEntityNamesDropped": 0,
+          "finishReason": "stop",
+          "tokensUsed": 7056,
+          "parseRecovered": false,
+          "chunkIndex": 0
+        },
+        {
+          "chunkLabel": "#29",
+          "rawEntities": 21,
+          "rawRels": 19,
+          "entitiesAfterOrphanFilter": 21,
+          "relsAfterOrphanFilter": 19,
+          "rawEntityNamesDropped": 0,
+          "finishReason": "stop",
+          "tokensUsed": 9991,
+          "parseRecovered": false,
+          "chunkIndex": 29
+        }
+      ],
+      "entityRatePerChunk": 17.5,
+      "estEntitiesRaw": 1015,
+      "llmCallsOk": 2,
+      "llmCallsFailed": 0
+    },
+    {
+      "shard": "SHD_OPT_CONVEX_003.TXT",
+      "bytes": 118466,
+      "lines": 2245,
+      "blocks": {
+        "node": 83,
+        "rule": 32,
+        "dynamic": 20,
+        "metric": 35,
+        "total": 170
+      },
+      "estTokens": 25056,
+      "normalizedChars": 100222,
+      "chunks": 46,
+      "chunksDomainMl": 46,
+      "syntheticPages": 14,
+      "chunksPerPage": 3.2857142857142856,
+      "samples": [
+        {
+          "chunkLabel": "#0",
+          "rawEntities": 9,
+          "rawRels": 11,
+          "entitiesAfterOrphanFilter": 9,
+          "relsAfterOrphanFilter": 11,
+          "rawEntityNamesDropped": 0,
+          "parseRecovered": false,
+          "chunkIndex": 0,
+          "finishReason": "stop",
+          "tokensUsed": 7370
+        },
+        {
+          "chunkLabel": "#23",
+          "rawEntities": 42,
+          "rawRels": 39,
+          "entitiesAfterOrphanFilter": 42,
+          "relsAfterOrphanFilter": 39,
+          "rawEntityNamesDropped": 0,
+          "parseRecovered": false,
+          "chunkIndex": 23,
+          "finishReason": "stop",
+          "tokensUsed": 8817
+        }
+      ],
+      "entityRatePerChunk": 25.5,
+      "estEntitiesRaw": 1173,
+      "llmCallsOk": 2,
+      "llmCallsFailed": 0
+    },
+    {
+      "shard": "SHD_SYS_DYNAMICS_004.TXT",
+      "bytes": 150228,
+      "lines": 2981,
+      "blocks": {
+        "node": 102,
+        "rule": 42,
+        "dynamic": 43,
+        "metric": 45,
+        "total": 232
+      },
+      "estTokens": 31685,
+      "normalizedChars": 126737,
+      "chunks": 59,
+      "chunksDomainMl": 59,
+      "syntheticPages": 18,
+      "chunksPerPage": 3.2777777777777777,
+      "samples": [
+        {
+          "chunkLabel": "#0",
+          "rawEntities": 0,
+          "rawRels": 0,
+          "entitiesAfterOrphanFilter": 0,
+          "relsAfterOrphanFilter": 0,
+          "rawEntityNamesDropped": 0,
+          "parseRecovered": false,
+          "chunkIndex": 0,
+          "error": "empty content sau 4 attempt: Extraction \"extraction\" thất bại (model nvidia/nemotron-3-ultra-550b-a55b — không tự fallback R19): NIM \"nvidia/nemotron"
+        },
+        {
+          "chunkLabel": "#29",
+          "rawEntities": 0,
+          "rawRels": 0,
+          "entitiesAfterOrphanFilter": 0,
+          "relsAfterOrphanFilter": 0,
+          "rawEntityNamesDropped": 0,
+          "parseRecovered": false,
+          "chunkIndex": 29,
+          "error": "empty content sau 4 attempt: Extraction \"extraction\" thất bại (model nvidia/nemotron-3-ultra-550b-a55b — không tự fallback R19): NIM \"nvidia/nemotron"
+        }
+      ],
+      "entityRatePerChunk": null,
+      "estEntitiesRaw": null,
+      "llmCallsOk": 0,
+      "llmCallsFailed": 2
+    },
+    {
+      "shard": "SHD_CORE_GRAPH_005.TXT",
+      "bytes": 171126,
+      "lines": 3599,
+      "blocks": {
+        "node": 140,
+        "rule": 70,
+        "dynamic": 70,
+        "metric": 0,
+        "total": 280
+      },
+      "estTokens": 36246,
+      "normalizedChars": 144983,
+      "chunks": 67,
+      "chunksDomainMl": 67,
+      "syntheticPages": 20,
+      "chunksPerPage": 3.35,
+      "samples": [
+        {
+          "chunkLabel": "#0",
+          "rawEntities": 15,
+          "rawRels": 25,
+          "entitiesAfterOrphanFilter": 15,
+          "relsAfterOrphanFilter": 25,
+          "rawEntityNamesDropped": 0,
+          "finishReason": "stop",
+          "tokensUsed": 8733,
+          "parseRecovered": false,
+          "chunkIndex": 0
+        },
+        {
+          "chunkLabel": "#33",
+          "rawEntities": 0,
+          "rawRels": 0,
+          "entitiesAfterOrphanFilter": 0,
+          "relsAfterOrphanFilter": 0,
+          "rawEntityNamesDropped": 0,
+          "parseRecovered": false,
+          "chunkIndex": 33,
+          "error": "empty content sau 4 attempt: Extraction \"extraction\" thất bại (model nvidia/nemotron-3-ultra-550b-a55b — không tự fallback R19): NIM \"nvidia/nemotron"
+        }
+      ],
+      "entityRatePerChunk": 15,
+      "estEntitiesRaw": 1005,
+      "llmCallsOk": 1,
+      "llmCallsFailed": 1
+    },
+    {
+      "shard": "SHD_COMPLEXITY_006.TXT",
+      "bytes": 337669,
+      "lines": 6037,
+      "blocks": {
+        "node": 200,
+        "rule": 100,
+        "dynamic": 100,
+        "metric": 100,
+        "total": 500
+      },
+      "estTokens": 71122,
+      "normalizedChars": 284488,
+      "chunks": 131,
+      "chunksDomainMl": 131,
+      "syntheticPages": 40,
+      "chunksPerPage": 3.275,
+      "samples": [
+        {
+          "chunkLabel": "#0",
+          "rawEntities": 8,
+          "rawRels": 5,
+          "entitiesAfterOrphanFilter": 8,
+          "relsAfterOrphanFilter": 5,
+          "rawEntityNamesDropped": 0,
+          "finishReason": "stop",
+          "tokensUsed": 6434,
+          "parseRecovered": false,
+          "chunkIndex": 0
+        },
+        {
+          "chunkLabel": "#65",
+          "rawEntities": 0,
+          "rawRels": 0,
+          "entitiesAfterOrphanFilter": 0,
+          "relsAfterOrphanFilter": 0,
+          "rawEntityNamesDropped": 0,
+          "parseRecovered": false,
+          "chunkIndex": 65,
+          "error": "empty content sau 4 attempt: Extraction \"extraction\" thất bại (model nvidia/nemotron-3-ultra-550b-a55b — không tự fallback R19): NIM \"nvidia/nemotron"
+        }
+      ],
+      "entityRatePerChunk": 8,
+      "estEntitiesRaw": 1048,
+      "llmCallsOk": 1,
+      "llmCallsFailed": 1
+    },
+    {
+      "shard": "SHD_DSL_007.TXT",
+      "bytes": 355852,
+      "lines": 6440,
+      "blocks": {
+        "node": 200,
+        "rule": 100,
+        "dynamic": 100,
+        "metric": 100,
+        "total": 500
+      },
+      "estTokens": 74834,
+      "normalizedChars": 299333,
+      "chunks": 138,
+      "chunksDomainMl": 138,
+      "syntheticPages": 42,
+      "chunksPerPage": 3.2857142857142856,
+      "samples": [
+        {
+          "chunkLabel": "#0",
+          "rawEntities": 8,
+          "rawRels": 15,
+          "entitiesAfterOrphanFilter": 8,
+          "relsAfterOrphanFilter": 15,
+          "rawEntityNamesDropped": 0,
+          "finishReason": "stop",
+          "tokensUsed": 6638,
+          "parseRecovered": false,
+          "chunkIndex": 0
+        },
+        {
+          "chunkLabel": "#69",
+          "rawEntities": 0,
+          "rawRels": 0,
+          "entitiesAfterOrphanFilter": 0,
+          "relsAfterOrphanFilter": 0,
+          "rawEntityNamesDropped": 0,
+          "parseRecovered": false,
+          "chunkIndex": 69,
+          "error": "empty content sau 4 attempt: Extraction \"extraction\" thất bại (model nvidia/nemotron-3-ultra-550b-a55b — không tự fallback R19): TIMEOUT-BREAKER (Tas"
+        }
+      ],
+      "entityRatePerChunk": 8,
+      "estEntitiesRaw": 1104,
+      "llmCallsOk": 1,
+      "llmCallsFailed": 1
+    },
+    {
+      "shard": "SHD_GTH_008.TXT",
+      "bytes": 349702,
+      "lines": 5934,
+      "blocks": {
+        "node": 200,
+        "rule": 100,
+        "dynamic": 100,
+        "metric": 100,
+        "total": 500
+      },
+      "estTokens": 72928,
+      "normalizedChars": 291710,
+      "chunks": 134,
+      "chunksDomainMl": 134,
+      "syntheticPages": 41,
+      "chunksPerPage": 3.268292682926829,
+      "samples": [
+        {
+          "chunkLabel": "#0",
+          "rawEntities": 0,
+          "rawRels": 0,
+          "entitiesAfterOrphanFilter": 0,
+          "relsAfterOrphanFilter": 0,
+          "rawEntityNamesDropped": 0,
+          "parseRecovered": false,
+          "chunkIndex": 0,
+          "error": "empty content sau 4 attempt: Extraction \"extraction\" thất bại (model nvidia/nemotron-3-ultra-550b-a55b — không tự fallback R19): TIMEOUT-BREAKER (Tas"
+        },
+        {
+          "chunkLabel": "#67",
+          "rawEntities": 0,
+          "rawRels": 0,
+          "entitiesAfterOrphanFilter": 0,
+          "relsAfterOrphanFilter": 0,
+          "rawEntityNamesDropped": 0,
+          "parseRecovered": false,
+          "chunkIndex": 67,
+          "error": "empty content sau 4 attempt: Extraction \"extraction\" thất bại (model nvidia/nemotron-3-ultra-550b-a55b — không tự fallback R19): TIMEOUT-BREAKER (Tas"
+        }
+      ],
+      "entityRatePerChunk": null,
+      "estEntitiesRaw": null,
+      "llmCallsOk": 0,
+      "llmCallsFailed": 2
+    },
+    {
+      "shard": "PSY-CORE-SCI-009.TXT",
+      "bytes": 401469,
+      "lines": 2047,
+      "blocks": {
+        "node": 300,
+        "rule": 100,
+        "dynamic": 100,
+        "metric": 100,
+        "total": 600
+      },
+      "estTokens": 84428,
+      "normalizedChars": 337712,
+      "chunks": 155,
+      "chunksDomainMl": 155,
+      "syntheticPages": 47,
+      "chunksPerPage": 3.297872340425532,
+      "samples": [
+        {
+          "chunkLabel": "#0",
+          "rawEntities": 0,
+          "rawRels": 0,
+          "entitiesAfterOrphanFilter": 0,
+          "relsAfterOrphanFilter": 0,
+          "rawEntityNamesDropped": 0,
+          "parseRecovered": false,
+          "chunkIndex": 0,
+          "error": "empty content sau 4 attempt: Extraction \"extraction\" thất bại (model nvidia/nemotron-3-ultra-550b-a55b — không tự fallback R19): TIMEOUT-BREAKER (Tas"
+        },
+        {
+          "chunkLabel": "#77",
+          "rawEntities": 0,
+          "rawRels": 0,
+          "entitiesAfterOrphanFilter": 0,
+          "relsAfterOrphanFilter": 0,
+          "rawEntityNamesDropped": 0,
+          "parseRecovered": false,
+          "chunkIndex": 77,
+          "error": "empty content sau 4 attempt: Extraction \"extraction\" thất bại (model nvidia/nemotron-3-ultra-550b-a55b — không tự fallback R19): TIMEOUT-BREAKER (Tas"
+        }
+      ],
+      "entityRatePerChunk": null,
+      "estEntitiesRaw": null,
+      "llmCallsOk": 0,
+      "llmCallsFailed": 2
+    }
+  ],
+  "gapFillHistory": [
+    {
+      "gapFillAt": "2026-10-17T10:39:36.990Z",
+      "callsOk": 2,
+      "callsFail": 3,
+      "note": "in-progress (kill an toàn — đã ghi incremental)"
+    },
+    {
+      "gapFillAt": "2026-10-17T10:53:28.316Z",
+      "callsOk": 0,
+      "callsFail": 6,
+      "note": "in-progress (kill an toàn — đã ghi incremental)"
+    },
+    {
+      "gapFillAt": "2026-10-17T12:16:09.084Z",
+      "callsOk": 1,
+      "callsFail": 2,
+      "note": "in-progress (kill an toàn — đã ghi incremental)"
+    },
+    {
+      "gapFillAt": "2026-10-17T12:25:44.072Z",
+      "callsOk": 0,
+      "callsFail": 0,
+      "note": "abandoned — NIM extraction 503/hang kéo dài (probe 12:19 + 12:32 FAIL fail-fast ~730ms); 5 phiên gap-fill tổng cộng thu hồi 3 mẫu, còn 9 mẫu lỗi thuộc 004/008/009 (0 mẫu) + 005/006/007 (thiếu mẫu giữa)"
+    }
+  ]
+}

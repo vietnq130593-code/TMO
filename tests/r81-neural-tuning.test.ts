@@ -57,8 +57,10 @@ describe('r81 · TUNING_SPECS integrity', () => {
     // nhãn Brain-A tự động — node hist-feedback).
     // PIN UPDATE (R20 BRAIN-D1 2026-10-17): 31 → 32 — thêm cờ kb_consult_log
     // (LOG-ONLY KbConsultLog — node kb-access MỚI).
-    expect(keys.length).toBe(32)
-    expect(new Set(keys).size).toBe(32)
+    // PIN UPDATE (R24-b Brain-D ghost 2026-10-17): 32 → 34 — thêm 2 cờ
+    // kill-switch runtime_knowledge + knowledge_organ_strategy (§8.3/§8.5).
+    expect(keys.length).toBe(36) // PIN UPDATE R24-c EVO-P4: 34 → 36
+    expect(new Set(keys).size).toBe(36) // PIN UPDATE R24-c EVO-P4: 34 → 36
     for (const k of keys) expect(getTuningSpec(k)?.key).toBe(k)
     expect(getTuningSpec('khong-ton-tai')).toBeUndefined()
   })
@@ -286,7 +288,9 @@ describe('r81 · resolve STORE > ENV > DEFAULT', () => {
     // PIN UPDATE (Task 26-BE): 29 → 30 — cờ obs_alerts (GAP-2)
     // PIN UPDATE (R4-ĐIỀU TRA lượt 4): 30 → 31 — cờ auto_eval_kb (xưởng nhãn Brain-A)
     // PIN UPDATE (R20 BRAIN-D1 2026-10-17): 31 → 32 — cờ kb_consult_log (LOG-ONLY)
-    expect(state.length).toBe(32)
+    // PIN UPDATE (R24-b Brain-D ghost 2026-10-17): 32 → 34 — 2 cờ kill-switch
+    // runtime_knowledge + knowledge_organ_strategy (§8.3/§8.5).
+    expect(state.length).toBe(36) // PIN UPDATE R24-c EVO-P4: 34 → 36
     const iqr = state.find(s => s.key === 'anomaly_iqr_k')!
     expect(iqr.source).toBe('store')
     expect(iqr.storeValue).toBe('2.5')
@@ -464,7 +468,9 @@ describe('r81 · API /api/neural-architecture', () => {
     // PIN UPDATE (Task 26-BE): 29 → 30 — cờ obs_alerts (GAP-2)
     // PIN UPDATE (R4-ĐIỀU TRA lượt 4): 30 → 31 — cờ auto_eval_kb (xưởng nhãn Brain-A)
     // PIN UPDATE (R20 BRAIN-D1 2026-10-17): 31 → 32 — cờ kb_consult_log
-    expect(json.tuning.length).toBe(32)
+    // PIN UPDATE (R24-b Brain-D ghost 2026-10-17): 32 → 34 — 2 cờ kill-switch
+    // runtime_knowledge + knowledge_organ_strategy (§8.3/§8.5).
+    expect(json.tuning.length).toBe(36) // PIN UPDATE R24-c EVO-P4: 34 → 36
     expect(typeof json.live).toBe('object')
     expect(json.live['q-table'][0].label).toBe('Q entries')
     expect(json.generatedAt).toBeTruthy()

@@ -32,6 +32,30 @@ export interface StageColumn {
   activation: string
   /** Có phải cột khóa (input/output — không chỉnh được) */
   locked: boolean
+  /**
+   * R24-b §8.5.2 — nhóm đầu ra cho Brain-D (ghost topology 3 cụm MỘT quyết
+   * định): cột KỀ NHAU cùng nhóm dính liền như cũ, khác nhóm (kể cả
+   * undefined↔defined) cách nhau khe headGroupGap. Não A/B/C không set →
+   * output buildStageLayout GIỐNG HỆT trước thay đổi (r90 pass không sửa).
+   */
+  headGroup?: 'mode' | 'retrieval' | 'meta'
+  /** Nhãn tiếng Việt của nhóm (vd 'Chế độ vận dụng') — lấy từ cột ĐẦU nhóm */
+  groupLabel?: string
+}
+
+/**
+ * R24-b §8.5.2 — span 1 nhóm đầu ra trong layout (để component vẽ label
+ * nhóm + vạch accent màu). x1/x2 = toạ độ ngang cột ĐẦU/CUỐI nhóm (colX).
+ * Mảng rỗng khi KHÔNG cột nào có headGroup (não A/B/C — backward-compat).
+ */
+export interface StageHeadGroup {
+  id: 'mode' | 'retrieval' | 'meta'
+  label: string
+  /** Index cột đầu/cuối nhóm (inclusive) */
+  fromCol: number
+  toCol: number
+  x1: number
+  x2: number
 }
 
 export interface StageNeuron {
@@ -92,6 +116,12 @@ export const STAGE_LIMITS = {
   neuronRMax: 6.5,
   /** Sàn bán kính nơ-ron cột dày đặc */
   neuronRMin: 0.7,
+  // MỚI R24-b (BRAIN-D ghost §8.5.2 — BLUEPRINT-EVO-NAO): khoảng cách
+  // viewBox units giữa 2 cột KỀ NHAU mà headGroup KHÁC nhau (kể cả
+  // undefined↔defined) — khe này là chỗ vẽ vạch accent + label nhóm
+  // (mode=amber · retrieval=cyan · meta=fuchsia). Cột cùng nhóm dính liền
+  // như trước. Não A/B/C không có nhóm → khe không phát sinh (0 gap).
+  headGroupGap: 64,
 } as const
 
 // ==================== LAYOUT ====================
@@ -128,10 +158,54 @@ export const STAGE_LIMITS = {
  * toán cũ (đầu 0, cuối units−1, đơn điệu).
  */
 /**
+ * R24-b §8.5.2 — fallback nhãn nhóm khi cột đầu nhóm KHÔNG đặt groupLabel
+ * (copy §8.3 tiếng Việt — giữ pure, không thêm import).
+ */
+const HEAD_GROUP_FALLBACK_LABEL: Readonly<Record<StageHeadGroup['id'], string>> = {
+  mode: 'Chế độ vận dụng',
+  retrieval: 'Tham số truy xuất',
+  meta: 'Meta',
+}
+
+/**
+ * R24-b — dựng headGroups từ colX + headGroup từng cột: gom MẢNG CHẠY các
+ * cột cùng nhóm (theo thứ tự cột) → span fromCol..toCol + x1/x2 + label
+ * (groupLabel cột đầu nhóm, fallback §8.3). Thuần, tất định.
+ */
+function collectHeadGroups(
+  columns: readonly StageColumn[],
+  colX: readonly number[],
+): StageHeadGroup[] {
+  const out: StageHeadGroup[] = []
+  for (let i = 0; i < columns.length; ) {
+    const g = columns[i].headGroup
+    if (g === undefined) { i++; continue }
+    let j = i
+    while (j + 1 < columns.length && columns[j + 1].headGroup === g) j++
+    out.push({
+      id: g,
+      label: columns[i].groupLabel ?? HEAD_GROUP_FALLBACK_LABEL[g],
+      fromCol: i,
+      toCol: j,
+      x1: colX[i] ?? 0,
+      x2: colX[j] ?? (colX[i] ?? 0),
+    })
+    i = j + 1
+  }
+  return out
+}
+
+/**
  * R7 — widthOverride: độ rộng viewBox mong muốn (đơn vị viewBox). > 0 thì
  * DÙNG thay cho clamp(n×130, 340, 900) — để BrainStage tính width sao cho
  * tỉ lệ viewBox ≡ tỉ lệ khung chứa (SVG fill full box, không còn 2 dải đen
  * hai bên). Thuần + backward-compatible (không truyền → đúng giá trị cũ).
+ *
+ * R24-b §8.5.2 (BRAIN-D ghost — additive): StageColumn.headGroup chia cột
+ * đầu ra thành các NHÓM — cột kề nhau khác nhóm cách nhau headGroupGap
+ * (viewBox units); trả thêm headGroups[] (span + label) cho component vẽ
+ * vạch accent + label nhóm. KHÔNG cột nào có headGroup → mọi số giữ NGUYÊN
+ * như trước (r90 pin từng số — backward-compat tuyệt đối).
  */
 export function buildStageLayout(
   columns: readonly StageColumn[],
@@ -146,15 +220,32 @@ export function buildStageLayout(
   rowStep: number[]
   /** Bán kính nơ-ron TỪNG CỘT (clamp rowStep×0.36 vào [neuronRMin, neuronRMax]) */
   radius: number[]
+  /** R24-b §8.5.2 — span các nhóm đầu ra (rỗng khi không cột nào có headGroup) */
+  headGroups: StageHeadGroup[]
 } {
   const n = columns.length
-  if (n === 0) return { neurons: [], colX: [], height: 100, width: 340, rowStep: [], radius: [] }
+  if (n === 0) return { neurons: [], colX: [], height: 100, width: 340, rowStep: [], radius: [], headGroups: [] }
   const width = typeof widthOverride === 'number' && Number.isFinite(widthOverride) && widthOverride > 0
     ? widthOverride
     : Math.min(900, Math.max(340, n * 130))
   const marginX = 34
-  const stepX = n > 1 ? (width - 2 * marginX) / (n - 1) : 0
-  const colX = Array.from({ length: n }, (_, i) => marginX + i * stepX)
+  // ── R24-b §8.5.2: khe nhóm — giữa 2 cột KỀ NHAU khác headGroup (kể cả
+  // undefined↔defined) chèn thêm headGroupGap. KHÔNG nhóm nào → gapTotal 0
+  // → stepX/colX GIỐNG HỆT công thức cũ (backward-compat tuyệt đối, r90).
+  const groupBoundary: boolean[] = []
+  let gapTotal = 0
+  for (let i = 0; i < n - 1; i++) {
+    const diff = columns[i].headGroup !== columns[i + 1].headGroup
+    groupBoundary.push(diff)
+    if (diff) gapTotal += STAGE_LIMITS.headGroupGap
+  }
+  const stepX = n > 1 ? (width - 2 * marginX - gapTotal) / (n - 1) : 0
+  const colX: number[] = []
+  let groupExtra = 0
+  for (let i = 0; i < n; i++) {
+    colX.push(marginX + i * stepX + groupExtra)
+    if (i < n - 1 && groupBoundary[i]) groupExtra += STAGE_LIMITS.headGroupGap
+  }
 
   const topY = 26
   // Pass 1 — mỗi cột: display + rowStep thích ứng + colSpan + radius
@@ -196,7 +287,15 @@ export function buildStageLayout(
     }
   }
   const height = topY + contentSpan + 50
-  return { neurons, colX, height, width, rowStep, radius }
+  return {
+    neurons,
+    colX,
+    height,
+    width,
+    rowStep,
+    radius,
+    headGroups: collectHeadGroups(columns, colX),
+  }
 }
 
 // ==================== CẠNH THẲNG (Task 26 — bỏ cong) ====================

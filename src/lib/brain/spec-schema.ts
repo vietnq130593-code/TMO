@@ -232,6 +232,24 @@ export const BRAIN_DRAFT_RULES: Readonly<Record<BrainKey, BrainDraftRule>> = {
     editableWeights: false,
     editableLossTypes: [],
   },
+  // R24-b §8.5 — Brain-D "Tri Thức" GHOST: rule tồn tại để Record<BrainKey,…>
+  // hợp lệ + editor hiển thị hợp đồng đầu ra, nhưng KHÔNG có pipeline train
+  // tới D3 (BRAIN_TRAINABLE_KEYS không chứa 'knowledge' — nút train tự tắt,
+  // POST /api/brain/train từ chối). Loss 3 tầng MỘT quyết định (§8.3):
+  // Tầng 1 softmax 3 (CE) + Tầng 2/3 sigmoid 9+2 (BCE).
+  knowledge: {
+    brain: 'knowledge',
+    inputUnits: null, // kb-features: emb 2048 + cfg ~30 — chốt đếm chính thức khi D3 (§8.5.2)
+    outputUnits: 14, // 3 cụm một quyết định: 3 softmax + 9 sigmoid + 2 sigmoid (khóa — §8.3)
+    inputLabel: 'kb-features (emb 2048 + cfg ~30 — động)',
+    outputLabel: '3 cụm: 3·softmax + 9·sigmoid + 2·sigmoid (khóa)',
+    lossPerHead: [
+      { type: 'crossEntropy', weight: 0.5 }, // Tầng 1 — chế độ vận dụng
+      { type: 'bce', weight: 0.5 }, // Tầng 2+3 — tham số truy xuất + meta
+    ],
+    editableWeights: false,
+    editableLossTypes: [],
+  },
 }
 
 // ==================== VALIDATE ====================
@@ -265,7 +283,7 @@ export function validateBrainDraft(input: unknown, inputUnits: number | null, ou
   const rule = brain !== undefined && brain !== null && brain in BRAIN_DRAFT_RULES
     ? BRAIN_DRAFT_RULES[brain as BrainKey]
     : null
-  if (!rule) return { ok: false, errors: [`brain '${String(brain)}' không có trong menu (calibration_v3 | surrogate | policy)`] }
+  if (!rule) return { ok: false, errors: [`brain '${String(brain)}' không có trong menu (calibration_v3 | surrogate | policy | knowledge)`] }
 
   // ── hidden layers ──
   const hiddenIn = d.hidden
@@ -485,7 +503,9 @@ export function lossScalePerHead(weights: readonly number[]): number[] {
  */
 export function defaultDraftFor(brain: BrainKey): BrainDraftSpec {
   const rule = BRAIN_DRAFT_RULES[brain]
-  const hiddenUnits = brain === 'policy' ? 32 : 16
+  // R24-b: knowledge dùng 32 tanh (lớp ẨN ĐẦU của trunk 32/16 — §8.5.2);
+  // C precedent 32 tanh; A/B 16 tanh.
+  const hiddenUnits = brain === 'policy' || brain === 'knowledge' ? 32 : 16
   return {
     brain,
     hidden: [{ units: hiddenUnits, activation: 'tanh' }],

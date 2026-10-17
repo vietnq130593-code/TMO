@@ -78,17 +78,23 @@ export async function GET() {
     // ── Đếm nguồn thức tỉnh (mỗi nguồn fail-open độc lập) ──
     // R4-ĐIỀU TRA: qEntries dùng SUM(visits) (số lần updateQ — thoát deadlock
     // không gian trạng thái nhỏ; nhất quán gate train policy.ts).
-    const [evalResults, agentRuns, qEntries, verdicts] = await Promise.all([
+    // R24-b §8.5.3: 2 đếm KbConsultLog cho Brain-D "Tri Thức" — kbLogsTotal
+    // (ngưỡng D2 ≥100) + kbLogsWithOutcome (runId ≠ null — ngưỡng D3 ≥300).
+    const [evalResults, agentRuns, qEntries, verdicts, kbLogsTotal, kbLogsWithOutcome] = await Promise.all([
       safeCount(() => db.evalResult.count()),
       safeCount(() => db.agentRunRecord.count()),
       safeCount(() => import('@/lib/learning/q-table').then(m => m.countQLearningSignal())),
       safeCount(() => db.arbiterVerdict.count()),
+      safeCount(() => db.kbConsultLog.count()),
+      safeCount(() => db.kbConsultLog.count({ where: { runId: { not: null } } })),
     ])
     const counts: Record<string, number | null> = {
       evalResults,
       agentRuns,
       qEntries,
       verdicts,
+      kbLogsTotal,
+      kbLogsWithOutcome,
     }
 
     // ── BRAIN-UX §9.1-3: ước tính số chiều đầu vào brain động (surrogate) ──

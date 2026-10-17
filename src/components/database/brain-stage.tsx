@@ -64,6 +64,19 @@
  * animation ngoài viewport; prefers-reduced-motion → bản tĩnh; touch target
  * ≥ 44px; surrogate head tabs. Toán hình học thuần ở stage-geometry.ts (test
  * r90). Thu thập dữ liệu READ-ONLY — KHÔNG đụng pipeline/runtime.
+ *
+ * R24-b (BLUEPRINT-EVO-NAO §8.5 mốc a — ghost UI Brain-D "Tri Thức"): não
+ * thứ 4 hiển thị topology DỰ KIẾN từ registry NGAY từ D1 (chưa có model):
+ *  - 3 CỤM ĐẦU RA ĐỒNG THỜI (KHÔNG tab như SurrogateHead của Brain-B — vì
+ *    3 tầng action space là MỘT quyết định, một forward pass — §8.3/§8.5.2):
+ *    mode=amber · retrieval=cyan · meta=fuchsia — vạch accent + label xoay
+ *    dọc giữa khe nhóm (geometry headGroup additive, r90 giữ nguyên cho A/B/C);
+ *  - tooltip hover cụm = giải thích tầng (copy §8.3) · hover nơ-ron đầu ra =
+ *    tên chế độ/tham số (map TĨNH KNOWLEDGE_UNIT_NAMES — không API mới);
+ *  - chip "DỰ KIẾN — CHƯA HỌC" + dòng mixture λ Brain-C precedent
+ *    (λ = 1 − min(n/200, WilsonLB), bắt đầu 100% heuristic);
+ *  - mobile <NEURAL_DESKTOP_BREAKPOINT: 3 cụm đầu ra XẾP DỌC (§8.5.4) —
+ *    band compact KnowledgeGhostBand thay SVG 6 cột ngang (cuộn native).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -79,6 +92,10 @@ import {
   type StageColumn,
   type StageEdge,
 } from '@/lib/brain/stage-geometry'
+// R24-b §8.5.4 — breakpoint responsive của đồ thị neural (single-source
+// neural-layout — thuần hằng số, client-safe) dùng làm ngưỡng mobile cho
+// ghost topology Brain-D: <1024px → 3 cụm đầu ra XẾP DỌC.
+import { NEURAL_DESKTOP_BREAKPOINT } from '@/lib/learning/neural-layout'
 
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)'
 function usePrefersReducedMotion(): boolean {
@@ -91,6 +108,24 @@ function usePrefersReducedMotion(): boolean {
     return () => mq.removeEventListener('change', onChange)
   }, [])
   return reduced
+}
+
+/**
+ * R24-b §8.5.4 — matchMedia hook cho ghost mobile (pattern y hệt
+ * usePrefersReducedMotion): <NEURAL_DESKTOP_BREAKPOINT → 3 cụm đầu ra Brain-D
+ * XẾP DỌC (stage co theo NEURAL_DESKTOP_BREAKPOINT — blueprint §8.5.4).
+ * SSR/an toàn: mặc định false (desktop layout) tới khi đo được.
+ */
+function useMediaQueryBelow(bp: number): boolean {
+  const [matches, setMatches] = useState(false)
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${bp - 1}px)`)
+    const onChange = () => setMatches(mq.matches)
+    onChange()
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [bp])
+  return matches
 }
 
 /** 1 MLP đã serialize từ BrainModel.weightsJson (envelope numpy — audit A6). */
@@ -270,6 +305,158 @@ interface EdgeSignalEntry {
   gate: boolean
 }
 
+// ==================== R24-b — BRAIN-D "TRI THỨC" GHOST (§8.5 mốc a) ====================
+
+/**
+ * Màu accent 3 cụm đầu ra (§8.5.2 pin trong blueprint): mode=amber ·
+ * retrieval=cyan · meta=fuchsia — dùng cho vạch accent + label nhóm (desktop)
+ * và viền panel + chấm cụm (mobile xếp dọc).
+ */
+const HEAD_GROUP_ACCENT: Readonly<Record<'mode' | 'retrieval' | 'meta', string>> = {
+  mode: '#fbbf24', // amber-400
+  retrieval: '#22d3ee', // cyan-400
+  meta: '#e879f9', // fuchsia-400
+}
+
+/**
+ * Tooltip hover CỤM (copy §8.3 — nguồn BLUEPRINT-EVO-NAO, map TĨNH không API).
+ */
+const HEAD_GROUP_TOOLTIP: Readonly<Record<'mode' | 'retrieval' | 'meta', string>> = {
+  mode:
+    'Tầng 1 · Chế độ vận dụng (amber) — CÁCH KB được DÙNG để làm tác vụ (§8.3, trái tim Q7=(b)): context-block (đóng gói tri thức truy xuất thành khối context nạp thẳng — mặc định, như hôm nay) · structured-subgraph (xuất subgraph Neo4j có cấu trúc: nodes+edges+labels JSON để agent lập luận trên đồ thị) · traversal-plan (sinh kế hoạch duyệt multi-hop — bắt đầu từ node nào, mở quan hệ gì, dừng khi nào — agent TỰ đi từng bước bằng tool).',
+  retrieval:
+    'Tầng 2 · Tham số truy xuất (cyan) — §8.3: nguồn bật/tắt (neo4j · qdrant chunks · communities · memories) · topK · trọng số hybrid BM25+RRF · MMR λ · cross-encoder rerank on/off · độ sâu traversal.',
+  meta:
+    'Tầng 3 · Meta (fuchsia) — §8.3: skip (bỏ hẳn KB — task không cần) · writeback (ghi episode/lesson vào KB sau run).',
+}
+
+/**
+ * Tên unit đầu ra từng cụm — map TĨNH từ spec §8.3 (hover nơ-ron + legend
+ * mobile; không API mới). Tầng 2 đủ 9 tham số: 4 nguồn + topK + trọng số
+ * hybrid + MMR λ + rerank + độ sâu.
+ */
+const KNOWLEDGE_UNIT_NAMES: Readonly<Record<'mode' | 'retrieval' | 'meta', readonly string[]>> = {
+  mode: ['context-block', 'structured-subgraph', 'traversal-plan'],
+  retrieval: [
+    'nguồn neo4j',
+    'nguồn chunks',
+    'nguồn communities',
+    'nguồn memories',
+    'topK',
+    'trọng số hybrid',
+    'MMR λ',
+    'rerank',
+    'độ sâu traversal',
+  ],
+  meta: ['skip', 'writeback'],
+}
+
+/**
+ * Tiêu đề band mobile theo cụm (§8.5.4 xếp dọc — header panel + aria).
+ */
+const HEAD_GROUP_TITLE: Readonly<Record<'mode' | 'retrieval' | 'meta', string>> = {
+  mode: 'Tầng 1 · Chế độ vận dụng',
+  retrieval: 'Tầng 2 · Tham số truy xuất',
+  meta: 'Tầng 3 · Meta',
+}
+
+/**
+ * §8.5.4 — BAND MOBILE (compact, dùng trong ghost xếp dọc <1024px): 2
+ * micro-cột [trunk N → cụm M] với cạnh thẳng mảnh + chấm tím viền accent.
+ * groupId='trunk' = band trung tính (32→16 — không accent, không tên unit).
+ * KHÔNG dùng buildStageLayout (geometry v3 dùng ngân sách contentSpan 400
+ * cho đài lớn — quá cao cho band ~90px); đây là biến thể trình bày THUẦN
+ * cho ghost mobile: vẽ ĐÚNG từng unit, tất định, thuần.
+ */
+function KnowledgeGhostBand({
+  groupId,
+  trunkUnits,
+  clusterUnits,
+  activation,
+}: {
+  groupId: 'mode' | 'retrieval' | 'meta' | 'trunk'
+  trunkUnits: number
+  clusterUnits: number
+  activation: string
+}) {
+  const isTrunk = groupId === 'trunk'
+  const accent = isTrunk ? 'rgba(167,139,250,0.9)' : HEAD_GROUP_ACCENT[groupId]
+  const clusterNames = isTrunk ? null : KNOWLEDGE_UNIT_NAMES[groupId]
+  const W = 320
+  const topY = 10
+  const trunkX = 46
+  const clusterX = 274
+  const trunkStep = Math.min(4.6, 72 / Math.max(trunkUnits - 1, 1))
+  const clusterStep = Math.min(7.5, 72 / Math.max(clusterUnits - 1, 1))
+  const trunkH = (trunkUnits - 1) * trunkStep
+  const clusterH = (clusterUnits - 1) * clusterStep
+  const trunkY0 = topY + (Math.max(trunkH, clusterH) - trunkH) / 2
+  const clusterY0 = topY + (Math.max(trunkH, clusterH) - clusterH) / 2
+  const H = topY + Math.max(trunkH, clusterH) + 16
+  const trunkR = Math.max(1.1, trunkStep * 0.32)
+  const clusterR = Math.max(1.6, clusterStep * 0.34)
+  const edges: Array<{ x1: number; y1: number; x2: number; y2: number }> = []
+  for (let r1 = 0; r1 < trunkUnits; r1++) {
+    for (let r2 = 0; r2 < clusterUnits; r2++) {
+      edges.push({
+        x1: trunkX + trunkR,
+        y1: trunkY0 + r1 * trunkStep,
+        x2: clusterX - clusterR,
+        y2: clusterY0 + r2 * clusterStep,
+      })
+    }
+  }
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      className="h-auto w-full"
+      role="img"
+      aria-label={isTrunk
+        ? `Trunk chung: ${trunkUnits} tanh → ${clusterUnits} ${activation}`
+        : `${HEAD_GROUP_TITLE[groupId]}: trunk ${trunkUnits} tanh → ${clusterUnits} ${activation}`}
+    >
+      {/* cạnh thẳng mảnh (ghost — không tín hiệu thật nên không phát sáng giả) */}
+      {edges.map((e, i) => (
+        <line key={i} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} stroke="rgba(168,162,158,0.20)" strokeWidth={0.55} />
+      ))}
+      {/* trunk — chấm tím (phong cách quả cầu, nhạt — chưa học) */}
+      {Array.from({ length: trunkUnits }, (_, r) => (
+        <circle
+          key={`t-${r}`}
+          cx={trunkX}
+          cy={trunkY0 + r * trunkStep}
+          r={trunkR}
+          fill="rgba(168,85,247,0.14)"
+          stroke="rgba(167,139,250,0.5)"
+          strokeWidth={0.8}
+        />
+      ))}
+      {/* cụm đầu ra — chấm tím lõi + viền accent nhóm (title = tên unit §8.3) */}
+      {Array.from({ length: clusterUnits }, (_, r) => (
+        <circle
+          key={`c-${r}`}
+          cx={clusterX}
+          cy={clusterY0 + r * clusterStep}
+          r={clusterR}
+          fill="rgba(168,85,247,0.16)"
+          stroke={accent}
+          strokeWidth={1.0}
+        >
+          {clusterNames && (
+            <title>{`Unit ${r + 1}/${clusterUnits}: ${clusterNames[r] ?? '—'}`}</title>
+          )}
+        </circle>
+      ))}
+      <text x={trunkX} y={H - 3} textAnchor="middle" fontSize={6.5} className="fill-stone-500" style={{ fontFamily: 'inherit' }}>
+        {trunkUnits} tanh
+      </text>
+      <text x={clusterX} y={H - 3} textAnchor="middle" fontSize={6.5} style={{ fill: accent, fontFamily: 'inherit' }}>
+        {clusterUnits} · {activation}
+      </text>
+    </svg>
+  )
+}
+
 export function BrainStage({
   brain,
   draft,
@@ -347,6 +534,16 @@ export function BrainStage({
   //    trước khi đo / !tall / trình duyệt không có ResizeObserver → SVG giữ
   //    className cũ h-auto w-full (degrade đúng diện mạo BRAIN-LIVE). ──
   const [boxSize, setBoxSize] = useState<{ w: number; h: number } | null>(null)
+
+  // ── R24-b §8.5 — Brain-D "Tri Thức" GHOST: chưa có model tới D3 → hiển thị
+  //    topology DỰ KIẾN 100% từ registry (planned.layers precedent A/B/C
+  //    dormant). knowledgeGhost = đang xem planned (không bản active, không
+  //    preview draft); ghostStacked = mobile <1024px → 3 cụm đầu ra XẾP DỌC
+  //    (§8.5.4) thay SVG 6 cột ngang. ──
+  const isKnowledgeBrain = brain.key === 'knowledge'
+  const knowledgeGhost = isKnowledgeBrain && !weights && !(editorOn && draft)
+  const mobileViewport = useMediaQueryBelow(NEURAL_DESKTOP_BREAKPOINT)
+  const ghostStacked = knowledgeGhost && mobileViewport
 
   // ── Kéo trọng số bản active (READ-ONLY, fail-open planned/draft) ──
   // Task 26 B5: cache theo brain+head trong ref — đổi tab/não quay lại không
@@ -432,7 +629,8 @@ export function BrainStage({
       const cols: StageColumn[] = [
         { units: brain.inputDim ?? 8, display: 0, label: inLabel, activation: 'input', locked: true },
         ...draft.hidden.map(h => ({ units: h.units, display: 0, label: unitCountLabel(h.units), activation: h.activation, locked: false })),
-        { units: brain.key === 'policy' ? 3 : 1, display: 0, label: outLabel, activation: outAct, locked: true },
+        // R24-b: knowledge draft preview — output 14 unit (3+9+2 một quyết định)
+        { units: brain.key === 'policy' ? 3 : brain.key === 'knowledge' ? 14 : 1, display: 0, label: outLabel, activation: outAct, locked: true },
       ]
       return { columns: cols, activeLayers: null }
     }
@@ -448,6 +646,8 @@ export function BrainStage({
       return { columns: cols, activeLayers: layers }
     }
     // planned registry (đúng BrainArchDiagram cũ — fail-open)
+    // R24-b §8.5.2: giữ nguyên headGroup/groupLabel từ registry → geometry
+    // chèn khe nhóm + trả headGroups cho layer accent (chỉ knowledge set).
     const cols: StageColumn[] = brain.planned.layers.map((l, i) => {
       const useActivityInput = i === 0 && activityInputUnits > 0
       const units = useActivityInput
@@ -462,6 +662,8 @@ export function BrainStage({
         label,
         activation: l.activation || 'input',
         locked: true,
+        headGroup: l.headGroup,
+        groupLabel: l.groupLabel,
       }
     })
     return { columns: cols, activeLayers: null }
@@ -785,7 +987,9 @@ export function BrainStage({
   //    ctrl+wheel ĐỀU zoom (preventDefault, passive:false). ──
   useEffect(() => {
     const el = stageBoxRef.current
-    if (!el) return
+    // R24-b: ghost xếp dọc mobile KHÔNG zoom — trả lại cuộn native cho
+    // khung (khe panel dài hơn màn hình) thay vì preventDefault wheel.
+    if (!el || ghostStacked) return
     let anchor = { rX: 0.5, rY: 0.5 }
     const applyWheel = () => {
       wheelRafRef.current = null
@@ -815,7 +1019,7 @@ export function BrainStage({
       wheelRafRef.current = null
       pendingWheelRef.current = 0
     }
-  }, [baseView])
+  }, [baseView, ghostStacked])
 
   // ── ResizeObserver đo stageBox (BRAIN-TAB-3PHAN): chỉ chạy khi tall —
   //    stageBox cao xác định (h-[440px] md:520 xl:600) nên cần setSize SVG
@@ -1175,11 +1379,20 @@ export function BrainStage({
   const neuronLayer = useMemo(() => layout.neurons.map(n => {
     const isSel = inspector?.kind === 'neuron' && inspector.col === n.col && inspector.row === n.row
     const inten = fxOn ? neuronIntensity?.get(`${n.col}:${n.row}`) : undefined
+    // R24-b §8.5.2 — hover nơ-ron đầu ra knowledge → tên chế độ/tham số tương
+    // ứng (map TĨNH §8.3 — không API mới); não khác / cột thường: không title
+    const hg = columns[n.col]?.headGroup
+    const unitTitle = hg && n.realIndex !== null
+      ? KNOWLEDGE_UNIT_NAMES[hg][n.realIndex]
+      : undefined
     // BRAIN-TAB-3PHAN: r theo TỪNG CỘT (layout.radius — cột dày đặc
     // chấm nhỏ lại); selected phóng nhẹ nhưng không vượt neuronRMax
     const rC = layout.radius[n.col] ?? STAGE_LIMITS.neuronRMax
     return (
       <g key={`n-${n.col}-${n.row}`}>
+        {unitTitle !== undefined && (
+          <title>{`${HEAD_GROUP_TITLE[hg!]} · unit ${n.realIndex! + 1}: ${unitTitle}`}</title>
+        )}
         {/* Halo tím LUÔN có (phong cách quả cầu tím) — độ sáng theo inten
             thật; dormant chỉ còn quầng mờ 0.05 (không phát sáng giả) */}
         <circle
@@ -1199,7 +1412,7 @@ export function BrainStage({
         />
       </g>
     )
-  }), [layout.neurons, layout.radius, inspector, neuronIntensity, fxOn])
+  }), [layout.neurons, layout.radius, inspector, neuronIntensity, fxOn, columns])
 
   // ── Nhãn cột: bấm được khi editor bật (cột ẩn) ──
   const labelLayer = useMemo(() => columns.map((c, ci) => {
@@ -1233,8 +1446,56 @@ export function BrainStage({
     )
   }), [columns, layout.colX, layout.height, editorOn, onEditLayer])
 
+  // ── R24-b §8.5.2 — LỚP NHÓM ĐẦU RA (chỉ khi layout có headGroups —
+  //    knowledge ghost): vạch accent DỌC giữa khe 2 nhóm + label xoay -90°
+  //    (đọc từ dưới lên) + rect trong suốt NGUYÊN VÙNG CỤM mang <title>
+  //    tooltip giải thích tầng (copy §8.3) — rect render TRƯỚC cạnh/nơ-ron
+  //    (dưới cùng z-order) nên hover nơ-ron vẫn ra tên unit riêng của nó. ──
+  const groupLayer = useMemo(() => {
+    if (layout.headGroups.length === 0) return null
+    return layout.headGroups.map(g => {
+      const accent = HEAD_GROUP_ACCENT[g.id]
+      const prevX = g.fromCol > 0 ? layout.colX[g.fromCol - 1] : null
+      const lineX = prevX !== null ? (prevX + g.x1) / 2 : g.x1 - 12
+      const ys = layout.neurons.filter(nn => nn.col >= g.fromCol && nn.col <= g.toCol).map(nn => nn.y)
+      if (ys.length === 0) return null
+      const y1 = Math.min(...ys) - 14
+      const y2 = Math.max(...ys) + 14
+      const cy = (y1 + y2) / 2
+      return (
+        <g key={`hg-${g.id}`} role="presentation">
+          {/* vùng hover cả cụm — fill transparent (không che màu) nhưng vẫn
+              nhận pointer cho <title> tooltip §8.3; nằm dưới lớp nơ-ron/cạnh */}
+          <rect
+            x={g.x1 - 30} y={y1 - 6} width={g.x2 - g.x1 + 60} height={y2 - y1 + 12}
+            fill="transparent"
+          >
+            <title>{HEAD_GROUP_TOOLTIP[g.id]}</title>
+          </rect>
+          {/* vạch accent dọc giữa khe (đứt nét — đường phân nhóm) */}
+          <line
+            x1={lineX} y1={y1} x2={lineX} y2={y2}
+            stroke={accent} strokeWidth={1.3} strokeOpacity={0.6} strokeDasharray="4 3"
+          />
+          {/* label nhóm xoay -90° — đọc từ dưới lên, màu accent */}
+          <text
+            x={lineX - 4} y={cy} fontSize={8.5} textAnchor="middle" fill={accent}
+            transform={`rotate(-90 ${lineX - 4} ${cy})`}
+            style={{ fontFamily: 'inherit' }}
+          >
+            {g.label}
+          </text>
+        </g>
+      )
+    })
+  }, [layout.headGroups, layout.colX, layout.neurons])
+
   const lifecycleCls = brain.lifecycle === 'active' ? 'bs-glow-active' : 'bs-glow-dormant'
   const ariaLayers = columns.map(c => `${c.label} ${c.activation}`).join(' → ')
+  // R24-b — aria nhóm đầu ra cho ghost knowledge (§8.5.4 a11y: mô tả 3 cụm)
+  const ariaGroups = layout.headGroups.length > 0
+    ? ` — 3 cụm đầu ra MỘT quyết định: ${layout.headGroups.map(g => `${g.label} (${HEAD_GROUP_TITLE[g.id]})`).join(' · ')}`
+    : ''
   const chipTitle = activity
     ? `${activity.sourceLabel ?? 'không rõ nguồn dữ liệu'} · cập nhật ${new Date(activity.fetchedAt).toLocaleTimeString('vi-VN')}`
     : ''
@@ -1307,6 +1568,26 @@ export function BrainStage({
             ● ĐANG TRAIN
           </span>
         )}
+        {/* R24-b §8.5 — chip ghost Brain-D: chưa có model tới D3 (không có
+            weights/activity — không giả tín hiệu) + dòng mixture λ precedent
+            Brain-C (§8.3): bắt đầu 100% heuristic, nhường dần khi dữ liệu đủ */}
+        {isKnowledgeBrain && !weights && (
+          <span
+            role="status"
+            title="Ghost topology §8.5 — hiển thị spec khởi điểm NGAY từ D1 dù chưa có model; model thật chỉ sống sau BRAIN-D3 (≥300 log KbConsultLog có Outcome*). Không có weights/activity nên KHÔNG có điểm sáng/hạt giả."
+            className="rounded-md border border-amber-500/50 bg-amber-500/10 px-1.5 py-0.5 text-[9.5px] text-amber-300"
+          >
+            DỰ KIẾN — CHƯA HỌC
+          </span>
+        )}
+        {isKnowledgeBrain && !weights && (
+          <span
+            title="Mixture λ precedent Brain-C (§8.3): λ = 1 − min(n/200, WilsonLB) — bắt đầu 100% heuristic (pipeline CỨNG 4 lớp như hôm nay), não nhận quyền dần khi đủ dữ liệu; fail-open về heuristic mọi nhánh lỗi."
+            className="rounded-md border border-stone-700/70 px-1.5 py-0.5 text-[9.5px] text-stone-400"
+          >
+            λ = 1 − min(n/200, WilsonLB) · 100% heuristic
+          </span>
+        )}
         {activity && (
           <span
             title={chipTitle}
@@ -1332,13 +1613,62 @@ export function BrainStage({
         onDoubleClick={() => { setView(null) }}
         className={`relative overflow-hidden rounded-xl border ${fxOn ? 'border-stone-700/60' : 'border-slate-800/80'} bg-slate-950/60 ${fxOn ? lifecycleCls : ''} ${tall ? 'flex h-[440px] items-center justify-center md:h-[520px] xl:h-[600px]' : ''} ${zoomed ? (panning ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
       >
+        {/* ── R24-b §8.5.4 — GHOST XẾP DỌC MOBILE (<1024px): thay SVG 6 cột
+            ngang (quá chật trên ~375px) bằng 4 band dọc cuộn được: trunk
+            chung + 3 cụm đầu ra (mỗi cụm 1 panel accent + legend tên unit).
+            Thuần trình bày từ registry — KHÔNG dữ liệu giả (chip DỰ KIẾN ở
+            thanh công cụ phía trên). ── */}
+        {ghostStacked ? (
+          <div
+            className="dialog-scrollbar h-full w-full space-y-2 overflow-y-auto p-2"
+            role="img"
+            aria-label={`Kiến trúc dự kiến ${brain.title} (ghost §8.5): ${ariaLayers}${ariaGroups} — loss ${brain.planned.loss}`}
+          >
+            {/* Band 1 — trunk chung (input → 32 tanh → 16 tanh) */}
+            <div>
+              <p className="mb-0.5 text-[9px] font-semibold text-stone-300">
+                Trunk chung
+                <span className="ml-1 font-normal text-stone-500">emb 2048 + cfg ~30 → 32 tanh → 16 tanh (§8.5.2)</span>
+              </p>
+              <KnowledgeGhostBand groupId="trunk" trunkUnits={32} clusterUnits={16} activation="tanh" />
+            </div>
+            {/* Band 2-4 — 3 cụm đầu ra XẾP DỌC (một quyết định — §8.3) */}
+            {(['mode', 'retrieval', 'meta'] as const).map(gid => {
+              const accent = HEAD_GROUP_ACCENT[gid]
+              const names = KNOWLEDGE_UNIT_NAMES[gid]
+              const units = brain.planned.layers.find(l => l.headGroup === gid)?.units ?? names.length
+              const act = brain.planned.layers.find(l => l.headGroup === gid)?.activation ?? ''
+              return (
+                <div
+                  key={gid}
+                  className="rounded-lg border bg-slate-950/50 p-1.5"
+                  style={{ borderColor: `${accent}55` }}
+                >
+                  <p className="mb-0.5 text-[9px] font-semibold" style={{ color: accent }} title={HEAD_GROUP_TOOLTIP[gid]}>
+                    {HEAD_GROUP_TITLE[gid]}
+                    <span className="ml-1 font-normal text-stone-500">— {units} unit · {act} · một quyết định (§8.3)</span>
+                  </p>
+                  <KnowledgeGhostBand groupId={gid} trunkUnits={16} clusterUnits={units} activation={act} />
+                  {/* legend tên unit (touch không hover được title SVG) */}
+                  <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5">
+                    {names.map((nm, i) => (
+                      <span key={nm} className="text-[8.5px]" style={{ color: accent }} title={`Unit ${i + 1}/${names.length}: ${nm}`}>
+                        {i + 1}·{nm}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        ) : (
         <svg
           ref={svgRef}
           viewBox={`${effView.x} ${effView.y} ${effView.w} ${effView.h}`}
           className={`${fitSize ? 'block max-w-full' : 'h-auto w-full'} ${fxOn && !zoomed ? 'cursor-pointer' : ''}`}
           style={fitSize ? { width: fitSize.w, height: fitSize.h } : undefined}
           role="img"
-          aria-label={`Kiến trúc ${brain.title}: ${ariaLayers} — loss ${brain.planned.loss}`}
+          aria-label={`Kiến trúc ${brain.title}: ${ariaLayers}${ariaGroups} — loss ${brain.planned.loss}`}
           onClick={fxOn ? onSvgClick : undefined}
         >
           <defs>
@@ -1370,6 +1700,10 @@ export function BrainStage({
             </marker>
           </defs>
 
+          {/* R24-b §8.5.2 — LỚP NHÓM ĐẦU RA (render TRƯỚC cạnh/nơ-ron: rect
+              hover tooltip cụm nằm dưới z-order, không chắn bấm nơ-ron) */}
+          {groupLayer}
+
           {/* Cạnh THẲNG (Task 26 B1 — bỏ cong): đường tiến emerald GIỮ NGUYÊN
               (độ sáng theo |a×w| thật) + đường ngược VÀNG per-edge |δ×a| thật
               (song song lệch ±3, chỉ khi có gradient thật). Layer memo —
@@ -1382,13 +1716,19 @@ export function BrainStage({
           {/* Nhãn cột: bấm được khi editor bật (cột ẩn) */}
           {labelLayer}
         </svg>
+        )}
 
         {/* Task 26 B4 — canvas hạt tín hiệu thật: TRÊN SVG, pointer-events-none,
             DPR-scaled (resize lười trong tick theo stage box). rAF tắt khi
-            ngoài viewport / tab ẩn / reduced-motion — SVG tĩnh vẫn đẹp. */}
-        <canvas ref={canvasRef} aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full" />
+            ngoài viewport / tab ẩn / reduced-motion — SVG tĩnh vẫn đẹp.
+            (R24-b: ẩn trong ghost xếp dọc mobile — không hạt giả cho não chưa học) */}
+        {!ghostStacked && (
+          <canvas ref={canvasRef} aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full" />
+        )}
 
-        {/* Nút zoom/pan overlay (BRAIN-LIVE) — touch target 44px mobile */}
+        {/* Nút zoom/pan overlay (BRAIN-LIVE) — touch target 44px mobile
+            (R24-b: ẩn trong ghost xếp dọc mobile — không zoom, cuộn native) */}
+        {!ghostStacked && (
         <div
           className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 rounded-md border border-stone-700/70 bg-slate-950/80 p-0.5"
           role="group"
@@ -1426,7 +1766,16 @@ export function BrainStage({
             ⤢ Vừa
           </button>
         </div>
+        )}
       </div>
+
+      {/* R24-b §8.5 — chú thích ghost Brain-D dưới đài (3 cụm MỘT quyết định,
+          khác 3 TAB đầu Brain-B vì đó là 3 MLP riêng; ngưỡng thức tỉnh kép) */}
+      {isKnowledgeBrain && !weights && (
+        <p className="mt-0.5 text-[9px] leading-relaxed text-stone-600">
+          Brain-D ghost (§8.5): 3 cụm đầu ra là MỘT quyết định — một forward pass ra cả 3 tầng (khác 3 TAB của Brain-B vì đó là 3 MLP riêng, 3 lần train riêng). Chưa có weights/activity tới D3 — thức tỉnh D2 ≥100 log · D3 ≥300 log có Outcome* (đếm thật KbConsultLog, xem tiến độ ở phần 1).
+        </p>
+      )}
 
       {/* Task 26 B4 — chú thích 1 dòng dưới đài (chỉ thị user: quan sát chính xác) */}
       {fxOn && (

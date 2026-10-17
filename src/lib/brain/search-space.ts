@@ -19,7 +19,7 @@
  * Thuần hằng số + toán — KHÔNG import db (an toàn client bundle + bun:test,
  * doctrine #9 single-source: DRAFT_LIMITS/ACTIVATION_MENU/BRAIN_DRAFT_RULES/
  * validateBrainDraft/defaultDraftFor/normalizeLossWeights từ './spec-schema',
- * BrainKey/BRAIN_REGISTRY từ './registry').
+ * BrainKey/BRAIN_TRAINABLE_KEYS từ './registry').
  *
  * BẢN VẼ SLOT 96 CHIỀU (§3.1 — tổng 1+6+54+6+12+3+1+9+1+3 = 96; pin r100):
  * ```
@@ -41,8 +41,9 @@
  *          [86] batch · [87] l2 · [88] patience · [89] holdout · [90] clip ·
  *          [91] seed/SEED_MAX
  * [92]     inputDim/2048 (0 khi chưa biết — inputUnits null)
- * [93..95] brainKey one-hot 3 theo thứ tự BRAIN_REGISTRY
- *          (calibration_v3, surrogate, policy)
+ * [93..95] brainKey one-hot 3 theo thứ tự BRAIN_TRAINABLE_KEYS
+ *          (calibration_v3, surrogate, policy — R24-b: knowledge ghost §8.5
+ *          CHƯA vào search space, vào khi D3/EVO mở encoding §8.4)
  * ```
  *
  * QUYẾT ĐỊNH THIẾT KẾ (hiệu đính blueprint sẽ ghi ở nơi khác — mọi cái đều
@@ -96,7 +97,7 @@ import {
   type DraftHyper,
   type DraftLossHead,
 } from './spec-schema'
-import { BRAIN_REGISTRY, type BrainKey } from './registry'
+import { BRAIN_TRAINABLE_KEYS, type BrainKey } from './registry'
 
 // ==================== HẰNG SỐ (hardcode kèm nguồn — doctrine #1: §0 bảng phase + H3/H5/§4.1) ====================
 
@@ -125,8 +126,16 @@ export const ACT_ORDER: readonly ActivationName[] = ACTIVATION_MENU.map(e => e.n
 /** Thứ tự loss type cho one-hot [67..78] (menu mlp.ts losses). */
 export const LOSS_ORDER: readonly DraftLossHead['type'][] = ['bce', 'crossEntropy', 'mse', 'huber']
 
-/** Thứ tự brain cho one-hot [93..95] — single-source BRAIN_REGISTRY. */
-export const BRAIN_KEY_ORDER: readonly BrainKey[] = BRAIN_REGISTRY.map(b => b.key)
+/**
+ * Thứ tự brain cho one-hot [93..95] — R24-b: nguồn chuyển từ BRAIN_REGISTRY
+ * sang BRAIN_TRAINABLE_KEYS (vẫn 3 não theo đúng thứ tự cũ — r100 pin). Lý
+ * do: BRAIN_REGISTRY giờ có 4 não (thêm 'knowledge' ghost §8.5 R24-b) nhưng
+ * encoding 96-dim chỉ có 3 slot [93..95] — knowledge vào search space khi
+ * D3/EVO mở rộng encoding (§8.4 vùng [144..) — chưa tới). Nếu map nguyên
+ * registry, encodeDraft viết vec[96] = 1 (out-of-bounds, dài 97) vỡ hợp
+ * đồng SEARCH_ENCODING_DIM + r100.
+ */
+export const BRAIN_KEY_ORDER: readonly BrainKey[] = BRAIN_TRAINABLE_KEYS.map(k => k)
 
 /** 8 hàm activation hợp lệ ở LỚP ẨN (softmax cấm — audit B1; validateBrainDraft từ chối). */
 export const HIDDEN_ACT_ORDER: readonly ActivationName[] = ACT_ORDER.filter(a => a !== 'softmax')
@@ -529,4 +538,312 @@ function generateCandidate(rng: () => number, brain: BrainKey, rule: BrainDraftR
   }
 
   return { brain, hidden, lossPerHead: heads, hyper }
+}
+
+// ==================== EVO-P1 — ENCODING ADDITIVE 96 → 144 (§4.2 — R24-c) ====================
+//
+// Nguyên tắc ADDITIVE — BIJECTIVE TRONG MỖI VÙNG: 96 chiều đầu giữ nguyên
+// nghĩa HN-P1 (ứng viên thuần MLP decode y hệt trước — decodeEvoCandidate
+// gọi CHÍNH decodeDraft trên [0..95]); vùng mới [96..143] chỉ có nghĩa khi
+// slot layer-type ≠ 0. KHÔNG đụng hợp đồng 96-dim (SEARCH_ENCODING_DIM +
+// r100 pins giữ nguyên).
+//
+// BẢN VẼ SLOT VÙNG EVO (§4.2):
+//   [96..113]  layer-type one-hot 3 block × 6 loại (thứ tự EVO_BLOCK_TYPES:
+//              identity·mlp·attention·ssm·moe·gated) — block toàn 0 = identity
+//   [114..131] 6 thông số/block (mỗi block 6 slot, thứ tự:
+//              headDim · ssmN · expansion · moeK · dropout · residualScale)
+//              — headDim là tham số MẠNG: repair ép 3 slot headDim BẰNG NHAU
+//                (canonical) — mọi block dùng chung token dim
+//   [132..135] MoE toàn cục: k experts · router temperature · aux weight ·
+//              gating top-1/top-2 (block moe kế thừa k khi slot này set)
+//   [136..143] dự phòng 0 (recursive hybrid, weight-sharing… — §8.4 mở tiếp)
+
+import { EVO_BLOCK_TYPES, type EvoBlockType, type EvoBlockSpec } from './evo/blocks'
+import type { EvoCandidateSpec } from './evo/benchmark'
+
+/** §4.2 — chiều encoding EVO (96 HN-P1 + 48 vùng block). */
+export const EVO_ENCODING_DIM = 144
+/** §4.2 — 3 slot block. */
+export const EVO_BLOCK_COUNT = 3
+
+/** Chỉ số slot vùng EVO (nội bộ — r105 pin bằng số literal). */
+const EVO_SLOT = {
+  blockType: 96, // [96..113] 3 × 6 one-hot
+  blockParam: 114, // [114..131] 3 × 6 tham số
+  moeGlobal: 132, // [132..135]
+  reserved: 136, // [136..143] — LUÔN 0
+} as const
+
+/** Tham số block b slot p (p: 0 headDim · 1 ssmN · 2 expansion · 3 moeK · 4 dropout · 5 residualScale). */
+function evoParamSlot(b: number, p: number): number {
+  return EVO_SLOT.blockParam + b * 6 + p
+}
+
+// ── headDim 32/64/128: t < 1/3 → 32 · t < 2/3 → 64 · else 128 ──
+function headDimFromSlot(t: number): number {
+  return t < 1 / 3 ? 32 : t < 2 / 3 ? 64 : 128
+}
+function headDimToSlot(d: number): number {
+  return d <= 32 ? 0 : d <= 64 ? 0.5 : 1
+}
+
+// ── ssmN 8/16 ──
+function ssmNFromSlot(t: number): number {
+  return t < 0.5 ? 8 : 16
+}
+function ssmNToSlot(n: number): number {
+  return n <= 8 ? 0 : 1
+}
+
+/**
+ * Pad encoding HN-P1 96-dim → EVO 144-dim (F4/0.5 — crossover cha legacy ×
+ * cha EVO hợp lệ nhờ additive): vùng [96..143] toàn 0 → decode ra ứng viên
+ * thuần MLP (mọi block identity).
+ */
+export function padEvo96to144(vec96: readonly number[]): number[] {
+  if (vec96.length !== SEARCH_ENCODING_DIM) {
+    throw new Error(`padEvo96to144: cần đúng ${SEARCH_ENCODING_DIM} chiều, nhận ${vec96.length}`)
+  }
+  return [...vec96, ...new Array<number>(EVO_ENCODING_DIM - SEARCH_ENCODING_DIM).fill(0)]
+}
+
+/**
+ * REPAIR one-hot + canonical hoá encoding 144 (F8/0.5): sau mutation/
+ * crossover, slot one-hot có thể nhiều hot/thiếu hot và 3 slot headDim có
+ * thể lệch nhau. Repair: argmax → đúng 1 hot (tie → chỉ số thấp, tất định);
+ * ép 3 slot headDim = slot block ĐẦU (canonical); kẹp tham số về miền rời
+ * rạc đúng; reserved = 0. THUẦN — decode LUÔN ra ứng viên valid.
+ */
+export function repairEvoEncoding(vec: readonly number[]): number[] {
+  if (vec.length !== EVO_ENCODING_DIM) {
+    throw new Error(`repairEvoEncoding: cần đúng ${EVO_ENCODING_DIM} chiều, nhận ${vec.length}`)
+  }
+  const out = [...vec]
+  // one-hot block-type: argmax → 1 hot (toàn 0 → identity: hot index 0)
+  for (let b = 0; b < EVO_BLOCK_COUNT; b++) {
+    const base = EVO_SLOT.blockType + b * EVO_BLOCK_TYPES.length
+    let best = 0
+    let bestV = -1
+    for (let j = 0; j < EVO_BLOCK_TYPES.length; j++) {
+      const v = out[base + j]
+      if (typeof v === 'number' && Number.isFinite(v)) out[base + j] = 0
+      if (typeof v === 'number' && Number.isFinite(v) && v > bestV) {
+        bestV = v
+        best = j
+      }
+    }
+    out[base + (bestV > 0 ? best : 0)] = 1
+  }
+  // canonical headDim: 3 slot bằng slot block đầu
+  const hd = headDimFromSlot(clamp01(out[evoParamSlot(0, 0)]))
+  for (let b = 0; b < EVO_BLOCK_COUNT; b++) out[evoParamSlot(b, 0)] = headDimToSlot(hd)
+  // kẹp tham số rời rạc + [0,1]
+  for (let b = 0; b < EVO_BLOCK_COUNT; b++) {
+    out[evoParamSlot(b, 1)] = ssmNToSlot(ssmNFromSlot(clamp01(out[evoParamSlot(b, 1)])))
+    out[evoParamSlot(b, 2)] = clamp01(out[evoParamSlot(b, 2)]) // expansion decode round(1+3t)
+    out[evoParamSlot(b, 3)] = clamp01(out[evoParamSlot(b, 3)])
+    out[evoParamSlot(b, 4)] = clamp01(out[evoParamSlot(b, 4)]) // dropout metadata
+    out[evoParamSlot(b, 5)] = clamp01(out[evoParamSlot(b, 5)])
+  }
+  for (let j = 0; j < 4; j++) out[EVO_SLOT.moeGlobal + j] = clamp01(out[EVO_SLOT.moeGlobal + j])
+  for (let j = 0; j < 8; j++) out[EVO_SLOT.reserved + j] = 0
+  return out
+}
+
+/**
+ * Decode vector 144 → EvoCandidateSpec (đầu vào NÊN đã repair — hàm vẫn tổng
+ * qua argmax tự canonical). Phần MLP: gọi CHÍNH decodeDraft trên [0..95]
+ * (bijective vùng HN-P1 — ứng viên thuần MLP y hệt HN).
+ */
+export function decodeEvoCandidate(vec: readonly number[], brain: BrainKey): EvoCandidateSpec {
+  if (!Array.isArray(vec) || vec.length !== EVO_ENCODING_DIM) {
+    throw new Error(`decodeEvoCandidate: cần đúng ${EVO_ENCODING_DIM} chiều, nhận ${Array.isArray(vec) ? vec.length : typeof vec}`)
+  }
+  const canonical = repairEvoEncoding(vec)
+  const draft = decodeDraft(canonical.slice(0, SEARCH_ENCODING_DIM), brain)
+  const blocks: EvoCandidateSpec['blocks'] = []
+  const headDimSlotVal = canonical[evoParamSlot(0, 0)]
+  for (let b = 0; b < EVO_BLOCK_COUNT; b++) {
+    const base = EVO_SLOT.blockType + b * EVO_BLOCK_TYPES.length
+    let best = 0
+    let bestV = -1
+    for (let j = 0; j < EVO_BLOCK_TYPES.length; j++) {
+      if (canonical[base + j] > bestV) {
+        bestV = canonical[base + j]
+        best = j
+      }
+    }
+    const type = EVO_BLOCK_TYPES[best] as EvoBlockType
+    const spec: EvoBlockSpec = {
+      type,
+      headDim: headDimFromSlot(headDimSlotVal),
+      ssmN: ssmNFromSlot(canonical[evoParamSlot(b, 1)]),
+      expansion: Math.round(1 + 3 * clamp01(canonical[evoParamSlot(b, 2)])),
+      moeK: Math.round(2 + 2 * clamp01(canonical[evoParamSlot(b, 3)])),
+      dropout: Math.round(0.3 * clamp01(canonical[evoParamSlot(b, 4)]) * 1000) / 1000,
+      residualScale: Math.round((0.5 + 1.5 * clamp01(canonical[evoParamSlot(b, 5)])) * 100) / 100,
+    }
+    blocks.push(spec)
+  }
+  // MoE toàn cục [132..135] — block moe kế thừa k experts (slot top-1 ép k=1)
+  const kExperts = Math.round(2 + 2 * clamp01(canonical[EVO_SLOT.moeGlobal]))
+  const routerTemp = Math.round((0.5 * Math.exp(Math.log(4) * clamp01(canonical[EVO_SLOT.moeGlobal + 1]))) * 1000) / 1000
+  const auxWeight = Math.round((0.005 * Math.exp(Math.log(10) * clamp01(canonical[EVO_SLOT.moeGlobal + 2]))) * 100000) / 100000
+  const gatingTop2 = canonical[EVO_SLOT.moeGlobal + 3] >= 0.5
+  for (const blk of blocks) {
+    if (blk.type === 'moe' && !gatingTop2) {
+      blk.moeK = 1 // gating top-1: mỗi token 1 expert (k=1)
+    }
+  }
+  return {
+    head: {
+      hidden: draft.hidden.map(h => ({ units: h.units, activation: h.activation })),
+      hyper: {
+        lr: draft.hyper.lr,
+        l2: draft.hyper.l2,
+        epochs: draft.hyper.epochs,
+        batch: draft.hyper.batch,
+        patience: draft.hyper.patience,
+      },
+    },
+    blocks,
+    headDim: headDimFromSlot(headDimSlotVal),
+    moeGlobal: { kExperts, routerTemp, auxWeight },
+  }
+}
+
+/**
+ * Encode EvoCandidateSpec → vector 144 (bijective trên dạng canonical —
+ * encode∘repair∘decode = identity). Phần MLP: CHÍNH encodeDraft.
+ */
+export function encodeEvoCandidate(
+  spec: EvoCandidateSpec,
+  brain: BrainKey,
+  inputUnits: number | null,
+): number[] {
+  const draft: BrainDraftSpec = {
+    brain,
+    hidden: spec.head.hidden.map(h => ({ units: h.units, activation: h.activation as ActivationName })),
+    lossPerHead: [...BRAIN_DRAFT_RULES[brain].lossPerHead],
+    hyper: {
+      optimizer: 'adam',
+      lr: spec.head.hyper.lr,
+      epochs: spec.head.hyper.epochs,
+      batch: spec.head.hyper.batch,
+      l2: spec.head.hyper.l2,
+      patience: spec.head.hyper.patience,
+      holdout: DRAFT_LIMITS.holdoutMax, // trainer EVO tự dùng 0.15 — slot giữ max trung lập
+      clip: DEFAULT_CLIP_SLOT,
+      seed: 42,
+    },
+  }
+  const vec96 = encodeDraft(draft, inputUnits)
+  const vec = padEvo96to144(vec96) // pad TRƯỚC — viết slot block sau (mảng 96 không tự giãn)
+  // blocks — pad lên 3 slot (thiếu = identity)
+  for (let b = 0; b < EVO_BLOCK_COUNT; b++) {
+    const blk = spec.blocks[b] ?? { type: 'identity' as EvoBlockType }
+    const base = EVO_SLOT.blockType + b * EVO_BLOCK_TYPES.length
+    const ti = EVO_BLOCK_TYPES.indexOf(blk.type)
+    vec[base + (ti >= 0 ? ti : 0)] = 1
+    vec[evoParamSlot(b, 0)] = headDimToSlot(spec.headDim)
+    vec[evoParamSlot(b, 1)] = ssmNToSlot(blk.ssmN ?? 8)
+    vec[evoParamSlot(b, 2)] = clamp01((((blk.expansion ?? 1) - 1) / 3))
+    vec[evoParamSlot(b, 3)] = clamp01((((blk.moeK ?? 2) - 2) / 2))
+    vec[evoParamSlot(b, 4)] = clamp01((blk.dropout ?? 0) / 0.3)
+    vec[evoParamSlot(b, 5)] = clamp01(((blk.residualScale ?? 1) - 0.5) / 1.5)
+  }
+  const g = spec.moeGlobal ?? { kExperts: 2, routerTemp: 1, auxWeight: 0.01 }
+  vec[EVO_SLOT.moeGlobal] = clamp01((g.kExperts - 2) / 2)
+  vec[EVO_SLOT.moeGlobal + 1] = clamp01(Math.log(g.routerTemp / 0.5) / Math.log(4))
+  vec[EVO_SLOT.moeGlobal + 2] = clamp01(Math.log(g.auxWeight / 0.005) / Math.log(10))
+  vec[EVO_SLOT.moeGlobal + 3] = (g.kExperts ?? 2) >= 2 ? 1 : 0
+  // reserved đã 0 (padEvo96to144 ở trên)
+  return vec
+}
+
+/** Slot clip trung lập (DRAFT_LIMITS.clipMax — decode giữ nguyên giá trị max). */
+const DEFAULT_CLIP_SLOT = 1
+
+/**
+ * Sampler ứng viên EVO 144 — TẤT ĐỊNH theo rng (H4). Phần MLP: CHÍNH
+ * sampleCandidate; vùng block: mỗi block 50% identity (CPU tiết kiệm) /
+ * 50% uniform 5 loại còn lại + tham số uniform; MoE toàn cục uniform; sau
+ * đó REPAIR canonical. Trả ĐÃ REPAIR (decode luôn valid).
+ */
+export function sampleEvoCandidate(rng: () => number, brain: BrainKey, inputUnits: number | null): number[] {
+  const base = sampleCandidate(rng, brain, inputUnits)
+  const vec = padEvo96to144(encodeDraft(base.spec, inputUnits))
+  for (let b = 0; b < EVO_BLOCK_COUNT; b++) {
+    const typeBase = EVO_SLOT.blockType + b * EVO_BLOCK_TYPES.length
+    for (let j = 0; j < EVO_BLOCK_TYPES.length; j++) vec[typeBase + j] = 0
+    if (rng() < 0.5) {
+      vec[typeBase] = 1 // identity
+    } else {
+      const pick = 1 + Math.floor(rng() * (EVO_BLOCK_TYPES.length - 1)) // 1..5 (không identity)
+      vec[typeBase + pick] = 1
+    }
+    vec[evoParamSlot(b, 0)] = headDimToSlot([32, 64, 128][Math.floor(rng() * 3)])
+    vec[evoParamSlot(b, 1)] = ssmNToSlot(rng() < 0.5 ? 8 : 16)
+    vec[evoParamSlot(b, 2)] = rng()
+    vec[evoParamSlot(b, 3)] = rng()
+    vec[evoParamSlot(b, 4)] = rng() * 0.3
+    vec[evoParamSlot(b, 5)] = rng()
+  }
+  vec[EVO_SLOT.moeGlobal] = rng()
+  vec[EVO_SLOT.moeGlobal + 1] = rng()
+  vec[EVO_SLOT.moeGlobal + 2] = rng()
+  vec[EVO_SLOT.moeGlobal + 3] = rng() < 0.5 ? 0 : 1
+  return repairEvoEncoding(vec)
+}
+
+/**
+ * Mutation encoding 144 (toán tử di truyền — evolve.ts §4.5 điều phối): mỗi
+ * slot liên tục cộng N(0, 0.15) kẹp [0,1] với xác suất rate; slot one-hot
+ * resample nguyên nhóm với xác suất rate/2 (giữ thưa); reserved = 0. Sau
+ * đó REPAIR (F8). Thuần + tất định theo rng.
+ */
+export function mutateEvo(vec: readonly number[], rng: () => number, rate = 0.15): number[] {
+  const out = [...vec]
+  // one-hot block-type: resample cả nhóm
+  for (let b = 0; b < EVO_BLOCK_COUNT; b++) {
+    if (rng() < rate / 2) {
+      const base = EVO_SLOT.blockType + b * EVO_BLOCK_TYPES.length
+      for (let j = 0; j < EVO_BLOCK_TYPES.length; j++) out[base + j] = 0
+      if (rng() < 0.5) out[base] = 1
+      else out[base + 1 + Math.floor(rng() * (EVO_BLOCK_TYPES.length - 1))] = 1
+    }
+  }
+  // slot liên tục (tham số block + moe global + phần MLP hyper)
+  for (let i = 0; i < EVO_ENCODING_DIM; i++) {
+    if (i >= EVO_SLOT.reserved) break
+    // bỏ qua nhóm one-hot MLP activation/loss/brain + block-type (đã xử lý)
+    const inMlpOneHot = (i >= SLOT.actOneHot && i < SLOT.actOneHot + 54) || (i >= SLOT.lossOneHot && i < SLOT.lossOneHot + 12) || (i >= SLOT.brainOneHot)
+    const inBlockOneHot = i >= EVO_SLOT.blockType && i < EVO_SLOT.blockType + 18
+    if (inMlpOneHot || inBlockOneHot) continue
+    if (rng() < rate) {
+      // xấp xỉ normal qua Box-Muller thu gọn (tất định theo rng)
+      const u1 = Math.max(1e-12, rng())
+      const u2 = rng()
+      const g = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2)
+      out[i] = clamp01(out[i] + g * 0.15)
+    }
+  }
+  return repairEvoEncoding(out)
+}
+
+/**
+ * Crossover 2 cha (§4.5 + F4/0.5): mỗi slot lấy từ cha A hoặc B theo đồng
+ * xu seeded; cha 96-dim legacy → pad 0 lên 144 TRƯỚC (vùng block toàn 0 =
+ * thuần MLP — hợp lệ nhờ additive). Sau đó REPAIR.
+ */
+export function crossoverEvo(a: readonly number[], b: readonly number[], rng: () => number): number[] {
+  const pa = a.length === SEARCH_ENCODING_DIM ? padEvo96to144(a) : a
+  const pb = b.length === SEARCH_ENCODING_DIM ? padEvo96to144(b) : b
+  if (pa.length !== EVO_ENCODING_DIM || pb.length !== EVO_ENCODING_DIM) {
+    throw new Error(`crossoverEvo: cần encoding 96/144, nhận ${pa.length} × ${pb.length}`)
+  }
+  const out = new Array<number>(EVO_ENCODING_DIM)
+  for (let i = 0; i < EVO_ENCODING_DIM; i++) out[i] = rng() < 0.5 ? pa[i] : pb[i]
+  return repairEvoEncoding(out)
 }

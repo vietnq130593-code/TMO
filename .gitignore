@@ -296,3 +296,7 @@ agent-runs/
 #   bun run scripts/mission-dispatch.ts --directive <file> --profile <id> --title "<tên>"
 !/scripts/mission-dispatch.ts
 .oc-cli-ws/
+# R24-c: backup SQLite tải từ R2 để dựng benchmark fixtures (scratch/r24c-r2-fetch*.ts
+# tải lại được bất cứ lúc nào — không track 90MB dữ liệu); ảnh chụp verify UI
+scratch/*.db
+scratch/r24*.png

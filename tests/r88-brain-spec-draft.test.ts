@@ -598,21 +598,30 @@ describe('r88 · I/J API spec-draft + bất biến Draft ≠ runtime (§9.1-1) �
     expect(await db.brainSpecDraft.count()).toBe(before) // không ghi bậy
   })
 
-  test('GET → drafts đủ 3 brain + defaults đủ 3 (default cho UI fallback)', async () => {
+  test('GET → drafts đủ 4 brain + defaults đủ 4 (default cho UI fallback)', async () => {
     const res = await GET()
     expect(res.status).toBe(200)
     const json = await res.json()
-    expect(json.drafts).toHaveLength(3)
+    // PIN UPDATE (R24-b Brain-D ghost §8.5): 3 → 4 — thêm 'knowledge' (rule
+    // ghost trong BRAIN_DRAFT_RULES; chưa từng PUT nên spec null — UI fallback
+    // default, tiền lệ surrogate/policy chưa lưu).
+    expect(json.drafts).toHaveLength(4)
     expect(json.drafts.map((d: { brain: string }) => d.brain).sort()).toEqual(
-      ['calibration_v3', 'policy', 'surrogate'],
+      ['calibration_v3', 'knowledge', 'policy', 'surrogate'],
     )
+    const kn = json.drafts.find((d: { brain: string }) => d.brain === 'knowledge')
+    expect(kn.spec).toBeNull()
     // Brain đã PUT (surrogate) có nháp; 2 brain kia null (UI fallback default)
     const s = json.drafts.find((d: { brain: string }) => d.brain === 'surrogate')
     expect(s.spec).not.toBeNull()
     const a = json.drafts.find((d: { brain: string }) => d.brain === 'calibration_v3')
     expect(a.spec).toBeNull()
-    // Defaults đủ 3 brain — đúng defaultDraftFor (single-source)
-    expect(Object.keys(json.defaults).sort()).toEqual(['calibration_v3', 'policy', 'surrogate'])
+    // Defaults đủ 4 brain — đúng defaultDraftFor (single-source)
+    // PIN UPDATE (R24-b Brain-D ghost §8.5): 3 → 4 — BRAIN_DRAFT_RULES thêm
+    // rule 'knowledge' (Record<BrainKey,…> buộc; ghost chưa trainable tới D3
+    // nhưng editor cần hợp đồng đầu ra 3 cụm 14 unit).
+    expect(Object.keys(json.defaults).sort()).toEqual(['calibration_v3', 'knowledge', 'policy', 'surrogate'])
+    expect(json.defaults.knowledge).toEqual(defaultDraftFor('knowledge'))
     expect(json.defaults.surrogate).toEqual(defaultDraftFor('surrogate'))
   })
 

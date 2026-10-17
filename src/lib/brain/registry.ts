@@ -25,7 +25,13 @@
 
 // ==================== TYPES ====================
 
-export type BrainKey = 'calibration_v3' | 'surrogate' | 'policy'
+/**
+ * R24-b (§8.5 mốc a — ghost UI): thêm 'knowledge' = Brain-D "Tri Thức" —
+ * xuất hiện trong UI NGAY từ D1 dưới dạng GHOST (topology dự kiến + tiến
+ * độ thức tỉnh kép), KHÔNG có model/pipeline train tới D3 (§8.3). Mọi đường
+ * runtime (train/weights/activity) tự fail-open cho key này tới lúc ấy.
+ */
+export type BrainKey = 'calibration_v3' | 'surrogate' | 'policy' | 'knowledge'
 
 /**
  * Vòng đời brain — hiển thị NGỦ / THỨC TỈNH / ACTIVE:
@@ -43,6 +49,15 @@ export interface BrainLayerSpec {
   activation: string
   /** Nhãn hiển thị thay vì số unit (vd "×|A|") */
   unitsLabel?: string
+  /**
+   * R24-b §8.5.2 — nhóm đầu ra cho Brain-D (3 cụm MỘT quyết định): cột cùng
+   * nhóm dính liền trong BrainStage, khác nhóm cách nhau khe + label + màu
+   * accent (mode=amber · retrieval=cyan · meta=fuchsia). Não A/B/C không set
+   * (additive — geometry cũ giữ nguyên từng số, r90 pass không sửa).
+   */
+  headGroup?: 'mode' | 'retrieval' | 'meta'
+  /** Nhãn tiếng Việt của nhóm (vd "Chế độ vận dụng") — lấy từ cột ĐẦU nhóm */
+  groupLabel?: string
 }
 
 /** Điều kiện thức tỉnh — đếm thật từ bảng SQLite tương ứng. */
@@ -72,6 +87,13 @@ export interface BrainSpec {
   flag: string
   /** Key tuning-store của cờ (chỉ brain đã có cờ thật trong TUNING_SPECS) */
   flagTuningKey?: string
+  /**
+   * R24-b §8.5.1 — cờ kill-switch PHỤ (badge thêm ở SECTION 1): dùng khi một
+   * brain có nhiều cờ (Brain-D: runtime_knowledge chính + cờ organ riêng
+   * knowledge_organ_strategy — §8.3 "kill-switch 2 cờ"). Rỗng/undefined với
+   * não A/B/C (mỗi não 1 cờ — giữ diện mạo cũ).
+   */
+  extraFlagTuningKeys?: string[]
   /** Các chế độ đầu vào ablation (blueprint §3.2) */
   inputModes: string[]
   defaultInputMode: string
@@ -270,6 +292,56 @@ export const BRAIN_REGISTRY: readonly BrainSpec[] = [
         label: 'Phán quyết trọng tài',
         min: 50,
         source: 'BLUEPRINT-BRAIN §2 — composite reward',
+      },
+    ],
+  },
+  {
+    // R24-b — BRAIN-D "Tri Thức" (BLUEPRINT-EVO-NAO §8.5 mốc (a) ghost UI):
+    // não thứ 4 hiển thị NGAY từ D1 dù chưa có model — ghost topology + tiến
+    // độ thức tỉnh KÉP (log tổng ≥100 → D2 · log có Outcome* ≥300 → D3).
+    // KHÔNG nằm trong BRAIN_TRAINABLE_KEYS tới D3 (nút train tự tắt); mọi
+    // đường runtime fail-open về heuristic CỨNG 4 lớp như hôm nay (§8.3).
+    key: 'knowledge',
+    name: 'Tri Thức',
+    title: 'Brain-D · Tri Thức (Knowledge Policy Head)',
+    role:
+      'Policy head quyết định CÁCH dùng KB trong từng tác vụ — chế độ vận dụng (context-block/structured-subgraph/traversal-plan) + tham số truy xuất + meta (skip/writeback). D1 LOG-ONLY đã sống; thức tỉnh D2 (≥100 log) / D3 (≥300 log có Outcome*).',
+    phase: 'BRAIN-D3',
+    flag: 'RUNTIME_KNOWLEDGE',
+    flagTuningKey: 'runtime_knowledge',
+    // §8.3 "kill-switch 2 cờ": cờ organ riêng cho Tầng 1 chế độ vận dụng
+    extraFlagTuningKeys: ['knowledge_organ_strategy'],
+    inputModes: ['kb-features'],
+    defaultInputMode: 'kb-features',
+    planned: {
+      layers: [
+        // input ≈ emb 2048 + ~30 chiều cfg (taskType hash-bucket · intent 1-hot 4
+        // · trạng thái KB · lịch sử consult — §8.5.2, chốt đếm chính thức khi D3)
+        { units: 0, activation: '', unitsLabel: 'emb 2048 + cfg ~30' },
+        // trunk chung 2 lớp ẩn (tiền lệ Brain-C 32 tanh)
+        { units: 32, activation: 'tanh' },
+        { units: 16, activation: 'tanh' },
+        // 3 cụm đầu ra — MỘT quyết định, một forward pass (§8.3 action space)
+        { units: 3, activation: 'softmax', headGroup: 'mode', groupLabel: 'Chế độ vận dụng' },
+        { units: 9, activation: 'sigmoid', headGroup: 'retrieval', groupLabel: 'Tham số truy xuất' },
+        { units: 2, activation: 'sigmoid', headGroup: 'meta', groupLabel: 'Meta' },
+      ],
+      loss: 'CE + BCE (3 tầng — một quyết định)',
+    },
+    signals: [
+      {
+        key: 'kbLogsTotal',
+        table: 'KbConsultLog',
+        label: 'Log KB consult (ngưỡng D2)',
+        min: 100,
+        source: 'BLUEPRINT-EVO-NAO §8.1 — D2 cần ≥100 log',
+      },
+      {
+        key: 'kbLogsWithOutcome',
+        table: 'KbConsultLog (runId ≠ null)',
+        label: 'Log có Outcome* (ngưỡng D3)',
+        min: 300,
+        source: 'BLUEPRINT-EVO-NAO §8.1 — D3 cần ≥300 log có Outcome*',
       },
     ],
   },

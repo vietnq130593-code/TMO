@@ -1,3 +1,7 @@
+// R24-b: export {} — thành ES module (top-level await hợp lệ — lỗi tsc
+// TS1375 pre-existing từ R22, file scratch bun chạy được nhưng tsc chặn)
+export {}
+
 // Verify cấu hình phòng sau restore: Neo4j Aura + R2 + NIM (một script, fail độc lập)
 async function verifyNeo4j() {
   const neo4j = (await import('neo4j-driver')).default

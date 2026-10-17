@@ -9,9 +9,10 @@
  * nút chọn Brain cũng như thông tin liên quan brain, Có thể thêm lớp cũng như
  * chỉnh số nơ ron mỗi lớp". Studio bỏ dropdown + editor DỌC dài chiếm cột
  * trái, nay gọn thành 4 khối ngang:
- *  (1) Segmented 3 nút chọn não (grid-cols-1 sm:grid-cols-3): dot lifecycle
- *      + tên hiệu amber + badge NGỦ/THỨC TỈNH/ACTIVE + chuỗi mẫu signals
- *      ngắn current/min — bấm trực tiếp (aria-pressed), không còn listbox.
+ *  (1) Segmented chọn não (grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 — R24-b
+ *      4 não sau Brain-D ghost §8.5): dot lifecycle + tên hiệu amber + badge
+ *      NGỦ/THỨC TỈNH/ACTIVE + chuỗi mẫu signals ngắn current/min — bấm
+ *      trực tiếp (aria-pressed), không còn listbox.
  *  (2) Dòng thông tin não đang chọn: lifecycle · in: inputMode · inputDim ·
  *      role · models summary (★v{version} · inputMode / chưa train).
  *      Badge phase + flag=giá trị runtime giữ ở brain-tab (18-c) — studio
@@ -200,8 +201,10 @@ export function BrainStudio({
 
   return (
     <div className="space-y-2.5" role="group" aria-label="Brain Studio — chọn não + editor kiến trúc">
-      {/* ── Khối 1 · Segmented 3 nút chọn não (18-b — thay dropdown UX-1) ── */}
-      <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3" role="group" aria-label="Chọn bộ não">
+      {/* ── Khối 1 · Segmented chọn não (18-b thay dropdown UX-1; R24-b: 4 não
+          sau khi thêm Brain-D "Tri Thức" ghost §8.5 — grid 1 cột mobile /
+          2 cột sm / 4 cột lg cho đều) ── */}
+      <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-4" role="group" aria-label="Chọn bộ não">
         {brains.map(b => {
           const blc = LIFECYCLE_BADGE[b.lifecycle] ?? LIFECYCLE_BADGE.dormant
           const sel = b.key === selectedKey

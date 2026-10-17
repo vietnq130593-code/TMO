@@ -1003,7 +1003,11 @@ describe('r87 · H cờ P4 + kill-switch — TUNING_SPECS/NEURAL_NODES/route/reg
     // Brain-A — node hist-feedback).
     // PIN UPDATE (R20 BRAIN-D1 2026-10-17): 31 → 32 — cờ kb_consult_log
     // (LOG-ONLY KbConsultLog — node kb-access, ngoài nhóm 4 cờ P4 pin dưới).
-    expect(TUNING_SPECS).toHaveLength(32)
+    // PIN UPDATE (R24-b Brain-D ghost 2026-10-17): 32 → 34 — 2 cờ kill-switch
+    // runtime_knowledge + knowledge_organ_strategy (node kb-access, ngoài nhóm 4 cờ P4 pin dưới).
+    // PIN UPDATE (R24-c EVO-P4 2026-10-17): 34 → 36 — cờ brain_evolve +
+    // brain_search_global (node softmax-policy — cùng node nhóm P4 dưới).
+    expect(TUNING_SPECS).toHaveLength(36)
     const keys = TUNING_SPECS.map(s => s.key)
     for (const k of P4_FLAG_KEYS) expect(keys).toContain(k)
     for (const key of P4_FLAG_KEYS) {
@@ -1024,7 +1028,7 @@ describe('r87 · H cờ P4 + kill-switch — TUNING_SPECS/NEURAL_NODES/route/reg
     }
   })
 
-  test('H2 NEURAL_NODES softmax-policy paramKeys đủ 13 tham số', () => {
+  test('H2 NEURAL_NODES softmax-policy paramKeys đủ 15 tham số (PIN UPDATE R24-c EVO-P4: 13 → 15)', () => {
     const node = NEURAL_NODES.find(n => n.id === 'softmax-policy')
     expect(node).not.toBeNull()
     // PIN UPDATE (r88-r91 task, Task 11 worklog): 7 → 13 — BRAIN-UX §9 thêm
@@ -1045,6 +1049,9 @@ describe('r87 · H cờ P4 + kill-switch — TUNING_SPECS/NEURAL_NODES/route/reg
       'ui_brain_edit',
       'ui_synapse_fx',
       'ui_hitech',
+      // R24-c EVO-P4: 2 cờ search (§4.5/§5.6)
+      'brain_evolve',
+      'brain_search_global',
     ])
   })
 

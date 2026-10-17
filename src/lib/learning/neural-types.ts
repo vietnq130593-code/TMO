@@ -8,9 +8,11 @@
  * THẬT cho: đồ thị lớp (layer graph), inspector panel, bảng tinh chỉnh.
  *
  * Hai khối:
- *   1. TUNING_SPECS — 14 hyperparameter vận hành thực (đọc/ghi runtime qua
- *      tuning-store: STORE > ENV > DEFAULT) gắn với từng node.
- *   2. NEURAL_GRAPH — 6 lớp × 23 node × 37 cạnh: toàn bộ "mạng thần kinh"
+ *   1. TUNING_SPECS — 34 hyperparameter/cờ vận hành thực (đọc/ghi runtime
+ *      qua tuning-store: STORE > ENV > DEFAULT) gắn với từng node.
+ *   2. NEURAL_GRAPH — 6 lớp × 24 node × 42 cạnh (đếm thật NEURAL_NODES/
+ *      NEURAL_EDGES — R20 BRAIN-D1 thêm node kb-access + e38–e42; R24-b
+ *      hiệu đính con số header cho khớp): toàn bộ "mạng thần kinh"
  *      của TMO từ đầu vào (tài liệu/chat/workflow) qua xử lý (dedup/embed/
  *      entity-res/pre-act), lưu trữ (SQLite/Qdrant/Neo4j/R2), học (Q-table/
  *      adaptation/lessons/Wilson/IQR), quyết định (stats-gate/softmax/strategy)
@@ -149,7 +151,7 @@ export interface NeuralGraph {
   edges: NeuralEdge[]
 }
 
-// ==================== 1. TUNING SPECS (25 tham số vận hành thực) ====================
+// ==================== 1. TUNING SPECS (34 tham số/cờ vận hành thực) ====================
 // 13 gốc (neural-arch 2026-10-11) + thứ 14 calibration_v3 (BRAIN-P2) + thứ 15
 // replay_eval (BRAIN-P3) + thứ 16–19 runtime_policy + 3 cờ organ kill-switch
 // policy_organ_routing/adaptation/tuning (BRAIN-P4) + thứ 20–22 cờ trình
@@ -157,7 +159,9 @@ export interface NeuralGraph {
 // chốt 2026-10-12; BRAIN-LIVE cùng ngày hiệu đính default ui_synapse_fx
 // 'off'→'on' — "đài quan sát não" tab BRAIN Smolab, chỉ thị user 2026-10-12)
 // + thứ 23–25 trọng số composite reward w₁w₂w₃ (UX-2 nhóm C — override qua
-// STORE›ENV›DEFAULT, log-only KHÔNG đổi).
+// STORE›ENV›DEFAULT, log-only KHÔNG đổi) + 26–29 cờ quan sát OBS-P1 + 30
+// obs_alerts + 31 auto_eval_kb + 32 kb_consult_log (R20 BRAIN-D1) + 33–34
+// runtime_knowledge/knowledge_organ_strategy (R24-b Brain-D ghost §8.5).
 
 export const TUNING_SPECS: readonly TuningSpec[] = [
   {
@@ -705,6 +709,96 @@ export const TUNING_SPECS: readonly TuningSpec[] = [
     warning: 'Tắt = mất dữ liệu quan sát cho Brain-D (D2/D3 phụ thuộc log tích lũy — ngưng ghi là ngưng tích lũy). Bật lại không khôi phục các lượt đã bỏ sót.',
     appliesTo: 'logKbConsult (src/lib/kb-routing/consult-log.ts) — gọi từ searchUserKB (kb-access.ts); ngữ cảnh từ consult-context.ts ALS',
   },
+  // R24-b (BLUEPRINT-EVO-NAO §8.3/§8.5 — mốc (a) ghost UI): cờ thứ 33 —
+  // kill-switch tầng RUNTIME của Brain-D "Tri Thức". Placeholder đặt tên
+  // SỚM theo đúng key đã pin trong blueprint (tránh đổi key sau này làm mất
+  // giá trị tuning user); consumer thật chỉ sống từ BRAIN-D3 khi policy head
+  // có bản active. Off (mặc định) = pipeline heuristic CỨNG 4 lớp y hệt hôm
+  // nay — KHÔNG có nhánh runtime nào đọc cờ này trước D3.
+  {
+    key: 'runtime_knowledge',
+    label: 'RUNTIME_KNOWLEDGE',
+    description:
+      'Kill-switch tầng runtime Brain-D "Tri Thức" (§8.3): on = khi BRAIN-D3 policy head đã sống + có bản active, kết quả truy vấn KB được điều phối bởi Brain-D (mixture λ như Brain-C — bắt đầu 100% heuristic, nhường dần khi dữ liệu đủ); off = pipeline heuristic CỨNG 4 lớp y hệt hôm nay (fail-open về heuristic mọi nhánh lỗi).',
+    nodeId: 'kb-access',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'off',
+    envKey: 'RUNTIME_KNOWLEDGE',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' || v === '1' || v === 'true' ? 'on' : v === 'off' || v === '0' || v === 'false' ? 'off' : undefined
+    },
+    warning:
+      'Cờ chỉ có ý nghĩa từ BRAIN-D3 — hiện là placeholder đặt tên sớm theo đúng key đã pin trong blueprint §8.3 (tránh đổi key sau này làm mất giá trị tuning user). Bật hôm nay KHÔNG đổi hành vi nào (chưa có model Brain-D).',
+    appliesTo: 'Brain-D runtime mixture (src/lib/brain/brains/knowledge.ts — triển khai kèm D3; §8.5.3 UI tab BRAIN hiển thị badge cờ cho não Tri Thức)',
+  },
+  // R24-b (§8.3 Tầng 1 action space): cờ thứ 34 — kill-switch RIÊNG organ
+  // "chế độ vận dụng" (context-block/structured-subgraph/traversal-plan).
+  // Tiền lệ naming: 3 cờ policy_organ_* của Brain-C (P4) — mỗi organ một
+  // công tắc độc lập dưới cờ runtime tổng.
+  {
+    key: 'knowledge_organ_strategy',
+    label: 'KNOWLEDGE_ORGAN_STRATEGY',
+    description:
+      'Kill-switch riêng organ "chế độ vận dụng" — Tầng 1 của action space Brain-D (§8.3): off = mọi lượt consult KB dùng context-block (đóng gói tri thức thành khối context — hành vi mặc định, tương đương hôm nay); on = khi runtime_knowledge on VÀ Brain-D có bản active, head được phép đề xuất structured-subgraph (subgraph Neo4j có cấu trúc) / traversal-plan (kế hoạch duyệt multi-hop).',
+    nodeId: 'kb-access',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'off',
+    envKey: 'KNOWLEDGE_ORGAN_STRATEGY',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' || v === '1' || v === 'true' ? 'on' : v === 'off' || v === '0' || v === 'false' ? 'off' : undefined
+    },
+    warning:
+      'Cờ chỉ có ý nghĩa khi runtime_knowledge on VÀ Brain-D active (BRAIN-D3) — hiện là placeholder đặt tên sớm theo đúng key pin trong blueprint §8.3. Off giữ mọi lượt consult ở context-block an toàn.',
+    appliesTo: 'Organ Tầng 1 Brain-D (src/lib/brain/brains/knowledge.ts — triển khai kèm D3; precedent 3 cờ policy_organ_* của Brain-C)',
+  },
+  // R24-c (EVO-P4 — blueprint EVO-NAO §4.5/§5.6): cờ thứ 35 — bật/vô hiệu
+  // vòng TIẾN HOÁ KIẾN TRÚC (evolve runner + POST /api/brain/evolve). Mặc
+  // định OFF (H1/H2 — search chỉ đề xuất, không tự thay não; route chặn 400
+  // flag_off khi tắt). Cùng đợt đặt tên `brain_search_global` (cờ 36 — §5.6
+  // F10: đặt tên SỚM tránh đổi key sau) — 2 cờ là kill-switch panel U5.
+  {
+    key: 'brain_evolve',
+    label: 'BRAIN_EVOLVE',
+    description:
+      'EVO-P4 §4.5: on = cho phép chạy vòng tiến hoá kiến trúc (POST /api/brain/evolve — sinh ứng viên MLP + block attention/SSM/MoE từ encoding 144, train + chấm benchmark tất định, ghi BrainSearchCandidate làm ĐỀ XUẤT — user duyệt qua A1/H7, KHÔNG tự thay não vận hành). off = route chặn 400 flag_off (tab UI E1 "CHƯA SẴN SÀNG"). Chạy ngoài runtime — không ảnh hưởng đường production.',
+    nodeId: 'softmax-policy',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'off',
+    envKey: 'BRAIN_EVOLVE',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' || v === '1' || v === 'true' ? 'on' : v === 'off' || v === '0' || v === 'false' ? 'off' : undefined
+    },
+    warning: 'Tắt không mất dữ liệu đã chấm — bảng ứng viên (BrainSearchCandidate) vẫn xem được qua GET /api/brain/evolve.',
+    appliesTo: 'POST /api/brain/evolve + evolve.ts (src/lib/brain/evolve.ts) — điều phối search ngoài runtime',
+  },
+  // R24-c (§5.6 — F10/0.5): cờ thứ 36 — kill-switch TOÀN CỤC mọi não search
+  // (HN-search + EVO). 'on' = cho phép search (mặc định trung lập); 'off' =
+  // KHẨN CẤP dừng MỌI vòng search đang chạy + chặn khởi động mới (EVO route
+  // chặn 400 flag_off; HN-P2 khi dựng lại cũng đọc cờ này). Đặt tên SỚM theo
+  // pin §5.6 — tránh đổi key sau làm mất giá trị tuning user.
+  {
+    key: 'brain_search_global',
+    label: 'BRAIN_SEARCH_GLOBAL',
+    description:
+      "Kill-switch toàn cục mọi não search (U5 §5.6): on (mặc định) = search hoạt động theo cờ riêng từng loại (brain_evolve…); off = dừng khẩn cấp MỌI search — EVO chặn khởi động vòng mới + hủy hợp tác vòng đang chạy, HN-P2 (khi dựng lại) cùng đọc cờ này. Chỉ chặn SEARCH — không đụng não runtime active.",
+    nodeId: 'softmax-policy',
+    type: 'enum',
+    enumValues: ['off', 'on'],
+    default: 'on',
+    envKey: 'BRAIN_SEARCH_GLOBAL',
+    envMap: raw => {
+      const v = raw.trim().toLowerCase()
+      return v === 'on' || v === '1' || v === 'true' ? 'on' : v === 'off' || v === '0' || v === 'false' ? 'off' : undefined
+    },
+    warning: 'off = khẩn cấp — mọi vòng search dừng; dữ liệu đã chấm GIỮ NGUYÊN (H5 additive).',
+    appliesTo: 'POST /api/brain/evolve (chặn + hủy hợp tác) — mọi não search khác đọc cùng cờ khi dựng lại',
+  },
 ] as readonly TuningSpec[]
 
 /** Tra spec theo key (O(1) qua Map dựng sẵn). */
@@ -714,7 +808,7 @@ export function getTuningSpec(key: string): TuningSpec | undefined {
   return SPEC_BY_KEY.get(key)
 }
 
-// ==================== 2. NEURAL GRAPH — 6 LỚP × 23 NODE × 37 CẠNH ====================
+// ==================== 2. NEURAL GRAPH — 6 LỚP × 24 NODE × 42 CẠNH ====================
 
 export const NEURAL_LAYERS: readonly NeuralLayer[] = [
   {
@@ -893,7 +987,13 @@ export const NEURAL_NODES: readonly NeuralNode[] = [
       { name: 'logKbConsult (D1)', file: 'src/lib/kb-routing/consult-log.ts' },
       { name: 'runWithKbConsultContext', file: 'src/lib/kb-routing/consult-context.ts' },
     ],
-    paramKeys: ['kb_consult_log'],
+    paramKeys: [
+      'kb_consult_log',
+      // R24-b §8.3/§8.5 — 2 cờ kill-switch Brain-D (ghost placeholder tới
+      // D3; r81 integrity: spec nodeId ↔ node paramKeys phải chốt đôi)
+      'runtime_knowledge',
+      'knowledge_organ_strategy',
+    ],
   },
 
   // ── LỚP 3 · LƯU TRỮ ──
@@ -1046,7 +1146,7 @@ export const NEURAL_NODES: readonly NeuralNode[] = [
       { name: 'getQAdvice', file: 'src/lib/learning/q-table.ts', line: 323 },
       { name: 'pickIndexBySeed', file: 'src/lib/learning/q-table.ts', line: 185 },
     ],
-    paramKeys: ['runtime_model_policy', 'runtime_model_tau', 'replay_eval', 'runtime_policy', 'policy_organ_routing', 'policy_organ_adaptation', 'policy_organ_tuning', 'reward_w_outcome', 'reward_w_efficiency', 'reward_w_quality', 'ui_brain_edit', 'ui_synapse_fx', 'ui_hitech'],
+    paramKeys: ['runtime_model_policy', 'runtime_model_tau', 'replay_eval', 'runtime_policy', 'policy_organ_routing', 'policy_organ_adaptation', 'policy_organ_tuning', 'reward_w_outcome', 'reward_w_efficiency', 'reward_w_quality', 'ui_brain_edit', 'ui_synapse_fx', 'ui_hitech', 'brain_evolve', 'brain_search_global'],
   },
   {
     id: 'strategy-adapter',

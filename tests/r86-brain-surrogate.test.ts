@@ -980,7 +980,9 @@ describe('r86 · F cờ replay_eval + registry pins', () => {
     // cảnh báo chủ động — neural-types.ts block Task 26-BE).
     // PIN UPDATE (R4-ĐIỀU TRA lượt 4): 30 → 31 — cờ auto_eval_kb (R4).
     // PIN UPDATE (R20 BRAIN-D1 2026-10-17): 31 → 32 — cờ kb_consult_log (LOG-ONLY).
-    expect(TUNING_SPECS.length).toBe(32) // 19 BRAIN-P4 + 6 BRAIN-UX §9 + 4 OBS-P1 + 1 obs_alerts + 1 auto_eval_kb (R4) + 1 kb_consult_log (R20 BRAIN-D1)
+    // PIN UPDATE (R24-b Brain-D ghost 2026-10-17): 32 → 34 — 2 cờ kill-switch
+    // runtime_knowledge + knowledge_organ_strategy (§8.3/§8.5).
+    expect(TUNING_SPECS.length).toBe(36) // PIN UPDATE R24-c EVO-P4: 34 → 36 (brain_evolve + brain_search_global — §4.5/§5.6)
   })
 
   test('F2 NEURAL_NODES softmax-policy paramKeys gồm replay_eval (gắn đúng node)', () => {
