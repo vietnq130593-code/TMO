@@ -17,6 +17,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import {
+  cvBarTone,
   deriveEvoState,
   formatCandidateLog,
   formatParamsBudget,
@@ -24,6 +25,7 @@ import {
   hiddenFromSpec,
   isPureMlpCandidate,
   isPureMlpEncoding,
+  padDomain,
   paretoFront,
   sortCandidates,
   splitEncodingZones,
@@ -272,5 +274,57 @@ describe('r115 · U1 deriveEvoState — state machine theo GET poll (không opti
     expect(fromSummary).toEqual({ state: 'e4', hasBlockedH7: true })
     // 'error' giữ run stale → suy diễn tiếp như 'ok' (chip mất kết nối do UI)
     expect(deriveEvoState(makeRun({ status: 'failed' }), 'error', []).state).toBe('e4')
+  })
+})
+
+// ==================== R26 — padDomain + cvBarTone (Pareto/Điểm CV nâng cấp) ====================
+
+describe('r115 · R26 padDomain — miền trục Y Pareto sau đệm', () => {
+  test('S span bình thường: đệm 18% 2 đầu, kẹp [0..1]', () => {
+    // CV 0,40..0,48 → span 0,08 → pad 0,0144 → [0,3856 .. 0,4944]
+    const d = padDomain(0.4, 0.48, 0, 1)
+    expect(d.from).toBeCloseTo(0.3856, 4)
+    expect(d.to).toBeCloseTo(0.4944, 4)
+    // CV 0..1 → pad 0,18 → bị kẹp về đúng [0..1]
+    expect(padDomain(0, 1, 0, 1)).toEqual({ from: 0, to: 1 })
+  })
+
+  test('T span nhỏ hơn sàn 0,08 → nở quanh tâm (tránh "mọi điểm nhìn như nhau")', () => {
+    // 1 điểm duy nhất 0,5 → span 0 → nở sàn 0,08 quanh tâm [0,46..0,54] → pad 18% · 0,08 = 0,0144
+    const d1 = padDomain(0.5, 0.5, 0, 1)
+    expect(d1.from).toBeCloseTo(0.4456, 4)
+    expect(d1.to).toBeCloseTo(0.5544, 4)
+    // 2 điểm sát nhau 0,30..0,33 (span 0,03 < 0,08) → nở tâm 0,315 [0,275..0,355] → pad 0,0144
+    const d2 = padDomain(0.3, 0.33, 0, 1)
+    expect(d2.from).toBeCloseTo(0.2606, 4)
+    expect(d2.to).toBeCloseTo(0.3694, 4)
+    // span cuối ≥ sàn × 1,36 — không bao giờ hẹp hơn 0,08
+    expect(d2.to - d2.from).toBeGreaterThanOrEqual(0.08)
+  })
+
+  test('U kẹp biên cứng: không bao giờ vượt [lo..hi]', () => {
+    expect(padDomain(0.01, 0.02, 0, 1).from).toBeGreaterThanOrEqual(0)
+    expect(padDomain(0.98, 0.99, 0, 1).to).toBeLessThanOrEqual(1)
+    // nở sàn nhưng tâm sát biên 0 → from kẹp 0, to = 0,055 + pad 0,0144
+    const d = padDomain(0.01, 0.02, 0, 1)
+    expect(d.from).toBe(0)
+    expect(d.to).toBeCloseTo(0.0694, 3)
+    // tâm sát biên 1 → to kẹp 1
+    const hi = padDomain(0.98, 0.99, 0, 1)
+    expect(hi.to).toBe(1)
+    expect(hi.from).toBeCloseTo(0.9306, 3)
+  })
+})
+
+describe('r115 · R26 cvBarTone — tone thanh điểm CV', () => {
+  test('V best vòng = emerald · thắng active = amber · còn lại stone', () => {
+    expect(cvBarTone({ idx: 3, beatActive: false }, 3)).toBe('emerald')
+    expect(cvBarTone({ idx: 1, beatActive: true }, 3)).toBe('amber')
+    expect(cvBarTone({ idx: 2, beatActive: false }, 3)).toBe('stone')
+    // bestIdx null → chỉ phân theo beatActive
+    expect(cvBarTone({ idx: 0, beatActive: true }, null)).toBe('amber')
+    expect(cvBarTone({ idx: 0, beatActive: false }, null)).toBe('stone')
+    // best đồng thời thắng active → emerald ưu tiên
+    expect(cvBarTone({ idx: 3, beatActive: true }, 3)).toBe('emerald')
   })
 })

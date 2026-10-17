@@ -31,7 +31,7 @@
 // ========================================================================
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Dna, FlaskConical, Play, ShieldAlert, Square, TrendingUp } from 'lucide-react'
+import { Dna, FlaskConical, Lightbulb, Play, ShieldAlert, Square, TrendingUp } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -42,6 +42,7 @@ import { BRAIN_REGISTRY, BRAIN_TRAINABLE_KEYS, type BrainKey } from '@/lib/brain
 import { getTuningSpec, type TuningChangeLogEntry } from '@/lib/learning/neural-types'
 import { fetchWithTransientRetry } from '@/lib/fetch-retry'
 import {
+  cvBarTone,
   deriveEvoState,
   formatCandidateLog,
   formatParamsBudget,
@@ -49,6 +50,7 @@ import {
   formatViNum,
   hiddenFromSpec,
   isPureMlpCandidate,
+  padDomain,
   paretoFront,
   sortCandidates,
   splitEncodingZones,
@@ -118,6 +120,12 @@ export interface EvolveTabProps {
   savingKeys: ReadonlySet<string>
   /** Ghi hidden layers ứng viên THUẦN MLP vào nháp não đang chọn (draft SECTION 1). */
   onApplyToDraft: (hidden: Array<{ units: number; activation: string }>) => void
+  /**
+   * R26 — signals thức tỉnh của não đang chọn SECTION 1 (/api/brain). Chỉ
+   * dùng cho Brain-D: hiển thị tiến độ thật của chuỗi D2→D3→D4 trong thông
+   * báo "chưa vào search space" (trước đây chỉ 1 dòng chữ khô).
+   */
+  signals?: ReadonlyArray<{ key: string; label: string; current: number | null; min: number }>
   /** Cờ ui_brain_edit — hiện cảnh báo khi off (editor SECTION 1 đang ẩn). */
   editorOn: boolean
   /** Tab console 'evo' đang mở — false → dừng poll (unmount cũng dừng hẳn). */
@@ -128,7 +136,7 @@ export interface EvolveTabProps {
 
 export function EvolveTab({
   brain, onSelectBrainQuick, tuningByKey, changeLog, onSetTuning, savingKeys,
-  onApplyToDraft, editorOn, consoleActive,
+  onApplyToDraft, editorOn, consoleActive, signals,
 }: EvolveTabProps) {
   // ── Dữ liệu poll (chỉ cập nhật khi GET 200 — không optimistic §5.2) ──
   const [resp, setResp] = useState<EvoGetResponseUi | null>(null)
@@ -150,7 +158,6 @@ export function EvolveTab({
   const [detailIdx, setDetailIdx] = useState<number | null>(null)
 
   const brainTrainable = BRAIN_TRAINABLE_KEYS.includes(brain)
-  const brainTitle = BRAIN_REGISTRY.find(b => b.key === brain)?.title ?? brain
 
   // ── GET evolve (404 → E1 · 5xx/mạng → giữ dữ liệu cũ + chip mất kết nối) ──
   const fetchEvolve = useCallback(async () => {
@@ -225,6 +232,7 @@ export function EvolveTab({
   )
   const run = resp?.run ?? null
   const candidates = resp?.candidates ?? []
+  const suggestion = resp?.suggestion ?? null
   const sorted = useMemo(() => sortCandidates(candidates), [candidates])
   const tableRows = useMemo(() => sorted.slice(0, MAX_TABLE_ROWS), [sorted])
   const blocked = useMemo(() => sorted.filter(c => c.blockedH7), [sorted])
@@ -265,7 +273,6 @@ export function EvolveTab({
           : !bestParamsOk
             ? (bestCand.note ?? `Vượt trần ${formatViNum(EVO_PARAMS_BUDGET)} tham số — không thể áp vào nháp.`)
             : null
-
   // ── POST start (H4: seed đè phải nguyên 0..SEED_MAX — validate local trước) ──
   const startRun = useCallback(async () => {
     if (!brainTrainable || starting) return
@@ -349,7 +356,6 @@ export function EvolveTab({
       <div className="flex flex-wrap items-center gap-1.5">
         <FlaskConical className="h-3.5 w-3.5 shrink-0 text-amber-400" aria-hidden="true" />
         <h4 className="text-xs font-semibold text-stone-100">Tiến hoá kiến trúc</h4>
-        <span className="text-[10px] text-stone-500">não đích: {brainTitle} ({brain}) — đổi ở phần 1 · Chọn não &amp; kiến trúc</span>
         {http === 'error' && (
           <Badge variant="outline" className="h-3.5 border-amber-500/45 bg-amber-950/70 px-1 text-[9px] text-amber-400" title="GET /api/brain/evolve lỗi (5xx/mạng) — giữ dữ liệu cũ, poll tự thử lại">
             mất kết nối
@@ -365,6 +371,44 @@ export function EvolveTab({
         Phòng thí nghiệm tiến hoá kiến trúc — sinh ứng viên (MLP + attention/SSM/MoE), train + kiểm định chéo thật,
         xếp hạng để bạn duyệt. Không tự thay não vận hành.
       </p>
+
+      {/* ── R26 — NÃO ĐÍCH: đổi NGAY TẠI ĐÂY (user report 2026-10-17: trước đây
+          chọn não xong không có nút lùi về chọn lại — phải cuộn lên SECTION 1).
+          Não đích vẫn single-source: nút này gọi đúng selectBrain của brain-tab
+          (đồng bộ grid SECTION 1 + key={brain} remount tab này). ── */}
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[10px] uppercase tracking-wide text-stone-500">Não đích</span>
+        <div className="flex flex-wrap gap-1" role="group" aria-label="Chọn não đích tiến hoá">
+          {BRAIN_REGISTRY.map(b => {
+            const trainable = BRAIN_TRAINABLE_KEYS.includes(b.key)
+            const active = b.key === brain
+            const short = b.key === 'calibration_v3' ? 'A · V3' : b.key === 'surrogate' ? 'B · Vọng' : b.key === 'policy' ? 'C · Lệnh' : 'D · Tri Thức'
+            return (
+              <button
+                key={b.key}
+                type="button"
+                disabled={!trainable || active}
+                onClick={() => { if (!active) onSelectBrainQuick?.(b.key) }}
+                aria-current={active ? 'true' : undefined}
+                title={!trainable
+                  ? 'Brain-D (Tri Thức) chưa vào search space — mở ở mốc D4 §8.4 sau khi D3 sống (cần ≥300 log có outcome)'
+                  : active
+                    ? `Não đích hiện tại — ${b.title}`
+                    : `Chuyển não đích sang ${b.title} (đồng bộ lựa chọn SECTION 1)`}
+                className={`min-h-[44px] md:min-h-[32px] rounded-md border px-2 text-[10px] transition-colors ${
+                  active
+                    ? 'border-amber-500/60 bg-amber-500/20 font-medium text-amber-300'
+                    : trainable
+                      ? 'border-stone-700/70 text-stone-300 hover:border-amber-500/50 hover:text-amber-300'
+                      : 'cursor-not-allowed border-stone-800 text-stone-600'
+                }`}
+              >
+                {short}
+              </button>
+            )
+          })}
+        </div>
+      </div>
 
       {http === 'idle' && <p className="py-3 text-center text-[11px] text-stone-600">Đang tải trạng thái evolve…</p>}
 
@@ -383,19 +427,57 @@ export function EvolveTab({
         <div className="space-y-3">
           {!brainTrainable && (
             <div className="rounded-md border border-amber-500/30 bg-amber-950/20 p-2.5">
-              <p className="text-[11px] text-amber-300">Brain-D chưa vào search space (D4 §8.4) — chọn nhanh não đích:</p>
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {BRAIN_TRAINABLE_KEYS.map(k => (
-                  <button
-                    key={k}
-                    type="button"
-                    onClick={() => onSelectBrainQuick?.(k)}
-                    className="min-h-[44px] md:min-h-[32px] rounded-md border border-stone-700/70 px-2 text-[10px] text-stone-300 hover:border-amber-500/50 hover:text-amber-300"
-                  >
-                    {BRAIN_REGISTRY.find(b => b.key === k)?.title ?? k}
-                  </button>
-                ))}
+              <p className="text-[11px] font-medium text-amber-300">
+                Brain-D (Tri Thức) chưa vào search space — sẽ mở ở mốc D4 (§8.4)
+              </p>
+              <p className="mt-1 text-[10px] leading-relaxed text-stone-400">
+                Nhánh EVO-P1..P4 <span className="text-emerald-400">đã sống</span> · còn thiếu nhánh Brain-D:
+                D2 baseline (≥100 log KB) → D3 policy head (≥300 log có Outcome*) → D4 mở encoding cho knowledge.
+                Tiến độ thật (đếm từ KbConsultLog):
+              </p>
+              {(signals ?? []).length > 0 ? (
+                <div className="mt-2 space-y-1.5">
+                  {(signals ?? []).map(s => {
+                    const pct = s.current === null ? 0 : Math.min(100, Math.round((s.current / s.min) * 100))
+                    return (
+                      <div key={s.key} className="flex items-center gap-2 text-[10px]" title={`${s.label} — ngưỡng ${s.min} (mốc D2/D3)`}>
+                        <span className="min-w-0 flex-1 truncate text-stone-300">{s.label}</span>
+                        <span className="h-1.5 w-20 shrink-0 overflow-hidden rounded-full bg-slate-900" aria-hidden="true">
+                          <span className={`block h-full rounded-full ${pct >= 100 ? 'bg-emerald-500/80' : 'bg-amber-500/70'}`} style={{ width: `${pct}%` }} />
+                        </span>
+                        <span className="w-16 shrink-0 text-right font-mono tabular-nums text-stone-200">
+                          {s.current === null ? '—' : formatViNum(s.current)}/{formatViNum(s.min)}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <p className="mt-1 text-[9.5px] italic text-stone-500">Chưa đọc được tiến độ log KB — thử lại sau.</p>
+              )}
+              <p className="mt-1.5 text-[10px] text-stone-400">Chọn não đích A/B/C ở trên để chạy tiến hoá ngay.</p>
+            </div>
+          )}
+
+          {/* R26 — cơ chế TÍNH kích thước theo dữ liệu (user hỏi "NAS có cơ chế
+              tính toán số lớp/số nơ-ron chưa?"): suggestion từ suggestArch hiển thị
+              đầy đủ rationale — ứng viên #0 của vòng khởi đầu từ đây. */}
+          {suggestion && brainTrainable && (
+            <div className="rounded-md border border-stone-700/70 bg-slate-950/40 p-2.5">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <Lightbulb className="h-3 w-3 shrink-0 text-amber-400" aria-hidden="true" />
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-stone-400">
+                  Cơ chế tính kích thước theo dữ liệu — hạt giống ứng viên #0
+                </p>
               </div>
+              <p className="mt-1.5 font-mono text-[11px] text-stone-100">
+                {suggestion.inputDim} → {suggestion.hidden.map(h => `${formatViNum(h.units)}·${h.activation}`).join(' → ')} → {suggestion.outputDim}
+              </p>
+              <p className="mt-1 text-[9.5px] leading-relaxed text-stone-500">{suggestion.rationale}</p>
+              <p className="mt-1 text-[9.5px] leading-relaxed text-stone-600">
+                Ứng viên #0 của mỗi vòng khởi đầu từ kiến trúc này (thay ngẫu nhiên thuần); các ứng viên sau
+                chọn cha theo giải đấu k=3 quanh vùng điểm cao + cường độ mutation giảm 0,15 → 0,06 theo tiến độ vòng.
+              </p>
             </div>
           )}
           <div className="grid gap-3 md:grid-cols-2">
@@ -565,7 +647,9 @@ export function EvolveTab({
             </div>
           )}
 
-          {/* Khối đề xuất (H2: đề xuất — bạn duyệt; 2 cấp áp dụng §5.3) */}
+          {/* Khối đề xuất (H2: đề xuất — bạn duyệt; 2 cấp áp dụng §5.3) —
+              R26: metric grid 4 ô thay 1 dòng mono dài (user report "UI/UX
+              điểm CV xấu") + thanh CV trực quan + tooltip giải thích điểm. */}
           {bestCand && (
             <div className="rounded-md border border-amber-500/40 bg-amber-950/20 p-2.5">
               <div className="flex flex-wrap items-center gap-1.5">
@@ -574,12 +658,42 @@ export function EvolveTab({
                   #{bestCand.idx} · {bestCand.archSummary}
                 </span>
               </div>
-              <p className="mt-1 font-mono text-[10px] text-stone-400">
-                CV {fmtCv(bestCand.cvScore)} [{fmtCv(bestCand.ciLow)}..{fmtCv(bestCand.ciHigh)}] · {formatViNum(bestCand.params)} tham số ({formatParamsBudget(bestCand.params)}) · p95 {formatViDecimal(bestCand.p95LatencyMs, 2)} ms
-                {bestCand.beatActive && <span className="ml-1 text-amber-400">· thắng active</span>}
-                {bestCand.blockedH7 && <span className="ml-1 text-rose-400">· chặn H7</span>}
-              </p>
-              {bestCand.note && <p className="mt-0.5 text-[9.5px] text-amber-500/80">{bestCand.note}</p>}
+              <div className="mt-2 grid grid-cols-2 gap-1.5 md:grid-cols-4">
+                <div
+                  className="rounded-md border border-stone-800 bg-slate-950/50 p-1.5"
+                  title="Điểm kiểm định chéo K-fold = 1/(1+loss trung bình) — thang 0..1, CAO HƠN TỐT HƠN · CI 95% bootstrap 200 lượt"
+                >
+                  <p className="text-[9px] uppercase tracking-wide text-stone-500">Điểm CV</p>
+                  <p className="mt-0.5 font-mono text-sm tabular-nums text-stone-100">{fmtCv(bestCand.cvScore)}</p>
+                  <span className="mt-1 block h-1 w-full overflow-hidden rounded-full bg-slate-800" aria-hidden="true">
+                    <span
+                      className="block h-full rounded-full bg-amber-400/80"
+                      style={{ width: `${Math.round(Math.min(1, Math.max(0, bestCand.cvScore)) * 100)}%` }}
+                    />
+                  </span>
+                  <p className="mt-0.5 font-mono text-[9px] text-stone-500">CI [{fmtCv(bestCand.ciLow)}..{fmtCv(bestCand.ciHigh)}]</p>
+                </div>
+                <div className="rounded-md border border-stone-800 bg-slate-950/50 p-1.5" title="Số tham số khả vi — trần 250K (BRAIN_MAX_PARAMS)">
+                  <p className="text-[9px] uppercase tracking-wide text-stone-500">Tham số</p>
+                  <p className="mt-0.5 font-mono text-sm tabular-nums text-stone-100">{formatViNum(bestCand.params)}</p>
+                  <p className="mt-0.5 font-mono text-[9px] text-stone-500">{formatParamsBudget(bestCand.params)} ngân sách 250K</p>
+                </div>
+                <div className="rounded-md border border-stone-800 bg-slate-950/50 p-1.5" title="Độ trễ p95 đo thật trên fixture (forward 1 mẫu)">
+                  <p className="text-[9px] uppercase tracking-wide text-stone-500">p95 latency</p>
+                  <p className="mt-0.5 font-mono text-sm tabular-nums text-stone-100">{formatViDecimal(bestCand.p95LatencyMs, 2)} ms</p>
+                  <p className="mt-0.5 font-mono text-[9px] text-stone-500">train {formatViDecimal(bestCand.trainMs / 1000, 1)}s</p>
+                </div>
+                <div className="rounded-md border border-stone-800 bg-slate-950/50 p-1.5" title="Đối chứng: bản active chấm lại TRÊN CÙNG fixture + CÙNG giao thức">
+                  <p className="text-[9px] uppercase tracking-wide text-stone-500">Đối chứng active</p>
+                  <p className={`mt-0.5 font-mono text-sm ${bestCand.beatActive ? 'text-emerald-400' : 'text-stone-400'}`}>
+                    {bestCand.beatActive ? 'thắng' : 'chưa thắng'}
+                  </p>
+                  <p className="mt-0.5 font-mono text-[9px] text-stone-500">
+                    {bestCand.blockedH7 ? 'chặn H7 — quá chậm' : bestCand.moeSkipped ? 'MoE bỏ qua (Q4)' : 'cùng fixture'}
+                  </p>
+                </div>
+              </div>
+              {bestCand.note && <p className="mt-1 text-[9.5px] text-amber-500/80">{bestCand.note}</p>}
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
@@ -611,7 +725,12 @@ export function EvolveTab({
                     <tr className="border-b border-slate-800">
                       <th className="py-1.5 pr-2 text-left font-medium">#</th>
                       <th className="py-1.5 pr-2 text-left font-medium">Kiến trúc</th>
-                      <th className="py-1.5 pr-2 text-left font-medium">Điểm CV</th>
+                      <th
+                        className="py-1.5 pr-2 text-left font-medium"
+                        title="Điểm kiểm định chéo K-fold = 1/(1+loss trung bình) — thang 0..1, CAO HƠN TỐT HƠN · CI 95% bootstrap 200 lượt · thanh = cường độ điểm, xanh lá = tốt nhất vòng"
+                      >
+                        Điểm CV
+                      </th>
                       <th className="py-1.5 pr-2 text-left font-medium">Tham số</th>
                       <th className="py-1.5 pr-2 text-left font-medium">p95 lat</th>
                       <th className="py-1.5 font-medium">Trạng thái</th>
@@ -630,8 +749,26 @@ export function EvolveTab({
                       >
                         <td className="py-1.5 pr-2 font-mono text-stone-400">#{c.idx}</td>
                         <td className="py-1.5 pr-2 font-mono text-[10px] text-stone-200" title={c.note ?? c.archSummary}>{c.archSummary}</td>
-                        <td className="py-1.5 pr-2 font-mono tabular-nums text-stone-100">
-                          {fmtCv(c.cvScore)} <span className="text-[9px] text-stone-500">±{fmtCv((c.ciHigh - c.ciLow) / 2)}</span>
+                        <td className="py-1.5 pr-2">
+                          <div
+                            className="flex items-center gap-1.5"
+                            title={`Điểm kiểm định chéo = 1/(1+loss TB) — thang 0..1, cao hơn tốt hơn · CI 95% [${fmtCv(c.ciLow)}..${fmtCv(c.ciHigh)}] · ${cvBarTone(c, bestCand?.idx ?? null) === 'emerald' ? 'tốt nhất vòng' : cvBarTone(c, bestCand?.idx ?? null) === 'amber' ? 'thắng bản active' : 'chưa thắng active'}`}
+                          >
+                            <span className="font-mono tabular-nums text-stone-100">{fmtCv(c.cvScore)}</span>
+                            <span className="inline-block h-1.5 w-10 shrink-0 overflow-hidden rounded-full bg-slate-800" aria-hidden="true">
+                              <span
+                                className={
+                                  cvBarTone(c, bestCand?.idx ?? null) === 'emerald'
+                                    ? 'block h-full rounded-full bg-emerald-400/90'
+                                    : cvBarTone(c, bestCand?.idx ?? null) === 'amber'
+                                      ? 'block h-full rounded-full bg-amber-400/80'
+                                      : 'block h-full rounded-full bg-stone-500/70'
+                                }
+                                style={{ width: `${Math.round(Math.min(1, Math.max(0, c.cvScore)) * 100)}%` }}
+                              />
+                            </span>
+                            <span className="font-mono text-[9px] text-stone-500">[{fmtCv(c.ciLow)}..{fmtCv(c.ciHigh)}]</span>
+                          </div>
                         </td>
                         <td className="py-1.5 pr-2 font-mono tabular-nums text-stone-300">
                           {formatViNum(c.params)} <span className="text-[9px] text-stone-500">({formatParamsBudget(c.params)})</span>
@@ -703,12 +840,18 @@ export function EvolveTab({
                 <DialogDescription className="font-mono text-[10px]">{detailCand.archSummary}</DialogDescription>
               </DialogHeader>
               <div className="space-y-3">
-                {/* Metrics + so sánh active */}
+                {/* Metrics + so sánh active — R26: ô CV có thanh trực quan */}
                 <div className="grid grid-cols-2 gap-2 text-[11px] md:grid-cols-4">
-                  <div>
+                  <div title="Điểm kiểm định chéo K-fold = 1/(1+loss trung bình) — thang 0..1, cao hơn tốt hơn">
                     <p className="text-[9.5px] uppercase text-stone-500">Điểm CV</p>
                     <p className="font-mono tabular-nums text-stone-100">{fmtCv(detailCand.cvScore)}</p>
-                    <p className="font-mono text-[9px] text-stone-500">CI [{fmtCv(detailCand.ciLow)}..{fmtCv(detailCand.ciHigh)}]</p>
+                    <span className="mt-1 block h-1 w-full overflow-hidden rounded-full bg-slate-800" aria-hidden="true">
+                      <span
+                        className={cvBarTone(detailCand, bestCand?.idx ?? null) === 'emerald' ? 'block h-full rounded-full bg-emerald-400/90' : 'block h-full rounded-full bg-amber-400/80'}
+                        style={{ width: `${Math.round(Math.min(1, Math.max(0, detailCand.cvScore)) * 100)}%` }}
+                      />
+                    </span>
+                    <p className="mt-0.5 font-mono text-[9px] text-stone-500">CI [{fmtCv(detailCand.ciLow)}..{fmtCv(detailCand.ciHigh)}]</p>
                   </div>
                   <div>
                     <p className="text-[9.5px] uppercase text-stone-500">Tham số</p>
@@ -825,6 +968,8 @@ function ParetoChart({ cands }: { cands: readonly EvoCandidateRowUi[] }) {
   if (cands.length === 0) return null
 
   // Trục X = params (log10 — clamp 10 để tránh log(0)), trục Y = cvScore
+  // R26: miền Y qua padDomain — đệm 2 đầu + sàn span 0,08 (tránh mọi điểm
+  // nhìn như nhau khi CV dồn cụm) + kẹp [0..1] (CV luôn trong khoảng này).
   const W = 340
   const H = 210
   const pad = { l: 46, r: 14, t: 14, b: 32 }
@@ -835,12 +980,10 @@ function ParetoChart({ cands }: { cands: readonly EvoCandidateRowUi[] }) {
   const ys = cands.map(c => c.cvScore)
   const xmin = Math.min(...xs)
   const xmax = Math.max(...xs)
-  const ymin = Math.min(...ys)
-  const ymax = Math.max(...ys)
+  const yDom = padDomain(Math.min(...ys), Math.max(...ys), 0, 1)
   const xSpan = xmax - xmin || 1
-  const ySpan = ymax - ymin || 1
   const px = (c: EvoCandidateRowUi) => pad.l + ((lx(c.params) - xmin) / xSpan) * iw
-  const py = (c: EvoCandidateRowUi) => pad.t + ih - ((c.cvScore - ymin) / ySpan) * ih
+  const py = (c: EvoCandidateRowUi) => pad.t + ih - ((c.cvScore - yDom.from) / (yDom.to - yDom.from)) * ih
   const maxP95 = Math.max(...cands.map(c => c.p95LatencyMs), 0.001)
   // Kích thước điểm ∝ p95 latency — bán kính 4..12px (§5.5)
   const radius = (c: EvoCandidateRowUi) => 4 + 8 * Math.min(1, c.p95LatencyMs / maxP95)
@@ -859,16 +1002,26 @@ function ParetoChart({ cands }: { cands: readonly EvoCandidateRowUi[] }) {
         role="img"
         aria-label="Biểu đồ Pareto: trục ngang số tham số (thang log), trục dọc điểm kiểm định chéo, kích thước điểm theo p95 latency"
       >
+        {/* Lưới ngang R26 — 5 vạch kèm nhãn giá trị (thay 2 nhãn min/max cũ:
+            đọc được thang thật + không ảo giác "điểm thấp mà trông cao") */}
+        {[0, 0.25, 0.5, 0.75, 1].map(f => {
+          const yy = pad.t + ih - f * ih
+          const yv = yDom.from + (yDom.to - yDom.from) * f
+          return (
+            <g key={f}>
+              <line x1={pad.l} y1={yy} x2={pad.l + iw} y2={yy} className="stroke-stone-800" strokeWidth={0.75} strokeDasharray="2 3" />
+              <text x={pad.l - 4} y={yy + 2.5} textAnchor="end" className="fill-stone-600" fontSize={7.5}>{fmtCv(yv)}</text>
+            </g>
+          )
+        })}
         {/* Trục */}
         <line x1={pad.l} y1={pad.t + ih} x2={pad.l + iw} y2={pad.t + ih} className="stroke-stone-700" strokeWidth={1} />
         <line x1={pad.l} y1={pad.t} x2={pad.l} y2={pad.t + ih} className="stroke-stone-700" strokeWidth={1} />
         <text x={pad.l + iw / 2} y={H - 6} textAnchor="middle" className="fill-stone-500" fontSize={9}>tham số (log₁₀)</text>
         <text x={10} y={pad.t + ih / 2} textAnchor="middle" transform={`rotate(-90 10 ${pad.t + ih / 2})`} className="fill-stone-500" fontSize={9}>điểm CV</text>
-        {/* Nhãn biên trục */}
+        {/* Nhãn biên trục X */}
         <text x={pad.l} y={pad.t + ih + 11} textAnchor="middle" className="fill-stone-600" fontSize={8}>{formatViNum(Math.round(10 ** xmin))}</text>
         <text x={pad.l + iw} y={pad.t + ih + 11} textAnchor="middle" className="fill-stone-600" fontSize={8}>{formatViNum(Math.round(10 ** xmax))}</text>
-        <text x={pad.l - 4} y={pad.t + ih + 3} textAnchor="end" className="fill-stone-600" fontSize={8}>{fmtCv(ymin)}</text>
-        <text x={pad.l - 4} y={pad.t + 4} textAnchor="end" className="fill-stone-600" fontSize={8}>{fmtCv(ymax)}</text>
         {/* Pareto front — nét đứt amber trên tập thắng CV */}
         {frontPts.length >= 2 && (
           <polyline
@@ -898,6 +1051,18 @@ function ParetoChart({ cands }: { cands: readonly EvoCandidateRowUi[] }) {
             <title>{`#${c.idx} · ${c.archSummary} · CV ${fmtCv(c.cvScore)} · ${formatViNum(c.params)} tham số · p95 ${formatViDecimal(c.p95LatencyMs, 2)}ms${c.blockedH7 ? ' · CHẶN H7' : c.beatActive ? ' · thắng active' : ''}`}</title>
           </circle>
         ))}
+        {/* R26 — nhãn #idx trên điểm Pareto front (≤8 điểm — nhiều hơn thì chỉ tooltip) */}
+        {frontPts.length <= 8 && frontPts.map(c => (
+          <text
+            key={`lbl-${c.idx}`}
+            x={px(c) + radius(c) + 2}
+            y={py(c) - radius(c) - 1}
+            className="fill-amber-300/90"
+            fontSize={7.5}
+          >
+            #{c.idx}
+          </text>
+        ))}
       </svg>
       <div className="md:hidden">
         <table className="w-full text-[11px]">
@@ -914,7 +1079,9 @@ function ParetoChart({ cands }: { cands: readonly EvoCandidateRowUi[] }) {
               <tr key={c.idx} className="border-b border-slate-900/80">
                 <td className="py-1 pr-2 font-mono text-stone-400">#{c.idx}</td>
                 <td className="py-1 pr-2 font-mono tabular-nums text-stone-300">{formatViNum(c.params)}</td>
-                <td className="py-1 font-mono tabular-nums text-stone-100">{fmtCv(c.cvScore)}</td>
+                <td className="py-1 font-mono tabular-nums text-stone-100">
+                  {fmtCv(c.cvScore)} <span className="text-[9px] text-stone-500">[{fmtCv(c.ciLow)}..{fmtCv(c.ciHigh)}]</span>
+                </td>
               </tr>
             ))}
             {frontPts.length === 0 && (
@@ -923,10 +1090,10 @@ function ParetoChart({ cands }: { cands: readonly EvoCandidateRowUi[] }) {
           </tbody>
         </table>
       </div>
-      {/* Chú giải */}
+      {/* Chú giải — R26 sửa "thắng CV" → "thắng active" (màu amber gắn beatActive) */}
       <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[9px] text-stone-500">
         <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-stone-500" aria-hidden="true" />thua active</span>
-        <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-amber-400" aria-hidden="true" />thắng CV</span>
+        <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full bg-amber-400" aria-hidden="true" />thắng active</span>
         <span className="inline-flex items-center gap-1"><span className="inline-block h-2 w-2 rounded-full border border-rose-400 bg-rose-400/30" aria-hidden="true" />chặn H7</span>
         <span>kích thước điểm ∝ p95 latency</span>
       </div>

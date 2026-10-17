@@ -8,6 +8,11 @@
  * (KHÔNG giữ weights — H6) + heartbeat từng ứng viên (mồ côi stale > 60s →
  * mark failed — precedent HN §4.2-2b).
  *
+ * R26 SMART SEARCH (evo/smart-search.ts): ứng viên #0 = hạt giống ĐÃ TÍNH
+ * TOÁN từ dữ liệu (suggestArch — kim tự tháp hình học + trần dung lượng theo
+ * mẫu); cha mutation/crossover chọn theo GIẢI ĐẤU (tournament k=3); mutation
+ * rate thích ứng 0,15 → 0,06. GET kèm `suggestion` hiển thị ở form E2.
+ *
  * BẤT BIẾN (§6):
  *  - H1: KHÔNG đụng đường runtime — không đọc/ghi BrainModel, không thay
  *    brain active; ứng viên chỉ là ĐỀ XUẤT (H2 — user duyệt qua A1).
@@ -49,6 +54,12 @@ import {
   type EvoCandidateSpec,
   type EvoScoreResult,
 } from '@/lib/brain/evo/benchmark'
+import {
+  adaptiveMutationRate,
+  pickTournamentParent,
+  suggestArch,
+  suggestionToEncoding,
+} from '@/lib/brain/evo/smart-search'
 import { formatArchSummary } from '@/lib/brain/evo/blocks'
 import { makeRng } from '@/lib/brain/init'
 import { defaultDraftFor } from '@/lib/brain/spec-schema'
@@ -98,10 +109,52 @@ export interface EvolveRunState {
   error?: string
 }
 
+/** R26 smart-sizing — gợi ý kích thước theo dữ liệu fixture (hiển thị form E2). */
+export interface EvolveSuggestionResponse {
+  brain: string
+  hidden: Array<{ units: number; activation: string }>
+  nLayers: number
+  inputDim: number
+  outputDim: number
+  nSamples: number
+  paramsEstimate: number
+  paramsCap: number
+  rationale: string
+}
+
 export interface EvolveGetResponse {
   ok: true
   run: EvolveRunState | null
   candidates: EvolveCandidateRow[]
+  /** Có khi brain có fixture (A/B/C); thiếu khi knowledge (chưa vào search space). */
+  suggestion?: EvolveSuggestionResponse
+}
+
+/** Tính suggestion cho brain — fail-open undefined (knowledge / lỗi fixture). */
+function evoSuggestionFor(brain: string): EvolveSuggestionResponse | undefined {
+  try {
+    const fx = loadEvoFixture(brain)
+    const sug = suggestArch({
+      brain: brain as BrainKey,
+      inputDim: fx.inputDim,
+      outputDim: fx.outputDim,
+      nSamples: fx.nSamples,
+      paramsBudget: EVO_MAX_PARAMS,
+    })
+    return {
+      brain: sug.brain,
+      hidden: sug.hidden,
+      nLayers: sug.nLayers,
+      inputDim: sug.inputDim,
+      outputDim: sug.outputDim,
+      nSamples: sug.nSamples,
+      paramsEstimate: sug.paramsEstimate,
+      paramsCap: sug.paramsCap,
+      rationale: sug.rationale,
+    }
+  } catch {
+    return undefined // knowledge chưa có fixture (D4 §8.4) — UI hiện thông báo D4
+  }
 }
 
 // ==================== REGISTRY (globalThis singleton) ====================
@@ -317,6 +370,19 @@ async function runEvolveLoop(runId: string, brain: BrainKey, seed: number, total
   const fixture = loadEvoFixture(brain)
   const rng = makeRng(seed)
   const baselines = await computeBaselines(brain)
+  // R26 smart-sizing: hạt giống #0 = kiến trúc ĐÃ TÍNH TOÁN từ dữ liệu fixture
+  // (suggestArch) — mọi vòng khởi đầu bằng cơ chế tính thay vì ngẫu nhiên thuần.
+  const seedEncoding = suggestionToEncoding(
+    suggestArch({
+      brain,
+      inputDim: fixture.inputDim,
+      outputDim: fixture.outputDim,
+      nSamples: fixture.nSamples,
+      paramsBudget: EVO_MAX_PARAMS,
+    }),
+    brain,
+    fixture.inputDim,
+  )
   let nBeatActive = 0
   let nBlockedH7 = 0
   let bestIdx: number | null = null
@@ -341,16 +407,20 @@ async function runEvolveLoop(runId: string, brain: BrainKey, seed: number, total
       break
     }
 
-    // ── Sinh ứng viên: #0 sample; sau đó 80% mutation / 20% crossover (Q3) ──
+    // ── Sinh ứng viên (R26 smart search): #0 = hạt giống suggestArch (đã tính
+    // ở trên); sau đó 80% mutation / 20% crossover (Q3) với CHA CHỌN THEO
+    // GIẢI ĐẤU (tournament k=3 — thay uniform) + mutation rate thích ứng
+    // 0,15 → 0,06 theo tiến độ (khám phá sớm — khai thác muộn). ──
     let encoding: number[]
     if (i === 0 || rec.encodings.length === 0) {
-      encoding = sampleEvoCandidate(rng, brain, fixture.inputDim)
+      encoding = i === 0 ? [...seedEncoding] : sampleEvoCandidate(rng, brain, fixture.inputDim)
     } else if (rng() < EVO_MUTATION_RATE || rec.encodings.length < 2) {
-      const parent = rec.encodings[Math.floor(rng() * rec.encodings.length)]
-      encoding = mutateEvo(parent, rng)
+      const parent = pickTournamentParent(rec.encodings, rec.candidates.map(c => c.cvScore), rng)
+      encoding = mutateEvo(parent, rng, adaptiveMutationRate(i, total))
     } else {
-      const a = rec.encodings[Math.floor(rng() * rec.encodings.length)]
-      const b = rec.encodings[Math.floor(rng() * rec.encodings.length)]
+      const scores = rec.candidates.map(c => c.cvScore)
+      const a = pickTournamentParent(rec.encodings, scores, rng)
+      const b = pickTournamentParent(rec.encodings, scores, rng)
       encoding = crossoverEvo(a, b, rng)
     }
 
@@ -505,7 +575,9 @@ export async function getEvoRunState(
   }
 
   if (rec) {
-    return { ok: true, run: rec.state, candidates: rec.candidates }
+    // R26: kèm suggestion smart-sizing (fail-open undefined — knowledge)
+    const suggestion = evoSuggestionFor(brain)
+    return { ok: true, run: rec.state, candidates: rec.candidates, ...(suggestion ? { suggestion } : {}) }
   }
 
   // Rebuild từ DB (run của process trước / sau restart)
@@ -517,7 +589,8 @@ export async function getEvoRunState(
           orderBy: { startedAt: 'desc' },
         })
     if (!run || run.inputMode !== 'evo-144') {
-      return { ok: true, run: null, candidates: [] }
+      const suggestion = evoSuggestionFor(brain)
+      return { ok: true, run: null, candidates: [], ...(suggestion ? { suggestion } : {}) }
     }
     let status = run.status as EvolveRunState['status']
     // Sweep mồ côi: running mà heartbeat stale > 60s → failed (HN §4.2-2b)
@@ -554,6 +627,7 @@ export async function getEvoRunState(
     const summary = run.summaryJson
       ? (JSON.parse(run.summaryJson) as EvolveRunState['summary'])
       : undefined
+    const suggestion = evoSuggestionFor(brain)
     return {
       ok: true,
       run: {
@@ -572,6 +646,7 @@ export async function getEvoRunState(
         ...(run.error ? { error: run.error } : {}),
       },
       candidates,
+      ...(suggestion ? { suggestion } : {}),
     }
   } catch (err) {
     console.error('[Evolve] getEvoRunState DB error:', err instanceof Error ? err.message : String(err))

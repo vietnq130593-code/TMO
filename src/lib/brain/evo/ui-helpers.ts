@@ -69,10 +69,54 @@ export interface EvoGetResponseUi {
   ok: true
   run: EvoRunStateUi | null
   candidates: EvoCandidateRowUi[]
+  /** R26 smart-sizing — mirror EvolveSuggestionResponse (additive; có khi brain có fixture A/B/C). */
+  suggestion?: EvoSuggestionUi
+}
+
+/** R26 — gợi ý kích thước theo dữ liệu (mirror EvolveSuggestionResponse evolve.ts). */
+export interface EvoSuggestionUi {
+  brain: string
+  hidden: Array<{ units: number; activation: string }>
+  nLayers: number
+  inputDim: number
+  outputDim: number
+  nSamples: number
+  paramsEstimate: number
+  paramsCap: number
+  rationale: string
 }
 
 /** Trần tham số mọi ứng viên (mirror EVO_MAX_PARAMS evolve.ts — BRAIN_MAX_PARAMS precedent). */
 export const EVO_PARAMS_BUDGET = 250_000
+
+/**
+ * R26 — miền trục Y Pareto sau đệm: span nhỏ bị NỞ tới minSpan (tránh "mọi
+ * điểm nhìn như nhau" khi CV dồn cụm), 2 đầu đệm 18% span, kẹp [lo..hi]
+ * (CV luôn ∈ [0..1]). Thuần — pin r115.
+ */
+export function padDomain(
+  min: number,
+  max: number,
+  lo: number,
+  hi: number,
+  minSpan = 0.08,
+): { from: number; to: number } {
+  let mn = min
+  let mx = max
+  if (mx - mn < minSpan) {
+    const c = (mn + mx) / 2
+    mn = c - minSpan / 2
+    mx = c + minSpan / 2
+  }
+  const pad = (mx - mn) * 0.18
+  return { from: Math.max(lo, mn - pad), to: Math.min(hi, mx + pad) }
+}
+
+/** R26 — tone thanh điểm CV: best vòng = emerald · thắng active = amber · còn lại stone. */
+export function cvBarTone(c: { idx: number; beatActive: boolean }, bestIdx: number | null): 'emerald' | 'amber' | 'stone' {
+  if (bestIdx !== null && c.idx === bestIdx) return 'emerald'
+  return c.beatActive ? 'amber' : 'stone'
+}
 
 // ==================== U1 — STATE MACHINE (E1..E4 + cờ E5) ====================
 

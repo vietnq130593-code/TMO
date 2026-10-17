@@ -924,6 +924,7 @@ export function BrainTabContent() {
           key={selectedBrainKey}
           brain={selectedBrainKey}
           onSelectBrainQuick={selectBrain}
+          signals={selectedEntry.signals}
           tuningByKey={tuningByKey}
           changeLog={feed?.changeLog ?? []}
           onSetTuning={(k, v) => { void handleSet(k, v) }}
