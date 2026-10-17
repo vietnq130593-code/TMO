@@ -1,7 +1,8 @@
 # BLUEPRINT TRIỂN KHAI EVO-NAO P1 → P5 + BRAIN-D "TRI THỨC" CHO TMO
 
-> **Phiên bản 0.4 — HIỆU ĐINH SAU ĐỢT FB-BRAIN-D1 (2026-10-17, task R21).**
-> **Hiệu đính nhỏ 0.4.1 (2026-10-17, task R22):** cấu hình lại phòng sau khi sandbox mất toàn bộ credentials (.env về placeholder) — R2 (bucket `themagnumopus`, 15 backup objects) + Neo4j Aura (`neo4j+s://6e688b02…`, user/db `6e688b02`) + NIM 4/4 key HTTP 200 + review v0.4 đối chiếu code (r110 21/21 pass). Duy nhất 1 điểm số liệu sửa: **§9/Q5 số đo đồ thị** — không thay đổi thiết kế nào.
+> **Phiên bản 0.5 — REVIEW KIẾN TRÚC TOÀN DIỆN + BỔ SUNG §8.5 UI TOPOLOGY BRAIN-D (2026-10-17, task R23).**
+> Review v0.4.1 tìm & sửa **9 lỗi thiết kế** (F1–F9, chi tiết §11) — đáng chú ý nhất: 2 tham chiếu "tiền lệ HN" trong §5 trỏ thiết kế CHƯA TỪNG triển khai (HN-P2/P3 UI mất theo reset chưa dựng lại) và E1 không thể phân biệt với "mất kết nối". Bổ sung **§8.5 — UI topology diagram Brain-D trong tab BRAIN** (yêu cầu user 2026-10-17: tab BRAIN chưa thấy topology Brain-D): ghost topology hiển thị ngay từ D1, 3 cụm đầu ra đồng thời, tiến độ thức tỉnh kép.
+> **0.4.1 (2026-10-17, task R22):** cấu hình lại phòng sau khi sandbox mất toàn bộ credentials (.env về placeholder) — R2 (bucket `themagnumopus`, 15 backup objects) + Neo4j Aura (`neo4j+s://6e688b02…`, user/db `6e688b02`) + NIM 4/4 key HTTP 200 + review v0.4 đối chiếu code (r110 21/21 pass). Duy nhất 1 điểm số liệu sửa: §9/Q5 số đo đồ thị — không thay đổi thiết kế nào.
 > Dựng lại 2 phần chi tiết ĐÃ MẤT của v0.2 (386 dòng — mất theo sandbox reset vì chưa kịp commit/push GitHub): **§5 UI EVO-U1..U5** (tái tạo đầy đủ theo convention precedent [BLUEPRINT-HYPERNAS-P1-P5.md](./BLUEPRINT-HYPERNAS-P1-P5.md) §10) + **§10 Q1–Q6** (tái tạo từ tri thức phiên — mỗi câu đánh dấu cần user chốt khi tới phase). Đồng thời cập nhật trung thực §0.2/§8.1 sau khi D1 HOÀN TẤT (R20, commit 4394507) + rà soát fixbug FB-BRAIN-D1 (R21 — 8 phát hiện BUG2-269..276 đã fix, chi tiết [Bug_v2.md](../Bug_v2.md)).
 > Bản v0.3 (251 dòng) tái tạo sau reset giữ nguyên 2 quyết định user duyệt TRƯỚC reset, hiệu lực không đổi:
 > - **Q7 = phương án (b)** — D3 kèm cả **chế độ vận dụng** (không chỉ tinh chỉnh tham số truy xuất);
@@ -19,12 +20,14 @@
 
 | Phase | Tên | Mục tiêu một câu | Artifacts | Cờ (mặc định) | Test | Trạng thái |
 |---|---|---|---|---|---|---|
-| **EVO-P0** | Nền & đối chứng | Benchmark tất định + fixtures tái lập để mọi ứng viên so với Brain-C active (MLP chuỗi) trên cùng dữ liệu | `src/lib/brain/evo/benchmark.ts` + fixtures | — (thuần lib) | r105 | Chưa triển khai |
+| **EVO-P0** | Nền & đối chứng | Benchmark tất định + fixtures tái lập để mọi ứng viên so với Brain-C active (MLP chuỗi) trên cùng dữ liệu | `src/lib/brain/evo/benchmark.ts` + fixtures | — (thuần lib) | r105 * | **ĐÃ TỪNG làm (chức năng) — MẤT → viết lại** |
 | **EVO-P1** | Encoding additive 144 | Mở search space 96→144: thêm slot block kiến trúc (layer-type/ tham số/ MoE) — **additive, không phá HN-P1** | `search-space.ts` (mở rộng) | — (thuần lib) | r105 | **ĐÃ TỪNG làm — MẤT theo reset → viết lại** |
 | **EVO-P2** | Block engine thuần TS | Block chạy được trên CPU: attention 1-head causal + selective SSM (N=8–16), seq ≤512 | `src/lib/brain/evo/blocks.ts` | — (thuần lib) | r106 | **ĐÃ TỪNG làm — MẤT → viết lại** |
 | **EVO-P3** | Micro-MoE | MoE nhẹ k=2–4 experts + aux loss 0.01 (chỉ khi ≥2K mẫu) | `src/lib/brain/evo/moe.ts` | — (thuần lib) | r107 | **ĐÃ TỪNG làm — MẤT → viết lại** |
 | **EVO-P4** | Evolve runner | Vòng tiến hoá: sinh ứng viên từ encoding → train → chấm benchmark → ghi BrainSearchCandidate | `src/lib/brain/evolve.ts` + `POST /api/brain/evolve` | `brain_evolve` (OFF) | r108 | **ĐÃ TỪNG làm — MẤT → viết lại** |
 | **EVO-P5** | GPU sidecar | Tùy chọn: mini-service GPU khi CPU không kịp (chỉ benchmark ngoài runtime) | `mini-services/evo-gpu/` | — | r109 | Chưa triển khai (Q6 — cân nhắc hoãn) |
+
+\* **Hiệu đính 0.5 (F1):** trạng thái "Chưa triển khai" cũ của P0 tự mâu thuẫn với P1..P4 "ĐÃ TỪNG làm — MẤT" (P4 chấm ứng viên trên benchmark → chức năng benchmark phải từng tồn tại); nhưng §1 không liệt kê `benchmark.ts` trong sổ mất → P0 từng sống DẠNG CHỨC NĂNG (nhúng trong evolve.ts mất), chưa chắc có artifact riêng. Khi viết lại: tách artifact chuẩn `benchmark.ts`; r105 = test chung P0+P1 (benchmark + encoding 1 file) — đặt lại số nếu tách file.
 
 ### 0.2 Chuỗi phase BRAIN-D "Tri Thức" (não thứ 4 — dùng KB để LÀM, không chỉ trả lời)
 
@@ -33,7 +36,7 @@
 | **D0** | Ánh xạ knowledge/ → Neo4j | Đưa 9 shard tài liệu gốc (2.2MB) vào đồ thị lõi bằng ingestion sẵn có (entity-resolver + LLM extraction) — additive, merge không đè | đo khối lượng + chạy ingestion theo đợt shard | — | — | Chưa triển khai (duyệt Q9; Q5 chốt hạ tầng khi tới) |
 | **D1** | LOG-ONLY | Bảng `KbConsultLog` ghi MỌI lượt KB consult: ai hỏi, cấu hình truy xuất, nguồn nào trả, kết quả top, tốn bao nhiêu, chạy run nào → nối Outcome* | prisma model + instrumentation `kb-access.ts` + `consult-log.ts`/`consult-context.ts` + fallback/graph wrapper | `kb_consult_log` (ON) | r110 | **HOÀN TẤT R20 (4394507) + rà soát FB-BRAIN-D1 R21 (BUG2-269..276 fix + migration bù + corpus mở fallback/graph)** |
 | **D2** | Baseline đối chứng | Report: heuristic CỨNG hiện tại đạt mức nào trên log thật (≥100 log) — trả lời "não có hơn heuristic không?" bằng dữ liệu | script report + docs | — | r111 | Chưa triển khai |
-| **D3** | Policy head 3 tầng | `brain/brains/knowledge.ts` — hành động gồm **chế độ vận dụng** (Q7=(b)) + tham số truy xuất + meta | brain D + kill-switch 2 cờ | `runtime_knowledge` (OFF) + `knowledge_organ_strategy` | r112 | Chưa triển khai (cần D2 + ≥300 log có Outcome*) |
+| **D3** | Policy head 3 tầng | `brain/brains/knowledge.ts` — hành động gồm **chế độ vận dụng** (Q7=(b)) + tham số truy xuất + meta | brain D + kill-switch 2 cờ + **UI topology §8.5 (phần activity)** | `runtime_knowledge` (OFF) + `knowledge_organ_strategy` | r112 | Chưa triển khai (cần D2 + ≥300 log có Outcome*; **UI ghost topology §8.5 ra TRƯỚC — chỉ cần D1 sống**) |
 | **D4** | Vào NAS/EVO space | Kiến trúc knowledge head do evolve.ts tìm (không hand-tune) | mở encoding §4 | — | r113 | Chưa triển khai (cần EVO-P1..P4 + D3 sống) |
 
 ---
@@ -113,7 +116,7 @@ Nguyên tắc **ADDITIVE — BIJECTIVE TRONG MỖI VÙNG**: 96 chiều đầu gi
 
 ### 4.5 EVO-P4 — Evolve runner + route (VIẾT LẠI)
 
-- `evolve.ts`: vòng sinh ứng viên (mutation + crossover trong encoding 144, tôn trọng ngân sách H3 ≤24 ứng viên/10 phút) → train (gate A1) → chấm benchmark EVO-P0 → ghi `BrainSearchCandidate` (không giữ weights — H6).
+- `evolve.ts`: vòng sinh ứng viên (mutation + crossover trong encoding 144, tôn trọng ngân sách H3 ≤24 ứng viên/10 phút) → train (gate A1) → chấm benchmark EVO-P0 → ghi `BrainSearchCandidate` (không giữ weights — H6). Toán tử di truyền PHẢI kèm **repair one-hot** (slot layer-type [96..113] sau mutation/crossover được re-sample về đúng 1 hot/block) — decode LUÔN ra ứng viên valid, không có "ứng viên hỏng" trong corpus (khác cờ `moeSkipped` Q4 — repair trả về encoding hợp lệ nên không cần ghi vết). **Crossover cha 96-dim (HN-P1 legacy) × cha 144-dim hợp lệ** nhờ additive: pad 0 lên 96→144 (vùng block toàn 0 = thuần MLP) — quy tắc pad pin tại evolve.ts (F4/0.5).
 - `POST /api/brain/evolve`: khởi động/dừng/hỏi trạng thái; **cờ `brain_evolve` mặc định OFF**; route chỉ điều phối search ngoài runtime.
 
 ### 4.6 EVO-P5 — GPU sidecar (chưa triển khai)
@@ -131,17 +134,17 @@ Mini-service độc lập port riêng (`mini-services/evo-gpu/`) chạy benchmar
 1. **Đề xuất ≠ quyết định** (H2): mọi copy nói "đề xuất — bạn duyệt"; KHÔNG có chữ/nút nào hiểu là "máy tự thay não". Tab không đụng `BrainModel`/active.
 2. **Single-source state:** tái dùng state SECTION 3 (`selectedBrainKey` + draft/dirty pattern) — không nhân bản state nháp.
 3. **Hiện/ẩn theo cờ `brain_evolve`** (mặc định OFF — tab ẩn hoàn toàn khi off; cờ on + chưa đủ điều kiện → thân là trạng thái E1, không có đường "cờ on mà không thấy gì").
-4. **Mobile-first:** tab bar trở thành **7 nút** (Hiện trạng · Tham số runtime · Thống kê · Thay đổi · Tham số học · Tìm kiếm · **Tiến hoá**) — 375px: 7 nút × ~53px, label "Tiến hoá" 7 ký tự vẫn vừa; giữ pattern `min-h-[44px] md:min-h-[32px]` + `text-[10px]`; mọi bảng bọc `overflow-x-auto max-h-96 overflow-y-auto`.
+4. **Mobile-first:** baseline THỰC TẾ của SECTION 3 hôm nay = **4 tab** (Training Console · Tham số runtime · Nhật ký tinh chỉnh · Hàm & công thức — Task 26). Lộ trình: EVO-P4 thêm "Tiến hoá" → **5 nút**; khi HN-P2/P3 UI dựng lại theo HYPERNAS §10 (thêm "Tìm kiếm" + bộ tên console thiết kế đó) → đích **7 nút** — 375px: 7 nút × ~53px, label "Tiến hoá" 7 ký tự vẫn vừa (bậc trung gian 5–6 nút càng thoáng). Giữ pattern `min-h-[44px] md:min-h-[32px]` + `text-[10px]`; mọi bảng bọc `overflow-x-auto max-h-96 overflow-y-auto`. (Hiệu đính 0.5 — F2: bản trước liệt kê "Hiện trạng · Thống kê · Thay đổi · Tham số học · Tìm kiếm" là tên THIẾT KẾ HYPERNAS §10 chưa từng triển khai — HN-P2/P3 UI mất theo reset, xem §1.)
 5. **A11y:** `role=tab/tabpanel` + `aria-selected` · progress `aria-live="polite"` · nút icon có `sr-only` · bảng `caption sr-only`.
-6. **Poll thích ứng:** đang chạy vòng evolve → GET 2,5s (`POLL_ACTIVITY_MS` precedent); idle → 15s (`POLL_NEURAL_MS`); tab ẩn → dừng; GET lỗi → giữ dữ liệu cũ + chip "mất kết nối" (không toast spam).
+6. **Poll thích ứng:** đang chạy vòng evolve → GET 2,5s (`POLL_ACTIVITY_MS` precedent); idle → 15s (`POLL_NEURAL_MS`); tab ẩn → dừng; **GET HTTP 404 (route chưa deploy) → E1 "CHƯA SẴN SÀNG" — KHÔNG phải mất kết nối**; lỗi khác (5xx/network) → giữ dữ liệu cũ + chip "mất kết nối" (không toast spam). (Hiệu đính 0.5 — F3: thiếu quy tắc này thì E1 và mất kết nối cùng biểu hiện "GET lỗi", UI không phân biệt được.)
 7. **Không dependency mới:** hiệu ứng = CSS thuần + Tailwind tokens + keyframes + `prefers-re-reduced-motion`.
 
 ### 5.2 U1 — Tab "Tiến hoá": state machine 5 trạng thái thân tab
 
 | Trạng thái | Điều kiện | Nội dung |
 |---|---|---|
-| **E1 — Chưa đủ điều kiện** | `brain_evolve` on nhưng EVO-P0..P4 chưa sống (route chưa có / benchmark chưa có fixtures) | Chip "CHƯA SẴN SÀNG" + dòng "Cần hoàn thành EVO-P0→P4 (xem blueprint §4) — tab sẽ tự kích hoạt khi hạ tầng sống". Không nút chạy. (Không có trạng thái "ngủ vì thiếu mẫu" như HN — evolve chấm benchmark tất định, không cần brain thức tỉnh.) |
-| **E2 — Sẵn sàng** | hạ tầng sống, chưa có vòng chạy | Form: stepper số ứng viên 4–24 bước 4 (trần H3) · chọn não đích (A/B/C — evolve tìm kiến trúc thay thế cho não nào) · seed mặc định tự sinh tất định, HIỆN rõ, cho nhập lại (H4) · dòng ngân sách "≈ 1–3 phút · tối đa 10 phút · ≤ 24 ứng viên · ≤ 250K tham số" · nút primary **"Bắt đầu tiến hoá"**. Vòng GẦN NHẤT hiển thị phía dưới nếu có. |
+| **E1 — Chưa đủ điều kiện** | `brain_evolve` on nhưng EVO-P0..P4 chưa sống (GET `/api/brain/evolve` → **404** / benchmark chưa có fixtures) | Chip "CHƯA SẴN SÀNG" + dòng "Cần hoàn thành EVO-P0→P4 (xem blueprint §4) — tab sẽ tự kích hoạt khi hạ tầng sống". Không nút chạy. (Không có trạng thái "ngủ vì thiếu mẫu" như HN — evolve chấm benchmark tất định, không cần brain thức tỉnh.) |
+| **E2 — Sẵn sàng** | hạ tầng sống, chưa có vòng chạy | Form: stepper số ứng viên 4–24 bước 4 (trần H3) · chọn não đích (A/B/C — evolve tìm kiến trúc thay thế cho não nào) · seed mặc định = hash(runId) — tất định theo từng vòng, HIỆN rõ, cho nhập lại đè (H4 — chạy lại cùng seed tái hiện bit-đối-bít) · dòng ngân sách "≈ 1–3 phút · tối đa 10 phút · ≤ 24 ứng viên · ≤ 250K tham số" · nút primary **"Bắt đầu tiến hoá"**. Vòng GẦN NHẤT hiển thị phía dưới nếu có. |
 | **E3 — Đang chạy** | status=running | Thanh tiến độ kép: ứng viên `i/N` + % wall-time (≤10 phút H3) · rolling log ứng viên gần nhất ("#7 · MLP+attn1h+SSM · CV 0,164 · 2,4s") · nút **"Dừng"** (ghost) → `POST /api/brain/evolve/cancel` (cooperative — precedent HN §4.2-2c) · seed hiện để đối chiếu. |
 | **E4 — Xong** | done / failed / cancelled | Bảng ứng viên (U2) + khối đề xuất + Pareto (U4). Failed → khối lỗi + "chạy lại cùng seed {seed} để tái hiện" (H4). Cancelled → banner "đã dừng lúc i/N — giữ N' ứng viên đã chấm". |
 | **E5 — Chặn H7** | có ứng viên block-engine thắng CV nhưng chưa qua cổng latency | Khu vực riêng (xem U4) — ứng viên "thắng điểm nhưng chưa đủ nhanh để chạy runtime" hiển thị rõ, KHÔNG trộn với đề xuất chính. |
@@ -150,7 +153,7 @@ Chuyển trạng thái theo GET poll — không optimistic update (POST xong đ�
 
 ### 5.3 U2 — Bảng ứng viên + 2 cấp nút áp dụng (precedent UX-7 HN)
 
-**Bảng:** cột `#` · `Kiến trúc` (chuỗi compact — hàm format đặt tại `evo/blocks.ts` dùng chung server/UI, single-source; vd `[attn1h·64] → [ssm·N16] → MLP[128,64]`) · `Điểm CV` (số chính + ±CI bootstrap) · `Tham số` (viNum + % ngân sách 250K) · `p95 lat` (ms — đo benchmark inference) · badge `THẮNG ACTIVE` (amber) + badge `CHẶN H7` (đỏ nhạt — khi thắng CV nhưng p95 > 2× MLP chuỗi). Sort mặc định cvScore desc. ≤ 60 hàng (prune H5) — `max-h-96` scroll.
+**Bảng:** cột `#` · `Kiến trúc` (chuỗi compact — hàm format đặt tại `evo/blocks.ts` dùng chung server/UI, single-source; vd `[attn1h·64] → [ssm·N16] → MLP[128,64]`) · `Điểm CV` (số chính + ±CI bootstrap) · `Tham số` (viNum + % ngân sách 250K) · `p95 lat` (ms — đo benchmark inference) · badge `THẮNG ACTIVE` (amber) + badge `CHẶN H7` (đỏ nhạt — khi thắng CV nhưng p95 > 2× MLP chuỗi). Sort mặc định cvScore desc. Hiển thị ≤ 60 hàng mới nhất MỖI VÒNG — `max-h-96` scroll; **DB giữ toàn bộ hàng mọi vòng (H5 additive — không xóa)**. (Hiệu đính 0.5 — F5: bỏ cách ghi "prune H5" gây hiểu nhầm xóa DB.)
 
 **Dialog chi tiết** (click hàng): spec đầy đủ bảng nhóm (giống Training Console) · metrics + so sánh active · **preview encoding 144 thanh phân vùng (U3)** · nút "Áp dụng vào nháp".
 
@@ -158,7 +161,7 @@ Chuyển trạng thái theo GET poll — không optimistic update (POST xong đ�
 
 | Nút | Vị trí | Điều kiện bật | Hành vi |
 |---|---|---|---|
-| **"Áp dụng đề xuất"** | khối đề xuất E4 | ≥ 1 ứng viên `beatActive` VÀ qua H7 | Ghi best vào nháp (qua dirty-guard confirm — precedent HN) |
+| **"Áp dụng đề xuất"** | khối đề xuất E4 | ≥ 1 ứng viên `beatActive` VÀ qua H7 VÀ **editor v2 đã sống** (best có thể là block candidate — cùng điều kiện nút hàng, xem Lưu ý decode) | Ghi best vào nháp (qua dirty-guard confirm — precedent HN) |
 | **"Áp dụng vào nháp"** | dialog từng hàng | LUÔN mở (nháp = không gian tự do; runtime chỉ lên qua A1 + H7) | Ghi spec ứng viên vào nháp |
 
 **Lưu ý decode:** ứng viên có block (attention/SSM/MoE) decode về draft **định dạng mới** (không phải `BrainDraftSpec` MLP thuần) — nút "Áp dụng vào nháp" chỉ khả dụng khi SECTION 1 editor hỗ trợ hiển thị block ( milestone EVO-P4 UI); trước đó dialog hiển thị spec read-only + dòng "Kiến trúc block cần editor v2 (kèm EVO-P4)". Đây là lý do EVO-P4 gồm cả editor mở rộng.
@@ -168,6 +171,7 @@ Chuyển trạng thái theo GET poll — không optimistic update (POST xong đ�
 - 1 hàng ngang `h-3` chia 5 đoạn theo vùng: HN-P1 [0..95] (xám đậm) · layer-type [96..113] (amber) · tham số block [114..131] (cam) · MoE toàn cục [132..135] (vàng) · dự phòng [136..143] (xám nhạt).
 - Mỗi đoạn: độ sáng theo "mức kích hoạt" (giá trị chuẩn hoá 0–1 của slot trong encoding); hover tooltip hiện chi tiết slot (id vùng, chỉ số, giá trị decode, nghĩa).
 - Ứng viên thuần MLP → 3 đoạn EVO tối đen + chip "thuần MLP (tương thích HN-P1)" — nhìn 1 giây biết ứng viên có block hay không.
+- **Compat 2 độ dài (F4/0.5):** hàng legacy HN-P1 có `encodingJson` 96-dim → viewer chỉ vẽ vùng [0..95] + chip "96-dim (HN-P1 — không vùng block)"; 144-dim → đủ 5 vùng. Vùng [0..95] không đổi nghĩa (§4.2) nên cùng hàm vẽ được cả hai.
 - Đặt trong dialog chi tiết U2 (không phải tab riêng — tiết kiệm không gian).
 
 ### 5.5 U4 — Biểu đồ Pareto CV-score × params × p95-latency
@@ -179,7 +183,7 @@ Chuyển trạng thái theo GET poll — không optimistic update (POST xong đ�
 
 ### 5.6 U5 — Kill-switch panel: 2 cờ + audit 1 chỗ
 
-- Panel cuối tab: cờ `brain_evolve` (search on/off) + kill-switch toàn cục mọi não search (tiền lệ HN-P2 dùng `brain_search` + global) — cùng 1 khối, toggle qua tuning-store (ghi TuningChangeLog audit — precedent §10 HYPERNAS).
+- Panel cuối tab: cờ `brain_evolve` (search on/off) + kill-switch toàn cục mọi não search — **đặt tên `brain_search_global`** (áp chung HN-search + EVO). LƯU Ý (0.5): `brain_search` là cờ HN-P2 theo HYPERNAS §10 — cả 2 cờ CHƯA tồn tại trong code (HN-P2/P3 mất theo reset, `/api/brain/search` không còn) → dựng lại cùng đợt viết lại HN-P2, đặt tên ngay từ đầu tránh đổi key sau (tuning key đổi = mất giá trị user). Cùng 1 khối, toggle qua tuning-store (ghi TuningChangeLog audit — precedent §10 HYPERNAS).
 - Hiển thị trạng thái 2 cờ + 5 dòng audit mới nhất (ai đổi, khi nào, giá trị cũ→mới).
 - Copy chốt: "Tắt evolve không mất dữ liệu đã chấm — bảng ứng viên vẫn xem được."
 
@@ -207,6 +211,9 @@ interface EvolveGetResponse {
   }>
 }
 // POST /api/brain/evolve { brain, candidates?, seed? } → { ok: true, runId } | 400 { ok: false, reason }
+//   reason PIN (0.5 — client hiển thị đúng từng lỗi): 'flag_off' (cờ brain_evolve off)
+//   | 'already_running' (một vòng chạy một lần) | 'invalid_brain' (ngoài A/B/C)
+//   | 'invalid_candidates' (ngoài 4–24 bước 4)
 // POST /api/brain/evolve/cancel { runId } → { ok: true } // idempotent
 ```
 
@@ -248,8 +255,8 @@ EVO-P0→P4 (viết lại phần MẤT)         ── độc lập D1/D2; D4 c�
 ```
 
 1. **BRAIN-D1 LOG-ONLY** — ✅ **HOÀN TẤT (R20 + FB-BRAIN-D1 R21)** — không phụ thuộc não thức tỉnh; chính là công cụ TẠO dữ liệu train cho D3 (triết lý "quan sát trước, hành động sau", tiền đề reward.ts).
-2. **Blueprint v0.4** (file này) — phản ánh Q7=(b)/Q9=D0 + tái tạo §5/Q1–Q6 + trạng thái D1.
-3. **D0** — đo khối lượng 9 shard trước, ingestion theo đợt (có thể tách nhiều đợt theo shard; Q5 chốt hạ tầng Neo4j khi tới).
+2. **Blueprint v0.5** (file này) — phản ánh Q7=(b)/Q9=D0 + tái tạo §5/Q1–Q6 + trạng thái D1 + §8.5 UI topology Brain-D.
+3. **D0** — đo khối lượng 9 shard trước, ingestion theo đợt (có thể tách nhiều đợt theo shard; Q5 chốt hạ tầng Neo4j khi tới). **Song song không chặn: UI ghost topology Brain-D (§8.5) gắn batch tiện nhất (D0/D2).**
 4. **EVO-P1..P4 viết lại** theo thứ tự §4 (khung benchmark P0 trước).
 5. **D2 → D3 → D4** theo ngưỡng log.
 6. **MỖI MỐC: commit + dual-push NGAY** (doctrine reset — xem phần đầu file).
@@ -311,6 +318,49 @@ Script report trên KbConsultLog thật: heuristic CỨNG hiện tại (pipeline
 
 Mở encoding §4 thêm vùng head Brain-D (sau vùng dự phòng [136..143] — vùng mới [144..) khi mở rộng tiếp) — kiến trúc knowledge head do evolve tìm thay vì hand-tune. Chỉ khởi động khi EVO-P1..P4 + D3 đều sống.
 
+### 8.5 UI — TOPOLOGY DIAGRAM BRAIN-D TRONG TAB BRAIN (bổ sung 0.5 — yêu cầu user 2026-10-17)
+
+> **Bối cảnh:** tab BRAIN (Smolab — 3 SECTION dọc: Chọn não & kiến trúc · Đài quan sát não · Bảng thông số) hôm nay chỉ có 3 não A/B/C trong `BRAIN_REGISTRY` (`src/lib/brain/registry.ts` — single-source doctrine #9); Brain-D "Tri Thức" chưa có chỗ đứng trong UI dù D1 đã sống (node `kb-access` trong đồ thị 23 node tab Kiến trúc Database mới chỉ ghi chú "nhà tương lai của Brain-D"). Nguyên tắc nền: **topology hiển thị NGAY từ D1 dưới dạng ghost (spec khởi điểm + tiến độ thức tỉnh) — không đợi D3 có model** — precedent: A/B/C hiển thị `planned.layers` + chip NGỦ khi dormant (lifecycle badge brain-studio.tsx).
+
+**8.5.1 Nơi đặt — mặc lại đúng 3 SECTION có sẵn, không cấu trúc mới:**
+
+| SECTION | Thêm gì cho Brain-D |
+|---|---|
+| 1 · Chọn não & kiến trúc | Nút thứ 4 trong segmented selector (grid 1/2/4 cột theo breakpoint) — key `knowledge`, tên "Tri Thức", dot lifecycle như A/B/C; khối "Thức tỉnh khi đủ mẫu" hiển thị **thanh tiến độ KÉP**: log tổng (ngưỡng ≥100 → D2) + log có Outcome* (ngưỡng ≥300 → D3) — đếm thật từ `KbConsultLog`; badge 2 cờ `runtime_knowledge` + `knowledge_organ_strategy` |
+| 2 · Đài quan sát não | BrainStage vẽ topology 3 cụm đầu ra (8.5.2); trước D3 chỉ có chế độ kiến trúc — chip "DỰ KIẾN — CHƯA HỌC" (không có weights/activity); sau D3 bật activity như A/B/C |
+| 3 · Bảng thông số | như não khác: Training Console (nút train chỉ bật khi THỨC) · Tham số runtime (2 cờ) · Nhật ký tinh chỉnh · Hàm & công thức |
+
+**8.5.2 Hình topology — 3 CỤM ĐẦU RA ĐỒNG THỜI (khác precedent tab-head Brain-B):**
+
+Brain-B "Vọng" dùng 3 TAB đầu ra (`SurrogateHead` success/tokens/durationMs — brain-stage.tsx) vì đó là 3 MLP RIÊNG, 3 lần train riêng. Brain-D ngược lại: **3 tầng action space là MỘT quyết định** (một forward pass ra cả 3 tầng cùng lúc — §8.3) → vẽ ĐỒNG THỜI 3 cụm cạnh nhau, KHÔNG dùng tab:
+
+```text
+input                         trunk chung                      3 cụm đầu ra (một quyết định)
+┌───────────────────┐        ┌──────────┐        ┌─ Tầng 1 · Chế độ vận dụng (amber) — 3 unit softmax
+│ taskType 1-hot    │        │          │        │    context-block · structured-subgraph · traversal-plan
+│ intent 1-hot ×4   │───────▶│ 32 tanh  │───────▶├─ Tầng 2 · Tham số truy xuất (cyan) — 9 unit
+│ embedding ×2048   │        │          │        │    4 nguồn on/off · topK · trọng số hybrid · MMR λ · rerank · độ sâu
+│ trạng thái KB     │        └────┬─────┘        ├─ Tầng 3 · Meta (fuchsia) — 2 unit sigmoid
+│ lịch sử consult   │─────────────┘─────────────▶│    skip · writeback
+└───────────────────┘        ┌──────────┐        └─
+                             │ 16 tanh  │
+                             └──────────┘
+```
+
+- **Spec khởi điểm (ghost):** input ≈ 2048 + ~30 chiều cfg (taskType hash-bucket · intent 1-hot 4 · trạng thái KB · lịch sử consult — chốt đếm chính thức khi D3) → trunk 2 lớp ẩn 32/16 tanh (tiền lệ Brain-C 32 tanh) → 3 cụm đầu ra. Tổng tham số khởi điểm ~67K — trong trần 250K (`BRAIN_MAX_PARAMS`), chừa dư địa cho D4 evolve nở kiến trúc.
+- **Mở rộng stage-geometry ADDITIVE:** `buildStageLayout` hiện vẽ cột tuần tự 1 chuỗi đầu ra → `StageColumn` thêm trường nhóm `headGroup?: 'mode' | 'retrieval' | 'meta'` (cột cùng nhóm dính nhau, 3 nhóm cách nhau bởi khe + label nhóm + màu accent amber/cyan/fuchsia); mọi công thức toạ độ giữ nguyên — chỉ thêm khoảng cách nhóm. Test geometry mở rộng theo precedent stage-geometry thuần (r90-style).
+- **Mixture λ hiển thị** như Brain-C: dòng "λ = 1 − min(n/200, WilsonLB)" + chip "% heuristic vs não" (bắt đầu 100% heuristic — §8.3).
+- **Legend/tooltip:** hover cụm → tooltip giải thích tầng (copy §8.3); hover unit đầu ra → tên chế độ/tham số tương ứng (map tĩnh từ spec — không cần API mới).
+
+**8.5.3 API & dữ liệu (không route mới):**
+
+- `GET /api/brain` thêm signals cho `knowledge`: `kb_logs_total` (→ ngưỡng D2 ≥100) + `kb_logs_with_outcome` (→ ngưỡng D3 ≥300) — đếm thật `KbConsultLog` (COUNT + COUNT WHERE runId NOT NULL — index sẵn 3 cột). `BRAIN_REGISTRY` thêm `BrainSpec` key `knowledge`: `flagTuningKey: 'runtime_knowledge'`, `trainable: false` (đến D3), lifecycle tính như A/B/C theo 2 signals trên.
+- Ghost topology = `planned.layers` mở rộng nhóm đầu ra — client render thuần từ registry (tiền lệ planned A/B/C), không fetch thêm.
+
+**8.5.4 Rào & nguyên tắc:** không dependency mới (SVG/tokens có sẵn) · a11y đúng §5.1-5 (role/aria-live/sr-only) · mobile-first (stage co theo `NEURAL_DESKTOP_BREAKPOINT`; 3 cụm đầu ra xếp dọc `<md` — surrogate 3 đầu đã xử lý pattern tương tự) · kill-switch 2 cờ hiển thị ngay SECTION 1 (đổi qua tuning-store, audit Nhật ký tinh chỉnh) · **tab BRAIN không đụng `BrainModel`/active** — topology là HIỂN THỊ, mọi áp dụng vẫn qua A1/H7 như §6.
+
+**8.5.5 Triển khai 2 mốc:** (a) **ghost UI** (nút não thứ 4 + topology dự kiến + tiến độ kép + 2 cờ) — có thể ra bất kỳ lúc sau D1, gắn batch tiện nhất (D0/D2 — test theo số batch đó); (b) **activity UI** (weights/đài quan sát nơ-ron như A/B/C) — kèm D3 (r112). Không mốc nào chặn đường runtime.
+
 ---
 
 ## 9. KB 4 LỚP — NEO4J LÀ LÕI (đính chính user 2026-10-16, giữ nguyên)
@@ -345,6 +395,8 @@ Mở encoding §4 thêm vùng head Brain-D (sau vùng dự phòng [136..143] —
 ---
 
 ## 11. NHẬT KÝ HIỆU ĐINH
+
+- **0.5 (2026-10-17, task R23):** REVIEW KIẾN TRÚC TOÀN DIỆN (đối chiếu code từng claim) + BỔ SUNG §8.5 THEO YÊU CẦU USER. **Sửa 9 lỗi (F1–F9):** (F1) §0.1 EVO-P0 "Chưa triển khai" tự mâu thuẫn với P1..P4 "đã từng làm — mất" (P4 cần benchmark) + r105 trùng P0/P1 → ghi trung thực "chức năng từng có, artifact riêng chưa chắc"; (F2) §5.1-4 baseline tab bar 7 nút liệt kê tên tab THIẾT KẾ HYPERNAS chưa từng triển khai (SECTION 3 thực tế 4 tab sau Task 26; HN-P2/P3 UI mất theo reset — `/api/brain/search` không còn) → sửa baseline trung thực + lộ trình 4→5→7 nút; (F3) E1 không phân biệt được với "mất kết nối" (cùng biểu hiện GET lỗi) → thêm quy tắc 404=E1; (F4) U3 thiếu compat encoding 96-dim legacy (BrainSearchCandidate.encodingJson HN-P1) + crossover cha 96×144 cần quy tắc pad-0 → thêm cả hai; (F5) "prune H5" gây hiểu nhầm xóa DB (H5 là additive không xóa) → làm rõ chỉ hiển thị ≤60 hàng/vòng, DB giữ toàn bộ; (F6) POST /api/brain/evolve 400 reason chưa pin → pin 4 giá trị 'flag_off'|'already_running'|'invalid_brain'|'invalid_candidates'; (F7) "seed tự sinh tất định" mâu thuẫn từ ngữ → hash(runId); (F8) thiếu repair one-hot cho mutation/crossover encoding 144 (ràng buộc 1 hot/block) → thêm §4.5; (F9) nút "Áp dụng đề xuất" thiếu gate editor v2 khi best là block → thêm điều kiện. **Bổ sung §8.5 UI topology diagram Brain-D trong tab BRAIN** (yêu cầu user — tab BRAIN chưa thấy topology Brain-D): ghost topology hiển thị NGAY từ D1 (não thứ 4 trong BRAIN_REGISTRY + topology 3 cụm đầu ra ĐỒNG THỜI — khác tab-head precedent Brain-B vì 3 tầng là MỘT quyết định + tiến độ thức tỉnh kép ≥100/≥300 + 2 cờ kill-switch + mixture λ Brain-C precedent), activity UI kèm D3; mở rộng stage-geometry additive (headGroup), không route mới (GET /api/brain thêm 2 signals). Verify kèm: organ-1/2/3 · POLICY_SEED · BRAIN_MAX_PARAMS · holdout 15% · 9 activations · 8 ENTITY_LABELS · KbConsultLog 16 cột · 3 collection Qdrant (theopus_chunks/theopus_communities/agent_memory_512) · draft/dirty state — đều khớp code.
 
 - **0.4.1 (2026-10-17, task R22):** HIỆU ĐINH NHỎ SAU REVIEW. Cấu hình lại phòng (R2 + Neo4j Aura + NIM 4 keys — verify thật: R2 list 15 objects, Neo4j ping 96.354 node/205.809 rel/23 label, NIM 4/4 HTTP 200, r110 21/21 pass) + review v0.4 đối chiếu code: mọi claim trạng thái đều khớp (migration/mô hình/cờ #32/denseThreshold+sourcesEnabled/fallback+graph corpus/EVO folder vắng đúng như khai báo "MẤT → viết lại"). Sửa duy nhất số liệu §9/Q5: đồ thị AuraDB 96.354 node (đo R22) thay vì chỉ ghi ~53.742 node máy user; Q5 bổ sung trạng thái quota ~48%. Không thay đổi thiết kế.
 - **0.4 (2026-10-17, task R21):** HIỆU ĐINH SAU FB-BRAIN-D1. (1) **§5 UI EVO-U1..U5 dựng lại ĐẦY ĐỦ** theo convention precedent HYPERNAS §10 (7 nguyên tắc · state machine 5 trạng thái E1–E5 · bảng + 2 cấp nút · encoding viewer 144 · Pareto + khu vực chặn H7 · kill-switch panel · API contract pin · copy chốt) — đánh dấu rõ "tái tạo, chốt cuối khi tới EVO-P4"; (2) **§10 Q1–Q6 tái tạo** từ tri thức phiên kèm đề xuất mặc định + ghi nguồn trung thực (cần user chốt khi tới phase); (3) §0.2 D1 → HOÀN TẤT (R20 4394507 + FB-BRAIN-D1 R21); (4) §8.1 cập nhật corpus sau 8 fix BUG2-269..276 (migration bù + byte-cap + denseThreshold/sourcesEnabled + fallback/graph wrapper + ALS undefined + empty-query + doc trung thực tokensUsed); (5) §1 bổ sung dòng R21.
