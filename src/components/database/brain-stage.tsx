@@ -626,11 +626,20 @@ export function BrainStage({
     const outAct = outLayer?.activation || 'sigmoid/linear ×3'
 
     if (editorOn && draft) {
+      // R28 (user report "hình ảnh BrainD ở đài quan sát não có đúng không"):
+      // cột output draft preview knowledge = 14 unit GHÉP 3 cụm (3 softmax +
+      // 9 sigmoid + 2 sigmoid — §8.3 một quyết định). Trước đây nhãn lấy từ
+      // lớp CUỐI planned (Meta '2' 'sigmoid') trong khi cột vẽ 14 chấm →
+      // sai lệch nhìn thấy. Giờ nhãn/activation nói đúng 14 (3+9+2).
+      const isKnowledge = brain.key === 'knowledge'
+      const outUnits = brain.key === 'policy' ? 3 : isKnowledge ? 14 : 1
+      const outColLabel = isKnowledge ? '14 (3+9+2)' : outLabel
+      const outColAct = isKnowledge ? 'softmax·sigmoid' : outAct
       const cols: StageColumn[] = [
         { units: brain.inputDim ?? 8, display: 0, label: inLabel, activation: 'input', locked: true },
         ...draft.hidden.map(h => ({ units: h.units, display: 0, label: unitCountLabel(h.units), activation: h.activation, locked: false })),
         // R24-b: knowledge draft preview — output 14 unit (3+9+2 một quyết định)
-        { units: brain.key === 'policy' ? 3 : brain.key === 'knowledge' ? 14 : 1, display: 0, label: outLabel, activation: outAct, locked: true },
+        { units: outUnits, display: 0, label: outColLabel, activation: outColAct, locked: true },
       ]
       return { columns: cols, activeLayers: null }
     }
