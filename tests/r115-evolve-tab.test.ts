@@ -9,7 +9,8 @@
  *    (96-dim legacy → chỉ vùng HN-P1).
  *  - isPureMlpCandidate: encoding có block (attention/ssm/moe/gated/mlp) →
  *    false; mọi block identity → true; 96-dim → LUÔN true.
- *  - paretoFront: tập thắng CV không dominated (params↓, cvScore↑).
+ *  - paretoFront: front TOÀN BỔ ứng viên không dominated (params↓, cvScore↑)
+ *    — R27 bỏ lọc beatActive theo user bỏ phần đối chứng active.
  *  - sortCandidates (cvScore desc), formatCandidateLog (copy E3), hiddenFromSpec.
  *  - deriveEvoState: state machine E1–E4 (404→E1 · run null→E2 · running→E3 ·
  *    done/failed/cancelled→E4 + cờ E5 hasBlockedH7).
@@ -171,7 +172,7 @@ describe('r115 · isPureMlpCandidate — phát hiện ứng viên thuần MLP', 
 
 // ==================== U4 — PARETO FRONT + SORT ====================
 
-describe('r115 · U4 paretoFront — tập thắng CV không dominated (params↓, cvScore↑)', () => {
+describe('r115 · U4 paretoFront — front toàn ứng viên không dominated (params↓, cvScore↑)', () => {
   test('I 4 điểm có 1 dominated → front loại đúng điểm bị trội', () => {
     const cands = [
       makeCand({ idx: 0, params: 100_000, cvScore: 0.30, beatActive: true }),
@@ -187,12 +188,18 @@ describe('r115 · U4 paretoFront — tập thắng CV không dominated (params�
     expect(front.length).toBe(3)
   })
 
-  test('J chỉ xét tập THẮNG CV — ứng viên thua active (beatActive=false) không vào front dù tối ưu', () => {
+  test('J R27 — front trên TOÀN BỘ ứng viên: ứng viên beatActive=false vẫn vào front khi không bị trội (bỏ lọc cũ theo user bỏ đối chứng active)', () => {
     const cands = [
-      makeCand({ idx: 0, params: 10_000, cvScore: 0.90, beatActive: false }), // điểm cao nhất nhưng thua active
+      // #0 điểm cao nhất + params thấp nhất → trội #1 hoàn toàn (dominates)
+      makeCand({ idx: 0, params: 10_000, cvScore: 0.90, beatActive: false }),
       makeCand({ idx: 1, params: 20_000, cvScore: 0.40, beatActive: true }),
     ]
-    expect(paretoFront(cands)).toEqual([1])
+    expect(paretoFront(cands)).toEqual([0])
+    // trùng nhau params/cvScore → không ai trội ai — cả 2 lên front
+    expect(paretoFront([
+      makeCand({ idx: 2, params: 10_000, cvScore: 0.90, beatActive: false }),
+      makeCand({ idx: 3, params: 10_000, cvScore: 0.90, beatActive: false }),
+    ]).sort()).toEqual([2, 3])
   })
 
   test('K 2 điểm bằng nhau (params, cvScore) → KHÔNG ai dominate ai, cả 2 trên front (kể cả blockedH7 — vẫn thắng CV)', () => {
@@ -316,15 +323,12 @@ describe('r115 · R26 padDomain — miền trục Y Pareto sau đệm', () => {
   })
 })
 
-describe('r115 · R26 cvBarTone — tone thanh điểm CV', () => {
-  test('V best vòng = emerald · thắng active = amber · còn lại stone', () => {
-    expect(cvBarTone({ idx: 3, beatActive: false }, 3)).toBe('emerald')
-    expect(cvBarTone({ idx: 1, beatActive: true }, 3)).toBe('amber')
-    expect(cvBarTone({ idx: 2, beatActive: false }, 3)).toBe('stone')
-    // bestIdx null → chỉ phân theo beatActive
-    expect(cvBarTone({ idx: 0, beatActive: true }, null)).toBe('amber')
-    expect(cvBarTone({ idx: 0, beatActive: false }, null)).toBe('stone')
-    // best đồng thời thắng active → emerald ưu tiên
-    expect(cvBarTone({ idx: 3, beatActive: true }, 3)).toBe('emerald')
+describe('r115 · cvBarTone — tone thanh điểm CV (R27: 2 tầng)', () => {
+  test('V R27 — best vòng = emerald · còn lại stone (bỏ tầng amber "thắng active" theo user bỏ đối chứng active)', () => {
+    expect(cvBarTone({ idx: 3 }, 3)).toBe('emerald')
+    expect(cvBarTone({ idx: 1 }, 3)).toBe('stone')
+    expect(cvBarTone({ idx: 2 }, 3)).toBe('stone')
+    // bestIdx null (chưa có best) → mọi ô stone
+    expect(cvBarTone({ idx: 0 }, null)).toBe('stone')
   })
 })

@@ -527,13 +527,16 @@ export function BrainTabContent() {
 
   /// Lưu nháp (PUT /api/brain/spec-draft) — validate local bằng single-source
   /// spec-schema trước khi PUT (server validate lại lần nữa — không tin client).
+  /// R27: tham số specOverride — gọi từ "Triển khai luôn" (EvolveTab): state
+  /// draftsByBrain vừa onDraftChange XONG chưa flush (setState async) nên
+  /// caller truyền thẳng bản đã validate; bỏ qua = đọc state như cũ.
   /// R7 (chỉ thị user 2026-10-31 "không muốn bản nháp — muốn hiệu lực thật"):
   /// sau khi lưu NHÁP thành công, TỰ ĐỘNG train + ÁP DỤNG NGAY (force) — kiến
   /// trúc/hyper mới trở thành bản ACTIVE vận hành thật (kèm bật cờ runtime,
   /// server lo). Nếu thiếu dữ liệu train → toast nói rõ cần thêm mẫu (đó là
   /// giới hạn DỮ LIỆU, không phải chế độ nháp nữa).
-  const saveDraft = useCallback(async (key: BrainKey) => {
-    const spec = draftsByBrain[key] ?? defaultDraftFor(key)
+  const saveDraft = useCallback(async (key: BrainKey, specOverride?: BrainDraftSpec) => {
+    const spec = specOverride ?? draftsByBrain[key] ?? defaultDraftFor(key)
     const inputDim = brainData?.brains.find(b => b.key === key)?.inputDim ?? null
     const v = validateBrainDraft({ ...spec, brain: key }, inputDim)
     if (!v.ok) {
@@ -611,6 +614,46 @@ export function BrainTabContent() {
       description: 'Nháp chưa lưu — bấm Lưu cấu hình ở phần 1 để train + áp dụng như mọi chỉnh editor (A1/H7).',
     })
   }, [selectedBrainKey, draftsByBrain, dirtyBrains, brainData, onDraftChange])
+
+  /// R27 — "Triển khai luôn" (EvolveTab): ghi hidden layers vào nháp + LƯU +
+  /// TỰ ĐỘNG train + ÁP DỤNG active (chuỗi saveDraft R7). Đáp câu user
+  /// "HyperNAS tính ra số lớp + nơ-ron tối ưu thì có triển khai luôn không —
+  /// và có hiện trong Đài quan sát não không": CÓ, 1 nút; sau train xong
+  /// refreshNonce (effect trainOutcome) làm BrainStage refetch weights —
+  /// Đài quan sát não SECTION 2 hiển thị kiến trúc active mới (khi bật editor
+  /// thì draft mới cũng hiện NGAY trong đài trước cả khi train xong).
+  const deployEvoArchitecture = useCallback((hidden: Array<{ units: number; activation: string }>) => {
+    if (!BRAIN_TRAINABLE_KEYS.includes(selectedBrainKey)) {
+      toast.error('Não đích chưa vào search space', {
+        description: 'Brain-D chưa vào search space (D4 §8.4) — chọn não A/B/C ở phần 1.',
+      })
+      return
+    }
+    if (hidden.length === 0) {
+      toast.error('Kiến trúc rỗng', { description: 'Không có lớp ẩn nào để triển khai.' })
+      return
+    }
+    if (dirtyBrains.has(selectedBrainKey)
+      && !window.confirm('Nháp của não này đang có chỉnh chưa lưu — ghi đè kiến trúc tiến hoá và triển khai luôn?')) {
+      return
+    }
+    const base = draftsByBrain[selectedBrainKey] ?? defaultDraftFor(selectedBrainKey)
+    const candidate: BrainDraftSpec = {
+      ...base,
+      hidden: hidden.map(h => ({ units: h.units, activation: h.activation as BrainDraftSpec['hidden'][number]['activation'] })),
+    }
+    const inputDim = brainData?.brains.find(b => b.key === selectedBrainKey)?.inputDim ?? null
+    const v = validateBrainDraft({ ...candidate, brain: selectedBrainKey }, inputDim)
+    if (!v.ok) {
+      toast.error('Kiến trúc không hợp lệ với não này', { description: v.errors.join(' · ') })
+      return
+    }
+    onDraftChange(v.normalized) // editor + Đài quan sát (draft preview) thấy NGAY
+    toast.info('Triển khai kiến trúc tiến hoá…', {
+      description: 'Lưu nháp → huấn luyện → áp dụng active — Đài quan sát não (phần 2) hiển thị kiến trúc mới.',
+    })
+    void saveDraft(selectedBrainKey, v.normalized) // PUT + auto-train force (R7)
+  }, [selectedBrainKey, draftsByBrain, dirtyBrains, brainData, onDraftChange, saveDraft])
 
   // ==================== TUNING ACTIONS (copy panel cũ) ====================
 
@@ -930,6 +973,7 @@ export function BrainTabContent() {
           onSetTuning={(k, v) => { void handleSet(k, v) }}
           savingKeys={savingKeys}
           onApplyToDraft={applyEvoHiddenToDraft}
+          onDeployNow={deployEvoArchitecture}
           editorOn={uiBrainEditOn}
           consoleActive={consoleTabActive === 'evo'}
         />

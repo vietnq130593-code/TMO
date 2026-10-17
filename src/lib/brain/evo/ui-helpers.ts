@@ -112,10 +112,13 @@ export function padDomain(
   return { from: Math.max(lo, mn - pad), to: Math.min(hi, mx + pad) }
 }
 
-/** R26 — tone thanh điểm CV: best vòng = emerald · thắng active = amber · còn lại stone. */
-export function cvBarTone(c: { idx: number; beatActive: boolean }, bestIdx: number | null): 'emerald' | 'amber' | 'stone' {
-  if (bestIdx !== null && c.idx === bestIdx) return 'emerald'
-  return c.beatActive ? 'amber' : 'stone'
+/**
+ * R27 — tone thanh điểm CV: best vòng = emerald · còn lại stone (bỏ tầng
+ * amber "thắng active" — user bỏ phần đối chứng/đánh giá model đang dùng;
+ * beatActive server vẫn trả để audit nhưng UI không hiển thị nữa).
+ */
+export function cvBarTone(c: { idx: number }, bestIdx: number | null): 'emerald' | 'stone' {
+  return bestIdx !== null && c.idx === bestIdx ? 'emerald' : 'stone'
 }
 
 // ==================== U1 — STATE MACHINE (E1..E4 + cờ E5) ====================
@@ -291,17 +294,17 @@ export function hiddenFromSpec(spec: unknown): Array<{ units: number; activation
 // ==================== U4 — PARETO FRONT + XẾP HẠNG ====================
 
 /**
- * Pareto front trên TẬP THẮNG CV (beatActive — §5.5): tập idx KHÔNG bị
- * dominated về (params↓ thấp hơn, cvScore↑ cao hơn). A dominates B ⇔ A
- * tốt-không-kém ở cả 2 trục VÀ strictly tốt hơn ở ít nhất 1 trục.
+ * R27 — Pareto front trên TOÀN BỘ ứng viên (bỏ lọc beatActive cũ theo chỉ
+ * thị user "bỏ phần đánh giá model đang sử dụng"): tập idx KHÔNG bị dominated
+ * về (params↓ thấp hơn, cvScore↑ cao hơn). A dominates B ⇔ A tốt-không-kém
+ * ở cả 2 trục VÀ strictly tốt hơn ở ít nhất 1 trục.
  */
 export function paretoFront(
-  cands: ReadonlyArray<{ idx: number; cvScore: number; params: number; beatActive: boolean }>,
+  cands: ReadonlyArray<{ idx: number; cvScore: number; params: number }>,
 ): number[] {
-  const winners = cands.filter(c => c.beatActive)
   const front: number[] = []
-  for (const a of winners) {
-    const dominated = winners.some(b =>
+  for (const a of cands) {
+    const dominated = cands.some(b =>
       b !== a
       && b.params <= a.params
       && b.cvScore >= a.cvScore
