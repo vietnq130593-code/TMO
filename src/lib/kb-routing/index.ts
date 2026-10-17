@@ -35,6 +35,10 @@ export interface SmartKBResult {
  *   - For 'factual' intent: runs all 4 layers, returns synthesis
  *   - For 'procedural' intent: returns intent (caller routes to Code Team)
  *   - For 'meta' intent: returns intent (caller uses AgentProfile)
+ *
+ * BRAIN-D1 note (FB-D1-R1-07, 2026-10-17): hiện CHƯA có caller production
+ * nào của runSmartKB trong repo (grep toàn src = 0) — instrumentation ALS
+ * intent phía dưới sẵn sàng khi được dùng; giữ nguyên làm API public.
  */
 export async function runSmartKB(params: {
   message: string

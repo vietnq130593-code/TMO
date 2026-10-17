@@ -158,6 +158,15 @@ export async function agentKnowledgeSearch(query: string, options?: {
     } catch (kbErr) {
       // kb-routing lỗi (Qdrant chết chưa kịp bắt...) → fallback dense-only cũ
       console.warn('[Knowledge Bridge] searchUserKB pipeline failed — fallback dense-only:', kbErr instanceof Error ? kbErr.message : String(kbErr))
+      // BRAIN-D1 (FB-D1-R1-05) — LOG-ONLY: searchUserKB throw TRƯỚC khi
+      // instrumentation cuối hàm kịp chạy → ghi row fallback ở đây để giữ
+      // guarantee "MỌI lượt KB consult có row" (blueprint §8.1). Kết quả chi
+      // tiết của fallback nằm ở diagnostics trả về agent — ngoài corpus D1-v1.
+      // Fail-open tuyệt đối: lỗi ghi log KHÔNG BAO GIỜ cản fallback.
+      try {
+        const { logKbConsultFallback } = await import('@/lib/kb-routing/consult-log')
+        void logKbConsultFallback(query, startTime, kbErr)
+      } catch { /* LOG-ONLY — không cản fallback */ }
     }
 
     // ── FALLBACK: dense-only cũ (defence-in-depth khi kb-routing không chạy được) ──
@@ -266,7 +275,46 @@ export async function agentKnowledgeSearch(query: string, options?: {
 
 // ==================== GRAPH QUERY ====================
 
-export async function agentGraphQuery(cypher: string, params?: Record<string, unknown>) {
+/** Kết quả graph query (BRAIN-D1 FB-D1-R1-05: type tường minh cho wrapper LOG-ONLY —
+ *  trước đây inferred union 3 nhánh return). */
+export interface GraphQueryResult {
+  records: Array<Record<string, unknown>>
+  count: number
+  error?: string
+}
+
+export async function agentGraphQuery(cypher: string, params?: Record<string, unknown>): Promise<GraphQueryResult> {
+  // BRAIN-D1 (FB-D1-R1-05) — LOG-ONLY wrapper (precedent executeTool R20):
+  // consult đồ thị (Cypher) giờ có row KbConsultLog — corpus cho D3
+  // structured-subgraph / traversal-plan. Fail-open: lỗi ghi log KHÔNG BAO
+  // GIỜ cản graph query. Cypher bị safety-chặn (throw ở impl) không log —
+  // lượt đó không chạm KB (không tốn tài nguyên).
+  const graphStartMs = Date.now()
+  const res = await agentGraphQueryImpl(cypher, params)
+  try {
+    const { getKbConsultContext } = await import('@/lib/kb-routing/consult-context')
+    const { logKbConsult } = await import('@/lib/kb-routing/consult-log')
+    const ctx = getKbConsultContext()
+    void logKbConsult({
+      taskType: ctx.taskType ?? 'graph-query',
+      intent: ctx.intent,
+      queryText: cypher,
+      retrievalConfig: { graphCypher: true },
+      sources: {
+        graphRecords: res.count,
+        ...(res.error ? { graphError: res.error.slice(0, 200) } : {}),
+      },
+      topResults: [],
+      latencyMs: Date.now() - graphStartMs,
+      runId: ctx.runId,
+      sessionId: ctx.sessionId,
+      agentId: ctx.agentId,
+    })
+  } catch { /* LOG-ONLY — không cản graph query */ }
+  return res
+}
+
+async function agentGraphQueryImpl(cypher: string, params?: Record<string, unknown>): Promise<GraphQueryResult> {
   // Safety: only allow read queries
   const normalized = cypher.trim().toUpperCase()
   if (normalized.startsWith('CREATE') || normalized.startsWith('DELETE') || normalized.startsWith('DROP') || normalized.startsWith('REMOVE') || normalized.startsWith('SET')) {

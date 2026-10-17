@@ -452,3 +452,22 @@
 - **Phát hiện lũy kế qua giao thức: 119 + 2 = 121** (R19: BUG2-267 P1 · BUG2-268 P2).
 - Gate kiểm thử: **1729/1729** (2 file test r73/r74 viết lại pin hành vi no-fallback — thay 5 pin pool last-resort cũ bằng behavioral pin mới).
 - Ghi chú: policy Zen free-tier CLI keyless MỞ LẠI 15/10 (lần 4) — ghi nhận qua probe cost 0; OAuth session datacenter vẫn bị chặn (đúng phân tích IP-based R16/R17).
+
+### ĐỢT FB-BRAIN-D1 — scope BRAIN-D1 LOG-ONLY đợt R20 (commit 4394507: 15 file +781 — prisma KbConsultLog + consult-context.ts/consult-log.ts MỚI + kb-access instrumentation + tool-executor ALS wrap + chat route wrap + runSmartKB wrap + neural-types cờ #32/node #24/edges e38–e42 + r110 14 test + 6 count-pin) + blueprint v0.3 (c75db57) — 2026-10-17 — KHÉP KẾT SAU 2 VÒNG (R1 auditor độc lập + fix 8/8 · R2 verify 0 phát hiện mới)
+
+| Vòng | Phát hiện mới | Xác minh |
+|---|---|---|
+| R1 (auditor độc lập subagent Explore — mắt chưa từng xem code D1, chạy đủ C1–C8 + harness runtime ALS/serializeCapped + DB cô lập + tsc/eslint độc lập; coordinator chấm chéo từng phát hiện) | **8** (1×G·P2 · 4×C·P3 · 2×E·P3 · 1×C·P4) — đỉnh: THIẾU MIGRATION KbConsultLog (máy user db:deploy không có bảng → corpus D1 chết im lặng — G·P2) + ALS merge undefined-đè-cha ngược JSDoc (mất Outcome* linkage) + cap CHARS thay BYTE (VN text 2×) + retrievalConfig thiếu denseThreshold/sourcesEnabled + blind-spot fallback-dense & graph-query không có row | Fix toàn bộ 8 + **7 regression test** (r110 14→21: A5 migration pin · B3b VN-byte · B6 empty-query · C4 undefined-merge · D4 denseThreshold+sourcesEnabled · E1 graph-wrapper · E2 fallback) → tsc 0 · eslint 7 file 0 · r110 21/21 (105 expect) · full suite **1527 pass — delta=0 so baseline** (22 fail/13 errors đều pre-existing r69/r73-2, pass riêng 28/28 + 30/30) |
+| R2 (coordinator mắt tươi toàn diff fix + migration-deploy throwaway DB + E2E app thật + browser) | **0** → KHÉP KẾT | `prisma migrate deploy` trên DB trắng /tmp: 4/4 applied + bảng + đúng 3 index + 16 cột đúng type · E2E POST chat sess-r21-e2e: row mới có `denseThreshold:0.3` + `sourcesEnabled{chunks:T,communities:T,entities:F,memories:F}` (đối chứng trực tiếp row R20 thiếu 2 field) · browser "THE MAGNUM OPUS" 0 lỗi console/page · check:imports PASS |
+
+- Phát hiện: FB-D1-R1-01..08 → **BUG2-269..276** (chi tiết đầy đủ tại Bug_v2.md — mọi mức có entry).
+- Sai-kỳ-vọng phía người-rà: **0** (auditor tự loại 9 nghi vấn bằng phương pháp thứ ba trước khi báo — trong đó "getTuningEnum trả undefined cho key lạ → logging OFF" là nghi vấn CRITICAL của đề bài auditor, hóa ra cờ #32 đã đăng ký đúng default 'on' + try/catch fail-open đúng chiều).
+- Phát hiện bị bác sau chấm chéo: 0/8 — chuỗi thứ 6 liên tiếp phát hiện auditor đứng vững.
+- Ngoài phạm vi (bàn đợt sau — đã ghi Bug_v2-269): drift schema-vs-migrations CÓ SẴN từ trước (BrainSearchRun/BrainSearchCandidate HN-P1 cũng thiếu migration) — cân nhắc migration bù/rebaseline khi triển khai EVO-P4; kết quả chi tiết fallback dense-only nằm ngoài corpus (diagnostics tool); searchModelKnowledge/writeback chưa instrument (chưa có production caller / LAYER 3 — bàn khi D3 cần).
+- Bài học truyền lại: (14) **Model/schema thêm bằng db push phải kèm MIGRATION NGAY** — 2 luồng deploy (push sandbox / migrate máy user) phân kỳ âm thầm, fail-open khiến mất dữ liệu không bao giờ kêu la; (15) **ALS context merge phải lọc undefined** — spread copy key undefined là bẫy ngữ nghĩa TypeScript thông dụng (ctx build đủ key + giá trị undefined ≠ "không chỉ định key"); (16) **giới hạn "≤N KB" phải đo đúng đơn vị cam kết** (byte UTF-8 ≠ .length UTF-16 — sai 2-4× với ngôn ngữ không ASCII, chính là ngôn ngữ chính của sản phẩm).
+
+### TỔNG KẾT LŨY KẾ (cập nhật sau FB-BRAIN-D1)
+
+- **Phát hiện lũy kế qua giao thức: 121 + 8 = 129** (FB-BRAIN-D1: BUG2-269 G·P2 · BUG2-270/272/273/274 P3 · BUG2-271 P3 · BUG2-275/276 P4).
+- Gate kiểm thử: r110 14→21 (+7 regression); full suite **1527 pass** (baseline sandbox mới 1519 + 7 test mới + 1 flaky-pass; 22 fail/13 errors pre-existing r69/r73-2 pollution — pass riêng).
+- Doctrine nhắc lại (R20): mọi mốc commit + dual-push NGAY — đợt này fix xong cũng dual-push ngay sau ghi sổ.

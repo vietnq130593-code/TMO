@@ -46,8 +46,11 @@ const als = new AsyncLocalStorage<KbConsultContext>()
 
 /**
  * Bọc 1 đoạn async trong ngữ cảnh consult. Merge shallow với context cha
- * (nếu có) — key của CON thắng. Fail-open: ALS không khả dụng → chạy fn
- * trực tiếp (không ngữ cảnh).
+ * (nếu có) — key của CON thắng; key có giá trị `undefined` bị BỎ QUA
+ * (không đè value cha — caller thường build ctx đủ key với nhiều field
+ * undefined, vd tool-executor; không lọc thì spread copy key undefined
+ * làm MẤT runId/sessionId của cha → mất nối Outcome* của row consult).
+ * Fail-open: ALS không khả dụng → chạy fn trực tiếp (không ngữ cảnh).
  */
 export function runWithKbConsultContext<T>(
   ctx: KbConsultContext,
@@ -55,7 +58,13 @@ export function runWithKbConsultContext<T>(
 ): Promise<T> {
   try {
     const parent = als.getStore()
-    const merged: KbConsultContext = parent ? { ...parent, ...ctx } : { ...ctx }
+    // FB-D1-R1-02 — lọc key undefined TRƯỚC khi merge: "{...parent, ...ctx}"
+    // thuần copy CẢ key có giá trị undefined → xóa value cha ngược JSDoc
+    // ("giữ runId/sessionId từ cha nếu con không chỉ định lại").
+    const clean = Object.fromEntries(
+      Object.entries(ctx).filter(([, v]) => v !== undefined)
+    ) as KbConsultContext
+    const merged: KbConsultContext = parent ? { ...parent, ...clean } : clean
     return als.run(merged, fn)
   } catch {
     // ALS không chạy được (edge runtime/SSR) — fail-open, không ngữ cảnh

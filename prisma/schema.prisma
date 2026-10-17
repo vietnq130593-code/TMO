@@ -2775,7 +2775,9 @@ model KbConsultLog {
   createdAt DateTime @default(now())
 
   /// Ngữ cảnh người gọi (AsyncLocalStorage consult-context): 'chat' |
-  /// 'tool:knowledge_search' | 'code-team-workflow' | 'eval' | 'redteam'…
+  /// 'tool:<tên>' | 'smart-kb' | 'kb-fallback-dense' (lượt rơi vào fallback
+  /// knowledge-bridge) | 'graph-query' (Cypher) — NULL khi caller không bọc
+  /// (eval/redteam hiện chạy không bọc — FB-D1-R1-07 ghi nhận giá trị THỰC)
   taskType  String?
   /// Nhãn intent-classifier (casual/meta/procedural/factual) — nếu caller classify
   intent    String?
@@ -2783,7 +2785,8 @@ model KbConsultLog {
   queryText String?
 
   /// Cấu hình truy xuất HIỆU LỰC: {topK, minImportance, embeddingOverride,
-  /// hybrid, mmr, rerank, denseThreshold} (JSON ≤2KB)
+  /// hybrid, mmr, rerank, denseThreshold, sourcesEnabled} — denseThreshold là
+  /// tham số DUY NHẤT biến thiên theo thời gian (red-team delta) (JSON ≤2KB)
   retrievalConfigJson String
   /// Nguồn + số hit từng nguồn: {chunks, entities, memories, communities,
   /// errors:{...}} — nguồn lỗi/trống vẫn ghi (fail-open từng nguồn) (JSON ≤2KB)
@@ -2800,7 +2803,8 @@ model KbConsultLog {
   /// mọi đường; suy dẫn được từ confidence < CONFIDENCE_THRESHOLD khi cần D2)
   step2Used Boolean?
 
-  /// D1 v1: 0 — API embed/rerank chưa trả usage; bổ sung khi có nguồn đo
+  /// D1 v1: luôn 0 — API embed/rerank chưa trả usage (FB-D1-R1-06 ghi nhận:
+  /// D2 dùng latencyMs làm chiều hiệu năng chính; đo tokens khi có nguồn)
   tokensUsed Int @default(0)
   latencyMs  Int
   /// → AgentRunRecord.id → Outcome* (D3 reward signal)

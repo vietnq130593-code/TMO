@@ -263,10 +263,16 @@ export async function searchUserKB(
       ? options.embeddingOverride
       : (await generateQueryEmbedding(query)).vector
 
+  // BRAIN-D1 (FB-D1-R1-04) — resolve dense threshold 1 LẦN trước allSettled:
+  // searchChunks dùng (precomputed) + KbConsultLog ghi đúng giá trị đã dùng
+  // (denseThreshold là tham số truy xuất DUY NHẤT biến thiên theo thời gian —
+  // red-team delta — D2 cần để tái hiện hành vi retrieval theo mốc thời gian).
+  const consultThresholds = await resolveDenseThreshold()
+
   // Run 4 searches in parallel for speed
   // (4) community search — vector search trên Leiden community summaries
   const [chunksResult, entitiesResult, memoriesResult, communitiesResult] = await Promise.allSettled([
-    searchChunks(query, topK, options.embeddingOverride),
+    searchChunks(query, topK, options.embeddingOverride, consultThresholds),
     agentId ? searchEntitiesForUser(agentId, query, topK) : Promise.resolve([]),
     agentId ? recallAgentMemories(agentId, query, topK, minImportance) : Promise.resolve([]),
     searchCommunities(queryEmbedding, 3),
@@ -315,6 +321,14 @@ export async function searchUserKB(
       hybrid: isFlagEnabled('ENABLE_HYBRID_SEARCH'),
       mmr: isFlagEnabled('ENABLE_MMR'),
       rerank: isFlagEnabled('ENABLE_RERANKER'),
+      // FB-D1-R1-04 — 2 mục D2 cần để tái hiện hành vi retrieval:
+      denseThreshold: consultThresholds.denseThreshold,
+      sourcesEnabled: {
+        chunks: true,
+        communities: true,
+        entities: Boolean(agentId),
+        memories: Boolean(agentId),
+      },
     },
     sources: {
       chunks: chunks.length,
@@ -360,6 +374,22 @@ interface PipelineCandidate {
   denseScore?: number
 }
 
+/**
+ * BRAIN-D1 (FB-D1-R1-04) — dense threshold HIỆU LỰC, nguồn dùng CHUNG:
+ * searchChunks (runtime) + instrumentation KbConsultLog (LOG-ONLY) — công
+ * thức ROUND-38 fix V5-6 (0.3 + red-team delta, cap 0.9) không nhân bản 2 nơi
+ * (nếu nhân bản mà công thức đổi → log ghi sai cấu hình đã dùng → D2 học sai).
+ * Fail-open: delta đọc lỗi → 0 (threshold 0.3 — hành vi như trước).
+ */
+async function resolveDenseThreshold(): Promise<{ denseThreshold: number; kbThresholdDelta: number }> {
+  let kbThresholdDelta = 0
+  try {
+    const { getKbConfidenceThresholdDelta } = await import('@/lib/learning/adaptation-engine')
+    kbThresholdDelta = getKbConfidenceThresholdDelta()
+  } catch { /* fail-open — delta 0 */ }
+  return { denseThreshold: Math.min(0.9, 0.3 + kbThresholdDelta), kbThresholdDelta }
+}
+
 async function searchChunks(
   query: string,
   topK: number,
@@ -367,7 +397,11 @@ async function searchChunks(
    *  answer). When provided + non-empty, generateQueryEmbedding() is skipped and
    *  this vector is used for the dense search. The TEXT query still drives hybrid
    *  BM25 + reranking (unchanged) — only the vector comes from the override. */
-  embeddingOverride?: number[]
+  embeddingOverride?: number[],
+  /** FB-D1-R1-04 — threshold do searchUserKB resolve 1 LẦN rồi truyền xuống:
+   *  KbConsultLog ghi đúng giá trị ĐÃ DÙNG (không phải giá trị đọc lại lần 2
+   *  giữa chừng request). Caller khác (tương lai) không truyền → tự resolve. */
+  precomputedThresholds?: { denseThreshold: number; kbThresholdDelta: number }
 ): Promise<UserKBResult['chunks']> {
   const pipelineStart = Date.now()
   try {
@@ -391,12 +425,10 @@ async function searchChunks(
     // của chat + agent (knowledge-bridge) → áp delta vào dense score_threshold
     // ở đây khiến cả hai đường đều "kén tính" hơn khi KB bị nghi ngờ (defense
     // in depth). Cap 0.9 — không bao giờ siết đến mức chặn toàn bộ KB.
-    let kbThresholdDelta = 0
-    try {
-      const { getKbConfidenceThresholdDelta } = await import('@/lib/learning/adaptation-engine')
-      kbThresholdDelta = getKbConfidenceThresholdDelta()
-    } catch { /* fail-open — delta 0 */ }
-    const denseThreshold = Math.min(0.9, 0.3 + kbThresholdDelta)
+    // FB-D1-R1-04: công thức gom về resolveDenseThreshold (dùng chung với
+    // instrumentation KbConsultLog) — hành vi giữ nguyên bit-đối-bit.
+    const { denseThreshold, kbThresholdDelta } =
+      precomputedThresholds ?? (await resolveDenseThreshold())
     if (kbThresholdDelta > 0) {
       console.log(`[KB-Access] Step 1 dense threshold TIGHTENED: 0.3 → ${denseThreshold.toFixed(2)} (+${kbThresholdDelta} red-team delta)`)
     }

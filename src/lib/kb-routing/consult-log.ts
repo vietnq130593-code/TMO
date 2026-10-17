@@ -19,12 +19,30 @@
 
 import { db } from '@/lib/db'
 import { getTuningEnum } from '@/lib/learning/tuning-store'
+import { getKbConsultContext } from '@/lib/kb-routing/consult-context'
 
 /** Giới hạn JSON field (byte UTF-8 — truncate + flag). */
 const MAX_QUERY_TEXT_BYTES = 2_000
 const MAX_CONFIG_JSON_BYTES = 2_000
 const MAX_SOURCES_JSON_BYTES = 2_000
 const MAX_RESULTS_JSON_BYTES = 4_000
+
+/** Đuôi đánh dấu queryText bị cắt (byte UTF-8: '…' 3B + '[truncated]' 11B). */
+const QUERY_TRUNCATE_SUFFIX = '…[truncated]'
+
+/**
+ * Độ dài byte UTF-8 của chuỗi — FB-D1-R1-03: cap theo BYTE như cam kết
+ * blueprint §8.1/schema comment. So theo `.length` (UTF-16 code units)
+ * làm guarantee "≤2KB/≤4KB" sai 2-4× với tiếng Việt/emoji (1 char có thể
+ * 2-4 byte UTF-8). Fail-open: Buffer không có → đếm chars (đủ dùng).
+ */
+function byteLen(s: string): number {
+  try {
+    return Buffer.byteLength(s, 'utf8')
+  } catch {
+    return s.length
+  }
+}
 
 /** Warn throttle — DB down dài hạn không spam dev.log (precedent tuning-store). */
 const globalForConsultLog = globalThis as unknown as {
@@ -51,33 +69,61 @@ export interface KbConsultLogEntry {
   agentId?: string
 }
 
-/** JSON.stringify an toàn + truncate kèm flag truncated:true (không bao giờ throw). */
+/** JSON.stringify an toàn + truncate kèm flag truncated:true (không bao giờ throw).
+ * Mọi phép so giới hạn theo BYTE UTF-8 (FB-D1-R1-03). */
 function serializeCapped(value: unknown, maxBytes: number): string {
   try {
     let json = JSON.stringify(value)
     if (json === undefined) return '{}'
-    if (json.length <= maxBytes) return json
+    if (byteLen(json) <= maxBytes) return json
     // Truncate theo object khi có thể: topResults cắt bớt phần tử đầu còn
     // vừa thì giữ nguyên thứ tự quan trọng nhất (top-1 đứng đầu)
     if (Array.isArray(value)) {
       const arr = value as unknown[]
       for (let keep = arr.length - 1; keep >= 1; keep--) {
         const candidate = JSON.stringify([...arr.slice(0, keep), { truncated: true, dropped: arr.length - keep }])
-        if (candidate !== undefined && candidate.length <= maxBytes) return candidate
+        if (candidate !== undefined && byteLen(candidate) <= maxBytes) return candidate
       }
       return JSON.stringify({ truncated: true, dropped: arr.length })
     }
-    // Object thường: cắt chuỗi + flag
-    return JSON.stringify({ truncated: true, head: json.slice(0, Math.max(0, maxBytes - 60)) })
+    // Ngân sách quá nhỏ cho object flag — trả flag tối thiểu (≤19B)
+    if (maxBytes < 40) return JSON.stringify({ truncated: true })
+    // Object thường: cắt phần đầu theo byte an toàn ranh giới ký tự + flag.
+    // Giảm 10%/vòng từ full length — guarantee ≤ maxBytes trong O(log n) vòng
+    // (mỗi char UTF-8 ≤4 byte nên không cắt sâu hơn mức cần quá 10%).
+    const headBudgetBytes = maxBytes - 60
+    let keepChars = json.length
+    let head = ''
+    while (keepChars > 0) {
+      head = json.slice(0, keepChars)
+      if (byteLen(head) <= headBudgetBytes) break
+      keepChars = Math.floor(keepChars * 0.9)
+    }
+    if (byteLen(head) > headBudgetBytes) head = '' // phòng thủ budget 0
+    return JSON.stringify({ truncated: true, head })
   } catch {
     return '{}'
   }
 }
 
-/** Query text rút gọn an toàn. */
-function capQueryText(q: string | undefined): string | undefined {
-  if (!q) return undefined
-  return q.length <= MAX_QUERY_TEXT_BYTES ? q : q.slice(0, MAX_QUERY_TEXT_BYTES) + '…[truncated]'
+/** Query text rút gọn an toàn — theo BYTE UTF-8, ranh giới ký tự (FB-D1-R1-03/08). */
+function capQueryText(q: string | undefined | null): string | undefined {
+  // FB-D1-R1-08 — phân biệt "KHÔNG có query" (null/undefined → NULL trong DB)
+  // với "query rỗng" ('' → ''): lượt consult query-trống là dữ liệu thật.
+  if (q === undefined || q === null) return undefined
+  if (byteLen(q) <= MAX_QUERY_TEXT_BYTES) return q
+  // FB-D1-R1-03 — cắt theo byte, không cắt giữa multi-byte char / surrogate
+  // pair: for..of duyệt theo code point, tích luỹ byte từng ký tự.
+  const budget = MAX_QUERY_TEXT_BYTES - byteLen(QUERY_TRUNCATE_SUFFIX)
+  let used = 0
+  let cut = 0
+  for (const ch of q) {
+    const b = byteLen(ch)
+    if (used + b > budget) break
+    used += b
+    cut += ch.length
+  }
+  return q.slice(0, cut) + QUERY_TRUNCATE_SUFFIX
 }
 
 /** Cờ bật logging — STORE > ENV > DEFAULT 'on' (fail-open: lỗi đọc cờ = mặc định on). */
@@ -125,4 +171,39 @@ export async function logKbConsult(entry: KbConsultLogEntry): Promise<void> {
       )
     }
   }
+}
+
+/**
+ * BRAIN-D1 (FB-D1-R1-05) — row cho lượt consult rơi vào FALLBACK dense-only:
+ * knowledge-bridge.agentKnowledgeSearch bắt lỗi searchUserKB throw (throw xảy
+ * ra TRƯỚC khi instrumentation cuối hàm searchUserKB kịp chạy) → nếu không
+ * ghi ở đây thì lượt đó KHÔNG có row nào — phá guarantee "MỌI lượt KB consult
+ * đều được ghi" (blueprint §8.1). Kết quả chi tiết của fallback (hits/
+ * minScore) nằm ở diagnostics trả về agent — ngoài corpus D1-v1.
+ *
+ * NEVER THROWS (logKbConsult + getKbConsultContext đều fail-open) — caller
+ * (nhánh catch của agentKnowledgeSearch) gọi fire-and-forget được.
+ */
+export async function logKbConsultFallback(
+  query: string | undefined,
+  startedAtMs: number,
+  pipelineError: unknown
+): Promise<void> {
+  const ctx = getKbConsultContext()
+  await logKbConsult({
+    taskType: ctx.taskType ?? 'kb-fallback-dense',
+    intent: ctx.intent,
+    queryText: query,
+    retrievalConfig: { fallbackDenseOnly: true },
+    sources: {
+      pipelineError: (
+        pipelineError instanceof Error ? pipelineError.message : String(pipelineError)
+      ).slice(0, 200),
+    },
+    topResults: [],
+    latencyMs: Math.max(0, Date.now() - startedAtMs),
+    runId: ctx.runId,
+    sessionId: ctx.sessionId,
+    agentId: ctx.agentId,
+  })
 }
