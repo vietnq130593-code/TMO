@@ -20,6 +20,10 @@ import { fetchWithTransientRetry } from '@/lib/fetch-retry'
 import { authedFetch } from '@/lib/api-auth'
 import { CodeTabContent } from '@/components/smolab/code-tab'
 import { AI_TOOL_EVENT_NAME, extractJsonStringField, extractJsonNumberField, pathFileName } from '@/components/smolab/smolab-shared'
+// 31-g: pill trạng thái 5 mức ACTIVE/IDLE/BUSY/ERROR/OFFLINE cạnh tên agent
+// trong header Hội thoại — docs/AGENT-STATUS-DISPLAY-STANDARD.md.
+import { AgentStatusPill } from '@/components/smolab/agent-status-pill'
+import { mapToAgentStatus } from '@/lib/agent-status'
 import { KnowledgeTabContent } from '@/components/smolab/knowledge-tab'
 import { MemoryTabContent } from '@/components/smolab/memory-tab'
 import { LearningTabContent } from '@/components/smolab/learning-tab'
@@ -2031,6 +2035,14 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [activeSmolabTab, setActiveSmolabTab] = useState('knowledge')
   const [gatewayOnline, setGatewayOnline] = useState(false)
+  // 31-g (AGENT-STATUS-DISPLAY-STANDARD §1 OFFLINE): lần cuối /api/openclaw/status
+  // trả 'online' — bằng chứng "từng có kết nối" để phân biệt OFFLINE (mất kết
+  // nối ngoài ý muốn) với IDLE (gateway on-demand chưa từng chạy / đóng sạch
+  // theo thiết kế idle-shutdown 10'). null = chưa từng thấy online trong phiên màn hình.
+  const [lastSeenOnline, setLastSeenOnline] = useState<number | null>(null)
+  // 31-g: nút "Thử lại" trên pill OFFLINE bump tick → effect poll lại gateway
+  // status NGAY (không đợi chu kỳ 15s kế tiếp).
+  const [gatewayStatusTick, setGatewayStatusTick] = useState(0)
   const [sessions, setSessions] = useState<SmolabSession[]>([])
   // FIX 2026-09-29 — sessions đang vận hành (cross agent/team, có goal-loop
   // job queued/running hoặc run tracker 'running'): ghim section riêng trong
@@ -2747,13 +2759,15 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         if (res.ok) {
           const data = await res.json()
           setGatewayOnline(data.status === 'online')
+          // 31-g: ghi dấu heartbeat 'online' mới nhất cho pill trạng thái agent
+          if (data.status === 'online') setLastSeenOnline(Date.now())
         }
       } catch { setGatewayOnline(false) }
     }
     checkStatus()
     const interval = setInterval(checkStatus, 15000)
     return () => clearInterval(interval)
-  }, [])
+  }, [gatewayStatusTick]) // 31-g: + tick → "Thử lại" (pill OFFLINE) poll lại ngay
 
   // Load sessions on mount — respects current agent/team filter
   useEffect(() => {
@@ -5878,6 +5892,47 @@ ${manifest}` : rawText
     return modelId
   }, [])
 
+  // ==================== 31-g — Pill trạng thái agent (AGENT-STATUS-DISPLAY-STANDARD) ====================
+  // Trạng thái 5 mức của header Hội thoại: PURE map từ (runs của phiên hiện tại
+  // + fetch chat đang chờ + gateway health/last-seen) — xem src/lib/agent-status.ts
+  // cho chuẩn từng nhánh + thứ tự ưu tiên (OFFLINE/ERROR > BUSY > ACTIVE/IDLE).
+  const agentHeaderStatus = useMemo(
+    () => mapToAgentStatus({
+      runs: Object.values(agentRuns),
+      chatInFlight: isLoading,
+      gatewayOnline,
+      lastSeenOnline,
+    }),
+    [agentRuns, isLoading, gatewayOnline, lastSeenOnline],
+  )
+  // Tên agent (không avatar/emoji) cho thông báo trình đọc màn hình
+  // "Trạng thái agent X: …" (doc §5).
+  const agentHeaderName = useMemo(() => {
+    if (chatMode === 'single' && selectedAgentId) {
+      const a = smolabAgents.find((ag: any) => ag.id === selectedAgentId)
+      return a?.name || 'Agent'
+    }
+    if (chatMode === 'multi' && selectedTeam) return selectedTeam === 'code' ? 'Code Team' : 'Research Team'
+    return 'Agent'
+  }, [chatMode, selectedAgentId, selectedTeam, smolabAgents])
+  // OFFLINE → nút "Thử lại": poll lại /api/openclaw/status ngay lập tức.
+  const retryGatewayStatus = useCallback(() => setGatewayStatusTick(t => t + 1), [])
+  // ERROR → nút "Xem lỗi": cuộn tới bubble lỗi / panel run lỗi MỚI NHẤT trong
+  // khung chat (best-effort — run lỗi ngoài phần tail đã load thì không cuộn được).
+  const viewLatestAgentError = useCallback(() => {
+    const container = chatScrollRef.current
+    if (!container) return
+    let targetId: string | null = null
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]
+      if (m.role === 'error') { targetId = m.id; break }
+      if (m.role === 'agent_run' && m.runId && agentRunsRef.current[m.runId]?.status === 'error') { targetId = m.id; break }
+    }
+    if (!targetId) return
+    const el = container.querySelector<HTMLElement>(`[data-mid="${CSS.escape(targetId)}"]`)
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [messages])
+
   // ==================== RENDER ====================
   // Absolute positioning relative to body div (which is already below the header)
   // effectiveTop = distance from body div top to module top edge
@@ -6027,6 +6082,16 @@ ${manifest}` : rawText
                         : 'OpenClaw Agent'
                       }
                     </span>
+                    {/* 31-g — pill trạng thái 5 mức ACTIVE/IDLE/BUSY/ERROR/OFFLINE
+                        (docs/AGENT-STATUS-DISPLAY-STANDARD §3): cạnh tên agent,
+                        ml-2 = 8px, cùng dòng — không bao giờ xuống dòng, luôn hiển thị */}
+                    <AgentStatusPill
+                      status={agentHeaderStatus}
+                      agentName={agentHeaderName}
+                      onRetryConnection={retryGatewayStatus}
+                      onViewError={viewLatestAgentError}
+                      className="ml-2"
+                    />
                     <div className="flex items-center gap-1.5 mt-0.5">
                       <div className={`w-2 h-2 ${gatewayOnline ? 'bg-emerald-400' : 'bg-stone-500'} animate-pulse`} />
                       <span className="text-[9px] text-stone-400">{gatewayOnline ? 'Online' : 'on-demand'}</span>
@@ -7067,7 +7132,7 @@ ${manifest}` : rawText
                    trong space-y-3 → card nằm NGAY DƯỚI message, full column width. */
                 messages.map(msg => (
                   <React.Fragment key={msg.id}>
-                  <div className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} gap-2`}>
+                  <div data-mid={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} gap-2`}>
                     {/* Bot icon for assistant/tool/error/opencode — team messages use agent avatar */}
                     {(msg.role === 'assistant' || msg.role === 'tool_call' || msg.role === 'error' || msg.role === 'opencode_progress' || msg.role === 'opencode_result') && (
                       <div className={`flex-shrink-0 w-6 h-6 flex items-center justify-center mt-0.5 ${

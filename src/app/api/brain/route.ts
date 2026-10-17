@@ -23,6 +23,7 @@
 
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { getKnowledgeCorpusOverview } from '@/lib/brain/corpus-overview'
 import {
   BRAIN_REGISTRY,
   BRAIN_TRAINABLE_KEYS,
@@ -109,6 +110,11 @@ export async function GET() {
       ])
       return m.length + a.length + 1
     })
+
+    // ── R31: tổng quan corpus 6 chiều cho Brain-D (đếm thật Neo4j/Qdrant,
+    // cache 60s trong corpus-overview.ts — fail-open từng nguồn null).
+    // Chỉ knowledge cần → fetch song song với vocab ước tính phía trên.
+    const corpusOverview = await getKnowledgeCorpusOverview().catch(() => null)
 
     // ── Các phiên bản đã train (thường rỗng giai đoạn đầu) ──
     let models: Array<{
@@ -216,6 +222,10 @@ export async function GET() {
         inputDim,
         inputDimExact,
         outputDim,
+        // R31 — 6 chiều tổng quan corpus: gắn additive CHỈ cho knowledge
+        // (Brain-D §8.5.2); não khác không có trường này (UI chỉ render khối
+        // corpus khi tồn tại — additive không phá shape pins cũ).
+        ...(spec.key === 'knowledge' && corpusOverview ? { corpusOverview } : {}),
       }
     })
 

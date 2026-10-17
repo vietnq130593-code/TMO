@@ -11,8 +11,10 @@
  * (4) Domain coverage      — Neo4j e.domain groupBy + last-updated per domain
  * (5) 3 layers + infra     — Qdrant/Neo4j/embed + R2/Supabase/LLM-keys/disk (v1.3)
  * (6) Self-assessment      — collector ①-⑤ fail log + tool whitelist gaps
- * (7) DB + Memory + Learning + Scheduler — 8 sub-checks (a-h, h mới v1.3:
- *     JobQueue backlog + CronJob scheduler health — "ai canh những người canh")
+ * (7) DB + Memory + Learning + Scheduler — 9 sub-checks (a-i, h mới v1.3:
+ *     JobQueue backlog + CronJob scheduler health — "ai canh những người canh";
+ *     i mới P3-c task 31-f: backup freshness — tuổi artifact backup mới nhất
+ *     trên R2 cho cả 3 kho sqlite/qdrant/neo4j)
  */
 
 import { db } from '@/lib/db'
@@ -36,6 +38,10 @@ import { checkSupabaseHealth } from '@/lib/supabase-sync'
 import { promises as fsP } from 'fs'
 import path from 'path'
 import type { CollectorResult, Finding, CheckId } from './types'
+// P3-c (task 31-f) — sub-check (i) backup freshness: đo tuổi artifact backup
+// trên R2 (sqlite ≤ 2 ngày là lề P3-c; qdrant/neo4j hằng tuần)
+import { collectBackupFreshness } from './db-backup'
+import type { BackupFreshnessData } from './db-backup-core'
 
 // ==================== HELPERS ====================
 
@@ -644,6 +650,11 @@ export interface DatabaseSystemData {
       stuck: Array<{ id: string; agentId: string; taskPrompt: string; nextRunAt: string | null; hoursLate: number }>
     }
   }
+  // (i) Backup freshness (P3-c task 31-f) — tuổi artifact backup mới nhất trên R2.
+  // Fail-open từng kho (available=false → rule không alert); r2Configured=false
+  // khi R2 chưa cấu hình (khi đó backup không tồn tại như một hệ thống — việc
+  // configure là vấn đề infra, không phải freshness).
+  backupFreshness: BackupFreshnessData
 }
 
 export async function collectDatabaseSystem(): Promise<CollectorResult<DatabaseSystemData>> {
@@ -896,6 +907,11 @@ export async function collectDatabaseSystem(): Promise<CollectorResult<DatabaseS
       console.warn('[ALISTA][collector:database-system] scheduler health fail:', err instanceof Error ? err.message : String(err))
     }
 
+    // (i) Backup freshness (P3-c task 31-f) — tuổi artifact backup mới nhất trên
+    // R2 (3 kho). collectBackupFreshness fail-open từng kho + không throw (list
+    // timeout/creds lỗi → available=false, rule ⑦-i sẽ không alert nhầm).
+    const backupFreshness = await collectBackupFreshness()
+
     return {
       schemaDrift,
       zombies,
@@ -913,6 +929,7 @@ export async function collectDatabaseSystem(): Promise<CollectorResult<DatabaseS
       tokenAnomaly,
       dbStorage,
       scheduler,
+      backupFreshness,
     }
   })
 }

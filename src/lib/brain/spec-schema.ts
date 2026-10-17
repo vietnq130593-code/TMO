@@ -239,9 +239,9 @@ export const BRAIN_DRAFT_RULES: Readonly<Record<BrainKey, BrainDraftRule>> = {
   // Tầng 1 softmax 3 (CE) + Tầng 2/3 sigmoid 9+2 (BCE).
   knowledge: {
     brain: 'knowledge',
-    inputUnits: null, // kb-features: emb 2048 + cfg ~30 — chốt đếm chính thức khi D3 (§8.5.2)
+    inputUnits: null, // kb-features: emb 2048 + cfg ~36 (gồm 6 chiều tổng quan corpus R31 — corpus-dims.ts; chốt đếm chính thức khi D3 §8.5.2)
     outputUnits: 14, // 3 cụm một quyết định: 3 softmax + 9 sigmoid + 2 sigmoid (khóa — §8.3)
-    inputLabel: 'kb-features (emb 2048 + cfg ~30 — động)',
+    inputLabel: 'kb-features (emb 2048 + cfg ~36 — động)',
     outputLabel: '3 cụm: 3·softmax + 9·sigmoid + 2·sigmoid (khóa)',
     lossPerHead: [
       { type: 'crossEntropy', weight: 0.5 }, // Tầng 1 — chế độ vận dụng

@@ -31,6 +31,20 @@
  *     theo tiến độ vòng: đầu vòng thăm dò rộng (explore), cuối vòng tinh
  *     chỉnh quanh ứng viên tốt (exploit).
  *
+ * BỔ SUNG 31-e (2026-10-18, audit 31-a/31-c: Q2+Q3 PARTIAL → hoàn tất):
+ *  4. `adaptiveCrossoverRate` — Q3 (BLUEPRINT-EVO-NAO §10 Q3 chốt): "Vòng
+ *     đầu: 80% mutation / 20% crossover; adaptive theo tỷ lệ thắng (crossover
+ *     tăng khi corpus ứng viên thắng đủ dày)". Tỷ lệ crossover 0,2 mặc định →
+ *     0,4 khi brain đã có ≥8 ứng viên thắng active (beatActive) → 0,6 khi
+ *     ≥24. KHÔNG đụng `adaptiveMutationRate` — hàm đó điều cường độ mutation
+ *     (STRENGTH 0,15→0,06), hàm này điều PHẦN CHIA mutation/crossover
+ *     (SHARE) — 2 trục độc lập.
+ *  5. `shouldAbandonCandidate` — Q2 (§10 Q2 chốt "đo thêm per-candidate
+ *     budget, chặn sớm ứng viên quá đắt"): quyết định thuần có bỏ chấm ứng
+ *     viên khi wall-clock đã vượt ngân sách run hay không. Chỉ CHẤM được bỏ
+ *     — SINH ứng viên không bao giờ phụ thuộc đồng hồ (H4, xem comment
+ *     evolve.ts).
+ *
  * Tích hợp (evolve.ts): ứng viên #0 = HẠT GIỐNG từ suggestArch (thay sample
  * ngẫu nhiên) — mọi vòng tiến hoá khởi đầu bằng kiến trúc ĐÃ TÍNH TOÁN; các
  * ứng viên sau tournament + adaptive. UI (evolve-tab) hiển thị suggestion +
@@ -39,7 +53,9 @@
  * BẤT BIẾN giữ nguyên: H1/H2 (chỉ đề xuất) · H3 (ngân sách 24/10') · H4
  * (tất định — mọi hàm thuần hoặc nhận rng seeded; lưu ý trung thực: cùng
  * seed cho CÙNG chuỗi trong cùng phiên bản — chuỗi R26 khác R24-c vì thuật
- * toán sinh đổi) · H5 (DB additive) · H7 (cổng p95).
+ * toán sinh đổi; 31-e khác R26 khi pastWinners ≥ 8 vì tỷ lệ
+ * mutation/crossover đổi từ cố định 0,8/0,2 sang adaptive) · H5 (DB
+ * additive) · H7 (cổng p95).
  */
 
 import type { BrainKey } from '@/lib/brain/registry'
@@ -222,11 +238,63 @@ export function pickTournamentParent(
 /**
  * Cường độ mutation giảm tuyến tính 0,15 → 0,06 theo tiến độ vòng (done/total)
  * — đầu vòng khám phá rộng, cuối vòng tinh chỉnh quanh ứng viên tốt. Thuần.
+ * (31-e: giữ nguyên — đây là trục STRENGTH; Q3 thêm trục SHARE riêng bên dưới.)
  */
 export function adaptiveMutationRate(done: number, total: number): number {
   if (total <= 1) return MUTATION_RATE_START
   const t = Math.min(1, Math.max(0, done / (total - 1)))
   return MUTATION_RATE_START - (MUTATION_RATE_START - MUTATION_RATE_END) * t
+}
+
+// ==================== 4) Q3 — TỶ LỆ CROSSOVER THÍCH ỨNG (31-e) ====================
+
+/** Q3 base — vòng đầu 80% mutation / 20% crossover (BLUEPRINT-EVO §10 Q3 chốt). */
+export const CROSSOVER_RATE_BASE = 0.2
+/** Q3 — ≥8 ứng viên thắng active trong corpus (beatActive) → crossover 0,4. */
+export const CROSSOVER_WINNERS_MID = 8
+/** Q3 — ≥24 ứng viên thắng active → crossover 0,6 (corpus thắng dày → lai nhiều). */
+export const CROSSOVER_WINNERS_HIGH = 24
+/** Q3 — tỷ lệ crossover tầng giữa (corpus thắng vừa đủ dày). */
+export const CROSSOVER_RATE_MID = 0.4
+/** Q3 — tỷ lệ crossover tầng dày (khám phá bằng lai ghép thay vì đột biến đơn). */
+export const CROSSOVER_RATE_HIGH = 0.6
+
+/**
+ * Q3 (31-e) — tỷ lệ crossover thích ứng theo độ dày corpus ứng viên THẮNG:
+ * pastWinners = số BrainSearchCandidate beatActive=true của brain này trong
+ * LỊCH SỬ (đếm từ DB lúc khởi động vòng — tất định theo DB state).
+ *
+ *   pastWinners < 8   → 0,2  (mặc định "vòng đầu" — GIỮ NGUYÊN hành vi R26:
+ *                            mutation 0,8 / crossover 0,2 cố định, nên chuỗi
+ *                            sinh cùng seed + corpus trống bit-đối-bit R26)
+ *   8 ≤ pastWinners < 24 → 0,4
+ *   pastWinners ≥ 24  → 0,6
+ *
+ * Mutation share = 1 − crossover (evolve.ts). THUẦN — không rng, không DB
+ * (caller đếm pastWinners + truyền vào; số vô lý NaN/∞/âm → base 0,2 —
+ * fail-open về mặc định an toàn của "vòng đầu").
+ */
+export function adaptiveCrossoverRate(pastWinners: number): number {
+  const w = Number.isFinite(pastWinners) ? pastWinners : 0
+  if (w < CROSSOVER_WINNERS_MID) return CROSSOVER_RATE_BASE
+  if (w < CROSSOVER_WINNERS_HIGH) return CROSSOVER_RATE_MID
+  return CROSSOVER_RATE_HIGH
+}
+
+// ==================== 5) Q2 — PER-CANDIDATE BUDGET (31-e) ====================
+
+/**
+ * Q2 (31-e) — quyết định bỏ chấm MỘT ứng viên khi wall-clock run đã vượt
+ * ngân sách (H3: SEARCH_MAX_WALL_MS). Chuẩn SO SÁNH giống cổng run-level cũ
+ * (strict `>`): đúng ngân sách vẫn chấm tiếp, vượt mới bỏ.
+ *
+ * Fail-safe theo chiều an toàn: elapsed NaN / âm / đồng hồ lỗi → KHÔNG bỏ
+ * chấm (false — vòng tiếp tục bình thường); elapsed ∞ → bỏ. Thuần — caller
+ * tiêm đồng hồ `now?: () => number` (precedent rng seeded — search-space.ts
+ * header H4; KHÔNG Date.now rải trong logic).
+ */
+export function shouldAbandonCandidate(elapsedMs: number, budgetMs: number): boolean {
+  return elapsedMs > budgetMs
 }
 
 // ==================== GLUE: SUGGESTION → ENCODING 144 ====================

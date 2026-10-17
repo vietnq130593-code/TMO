@@ -1,8 +1,17 @@
 # BLUEPRINT TRIỂN KHAI HYBRID HYPERNAS P1 → P5 — "PHÒNG THÍ NGHIỆM TÌM KIẾN TRÚC NÃO" CHO TMO
 
-> **Phiên bản:** 0.2.2 — **hiệu đính vị trí tab (Task 25): "Tìm kiếm" = tab
-> thứ 6 SECTION 3 (slot 5 = "Quan sát" OBS-P3 tích hợp theo chỉ thị user
-> 2026-10-13).** Kế thừa 0.2.1 — **§8 ĐÃ CHỐT 2026-10-13 (user: "theo đề xuất") —
+> **Phiên bản:** 0.3 — **RÀ SOÁT TRẠNG THÁI THẬT (R31, 2026-10-18) sau audit 3-agent** —
+> dòng tiến độ 0.2.2 sai thời (viết trước đợt build sống sót reset). Trạng thái
+> THẬT hôm nay (bằng chứng file:line — xem §0): **HN-P1 ☑ HOÀN TẤT** (search-space.ts
+> 96-dim + models 101/102 + r100 sống; migration bù R31); **HN-P2 ☒ SUPERSEDED
+> bởi EVO** (evolve.ts + /api/brain/evolve + tab "Tiến hoá" R25 thay thế hoàn
+> toàn search runner + UI — KHÔNG dựng lại, lý do kỹ thuật §0); **HN-P3 ☐ HOÃN
+> THEO DỮ LIỆU** (predictor học — 32 candidate < 40 cold-start; khi làm thì làm
+> TRONG EVO, không dựng hypernas.ts + UX-8 riêng); **HN-P4 ☒ SUPERSEDED** (SMASH
+> prefilter — EVO train ứng viên thật, gate HN-P3 không bao giờ tới); **HN-P5 ☐
+> HOÃN THEO Q6** (đồng bộ BRAIN-P5); **§9 Observation kinds ☑ SỐNG QUA EVO R31**
+> (search.session/search.candidate phát từ evolve.ts — evo/observe.ts; chỉ còn
+> proposal.apply mở). Kế thừa 0.2.2 — **§8 ĐÃ CHỐT 2026-10-13 (user: "theo đề xuất") —
 > triển khai theo thứ tự Observation trước (chỉ thị user cùng ngày), HN-P1
 > xếp hàng kế tiếp theo Q1.** *(Hiệu đính 0.2→0.2.1, Task 24 2026-10-13 —
 > đợt FB-OBS R1-05: §9 "proposal.applied" → "proposal.apply" cho khớp 3 nguồn
@@ -69,7 +78,24 @@
 HN-P2/P3 chỉ BẬT ĐƯỢC trên brain awake** — route chặn bằng `signals.ok` (registry),
 không cần cờ mới để chặn.
 
-**Tiến độ:** ☐ HN-P1 ☐ HN-P2 ☐ HN-P3 ☐ HN-P4 ☐ HN-P5 — tất cả CHƯA triển khai.
+**Tiến độ (hiệu đính R31 — thay dòng 0.2.2 sai thời "tất cả CHƯA triển khai"):**
+☐→☑ **HN-P1 HOÀN TẤT** — `src/lib/brain/search-space.ts` (96-dim bijective +
+sampler + r100) + prisma models 101/102 + migration bù `20261018120000` (R31 —
+schema sống từ trước reset, DB qua db push, migration idempotent đóng nốt đường
+`db:deploy`). ☒ **HN-P2 SUPERSEDED bởi EVO** (R24-c evolve.ts + POST/GET
+/api/brain/evolve + tab "Tiến hoá" R25 + SMART SEARCH R26: cùng ngân sách H3,
+cùng bảng BrainSearchRun/Candidate, chuẩn so sánh CÔNG BẲNG hơn — mọi ứng viên
+chấm chung 1 fixture/brain — và search space RỘNG hơn 144-dim block; dựng lại
+search.ts + /api/brain/search + tab "Tìm kiếm" sẽ NHÂN ĐÔI hệ thống với nền
+tệ hơn — quyết định kiến trúc: KHÔNG dựng lại). ☐ **HN-P3 HOÃN THEO DỮ LIỆU**
+(predictor encoding→cvScore: 32 candidate rows < 40 cold-start; khi đủ ~4–8
+session/brain trên fixture tươi thì làm TRONG vòng EVO — rank M mẫu, train
+top-K — không dựng module riêng + UX-8 như thiết kế gốc). ☒ **HN-P4 SUPERSEDED**
+(gate "HN-P3 ≥4 session + Spearman >0,5" không bao giờ tới khi P3 hoãn; EVO
+train ứng viên thật — SMASH prefilter chỉ thêm rủi ro). ☐ **HN-P5 HOÃN THEO Q6**
+(đồng bộ BRAIN-P5 — envelope float64 sẵn). **§9 kinds:** ☑ `search.session` +
+`search.candidate` SỐNG QUA EVO R31 (evo/observe.ts fail-open, cờ obs_ledger);
+☐ `proposal.apply` còn mở (đường apply sống client-side — cần caller server-side).
 
 ---
 

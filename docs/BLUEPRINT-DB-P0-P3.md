@@ -24,7 +24,7 @@
 | P2-c | 🟡 Nợ kỹ thuật | Không guard kích thước vector collection (đổi embed model dim = chết im lặng cả Qdrant lẫn Neo4j index) | `lib/qdrant.ts:139-209` | Đổi model embedding → mọi upsert 400, cùng lớp triệu chứng P0-3 | 1-2h |
 | P3-a | 🟢 Dài hạn | `mapOutcome` dead ternary (cả 2 nhánh `'FAILURE'`) | `episodic-memory/recorder.ts:60` | Dead-code gây hiểu nhầm semantics (không đổi hành vi) | 0.25h |
 | P3-b | 🟢 Dài hạn | Không có migrations workflow (chỉ `db push`) | `package.json` | Không biết schema nào chạy trên DB backup nào — restore drift im lặng | 3-4h |
-| P3-c | 🟢 Dài hạn | Backup không có verify/round-trip drill, không có cron | `storage/db-backup/route.ts` | Tin tưởng mù quáng vào backup chưa từng được kiểm chứng | 2h |
+| P3-c | 🟢 Dài hạn | Backup không có verify/round-trip drill, không có cron | `storage/db-backup/route.ts` | Tin tưởng mù quáng vào backup chưa từng được kiểm chứng | 2h | → **✅ ĐÓNG R31** (verify nội tuyến các round 31–39 + cron hằng ngày + ALISTA freshness + restore-drill PASS thật — xem §P3-c) |
 | P3-d | 🟢 Dài hạn | RL-readiness: có ~70% hạ tầng reward, thiếu credit assignment + policy update + unified ledger | nhiều file | Không tận dụng được tín hiệu học đã thu thập | Roadmap |
 
 **Tổng effort ước tính:** P0 ≈ 6-9h · P1 ≈ 4-6h · P2 ≈ 4-5.5h · P3 ≈ 7-9h + roadmap.
@@ -830,6 +830,8 @@ Effort: 15 phút + verify chuẩn. Rollback: revert 1 commit.
 Effort: 3-4h (bao gồm thử restore-drift scenario). Rủi ro: quy trình mới bị quên — khắc phục bằng quy ước commit migration bắt buộc + lint guard nhẹ (script check: schema.prisma đổi mà migrations/ không có file mới → warn).
 
 ## P3-c · Backup verify + restore drill + cron
+
+> **✅ HOÀN TẤT (R31, 2026-10-18 — task 31-f + main):** (1) verify nội tuyến + restore pre-verify + pre-restore-backup + atomic rename ĐÃ sống từ các round 31–39 (route db-backup hardening); (2) cron hằng ngày 03:00 VN ĐÃ ĐĂNG KÝ — `scripts/seed-daily-backup-cron.ts` (executor `'DB-BACKUP'` chạy trong tick 60s của ALISTA scheduler — nền tảng cron THẬT duy nhất của project; đã chạy thật backup 17MB → R2 lúc verify) + ALISTA rule backup-freshness ≤2 ngày (r119); (3) `scripts/restore-drill.sh` ĐÃ SỐNG — chạy thật PASS (integrity ok + 5/5 bảng row-count khớp, KHÔNG bao giờ đụng DB sống). Phần thiết kế gốc dưới đây giữ nguyên làm tài liệu đối chiếu.
 
 ### Thiết kế
 Sau khi P0-1/P0-2 làm backup ĐÚNG và ĐỦ MỚI:

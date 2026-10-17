@@ -1,0 +1,162 @@
+{
+  "generatedAt": "2026-10-17T19:16:10.384Z",
+  "dbUrl": "/home/z/tmo-app/db/custom.db",
+  "corpus": {
+    "totalLogs": 40,
+    "byTaskType": {
+      "chat": 10,
+      "tool:knowledge_search": 7,
+      "tool:knowledge_graph": 23
+    },
+    "byIntent": {
+      "factual": 10,
+      "NULL": 30
+    },
+    "withRunId": 30,
+    "withTokensUsed": 0,
+    "firstLogAt": "2026-10-17T05:36:14.698Z",
+    "lastLogAt": "2026-10-17T19:06:26.852Z"
+  },
+  "latency": {
+    "overall": {
+      "n": 40,
+      "p50": 206.5,
+      "p95": 1019.6499999999999,
+      "mean": 372.1,
+      "max": 1076
+    },
+    "byIntent": {
+      "factual": {
+        "n": 10,
+        "p50": 407.5,
+        "p95": 514.9,
+        "mean": 425,
+        "max": 523
+      },
+      "NULL": {
+        "n": 30,
+        "p50": 188,
+        "p95": 1046.1499999999999,
+        "mean": 354.46666666666664,
+        "max": 1076
+      }
+    },
+    "byTaskType": {
+      "chat": {
+        "n": 10,
+        "p50": 407.5,
+        "p95": 514.9,
+        "mean": 425,
+        "max": 523
+      },
+      "tool:knowledge_search": {
+        "n": 7,
+        "p50": 990,
+        "p95": 1074.2,
+        "mean": 965.4285714285714,
+        "max": 1076
+      },
+      "tool:knowledge_graph": {
+        "n": 23,
+        "p50": 169,
+        "p95": 252.59999999999994,
+        "mean": 168.52173913043478,
+        "max": 410
+      }
+    }
+  },
+  "sources": {
+    "perSource": {
+      "chunks": {
+        "rows": 17,
+        "hit": 3,
+        "empty": 14,
+        "error": 0,
+        "disabled": 0,
+        "hitWhileDisabled": 0
+      },
+      "entities": {
+        "rows": 17,
+        "hit": 15,
+        "empty": 1,
+        "error": 0,
+        "disabled": 1,
+        "hitWhileDisabled": 0
+      },
+      "memories": {
+        "rows": 17,
+        "hit": 3,
+        "empty": 13,
+        "error": 0,
+        "disabled": 1,
+        "hitWhileDisabled": 0
+      },
+      "communities": {
+        "rows": 17,
+        "hit": 9,
+        "empty": 8,
+        "error": 0,
+        "disabled": 0,
+        "hitWhileDisabled": 0
+      }
+    },
+    "kbRows": 17,
+    "graph": {
+      "rows": 23,
+      "hit": 20,
+      "empty": 3,
+      "error": 0
+    },
+    "fallbackRows": 0,
+    "unclassifiedRows": 0,
+    "truncatedRows": 0
+  },
+  "confidence": {
+    "calibrated": {
+      "n": 17,
+      "mean": 0.32367013700912006,
+      "p50": 0.3,
+      "min": 0,
+      "max": 0.8
+    },
+    "raw": {
+      "n": 17,
+      "mean": 0.32367013700912006,
+      "p50": 0.3,
+      "min": 0,
+      "max": 0.8
+    },
+    "bothPresent": 17,
+    "differCount": 0,
+    "meanDelta": 0
+  },
+  "outcomeCorrelation": {
+    "matchedLogs": 30,
+    "distinctRuns": 3,
+    "duplicateRunRecords": 0,
+    "distinctRunOutcomes": {
+      "success": 2,
+      "fail": 1,
+      "open": 0
+    },
+    "closedRunLogs": 30,
+    "excludedOpenRunLogs": 0,
+    "confidenceVsSuccess": {
+      "n": 7,
+      "pearsonR": 0.08960400744534885
+    },
+    "totalHitsVsSuccess": {
+      "n": 30,
+      "pearsonR": -0.27089113923214136
+    },
+    "latencyVsSuccess": {
+      "n": 30,
+      "pearsonR": 0.08212635869627924
+    }
+  },
+  "sectionErrors": {},
+  "thresholds": {
+    "d2Min": 100,
+    "d3Min": 300
+  }
+}

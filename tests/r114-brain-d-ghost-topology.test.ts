@@ -84,7 +84,7 @@ describe('r114 · A registry Brain-D "Tri Thức" (§8.5 mốc a ghost UI)', () 
     expect(k.planned.layers).toHaveLength(6)
     const [l0, l1, l2, l3, l4, l5] = k.planned.layers
     expect(l0.units).toBe(0)
-    expect(l0.unitsLabel).toBe('emb 2048 + cfg ~30')
+    expect(l0.unitsLabel).toBe('emb 2048 + cfg ~36') // R31: +6 chiều tổng quan corpus
     expect(l1).toMatchObject({ units: 32, activation: 'tanh' })
     expect(l2).toMatchObject({ units: 16, activation: 'tanh' })
     // 3 cụm đầu ra — một quyết định (§8.3)
@@ -231,7 +231,7 @@ describe('r114 · E buildStageLayout có headGroup — khe nhóm + headGroups sp
   // Spec thật Brain-D (planned.layers §8.5.2): input 8 (đại diện khi inputDim
   // null — precedent surrogate dormant) → 32 → 16 → mode 3 → retrieval 9 → meta 2
   const knowledgeCols: StageColumn[] = [
-    { units: 8, display: 0, label: 'emb 2048 + cfg ~30', activation: 'input', locked: true },
+    { units: 8, display: 0, label: 'emb 2048 + cfg ~36', activation: 'input', locked: true },
     { units: 32, display: 0, label: '32', activation: 'tanh', locked: true },
     { units: 16, display: 0, label: '16', activation: 'tanh', locked: true },
     { units: 3, display: 0, label: '3', activation: 'softmax', locked: true, headGroup: 'mode', groupLabel: 'Chế độ vận dụng' },

@@ -104,6 +104,9 @@ import {
   computeLabelTotal,
   type BrainActivity, type BrainApiResponse, type BrainStatusEntry, type BrainKey,
 } from '@/lib/brain/registry'
+// R31 — 6 chiều tổng quan corpus Brain-D (thuần — client-safe, định nghĩa
+// cùng D3 input builder dùng; số đếm thật đến từ /api/brain corpusOverview).
+import { CORPUS_DIMS } from '@/lib/brain/corpus-dims'
 // BRAIN-UX §9.2: schema nháp single-source — client + server cùng rule
 // (validateBrainDraft/defaultDraftFor import chung với route PUT/train).
 import { defaultDraftFor, validateBrainDraft, type BrainDraftSpec } from '@/lib/brain/spec-schema'
@@ -1059,6 +1062,35 @@ export function BrainTabContent() {
                 )
               })}
             </div>
+            {/* R31 — TỔNG QUAN CORPUS 6 chiều (CHỈ Brain-D): tín hiệu đầu
+                vào D3 của não Tri Thức (đếm thật Neo4j/Qdrant cache 60s;
+                null = lỗi đếm từng nguồn — hiển thị '—' fail-open). Grid 6 ô
+                nhỏ theo typography console 9–11.5px precedent khối đề xuất R27. */}
+            {selectedBrainKey === 'knowledge' && selectedEntry.corpusOverview && (
+              <div className="mt-2.5 space-y-1.5" data-testid="brain-d-corpus-overview">
+                <p className="text-[10px] uppercase tracking-wide text-stone-500">
+                  Tổng quan corpus{' '}
+                  <span className="normal-case tracking-normal text-stone-600">— 6 chiều input D3 (log-scale §8.5.2)</span>
+                </p>
+                <div className="grid grid-cols-3 gap-1 sm:grid-cols-6">
+                  {CORPUS_DIMS.map(d => {
+                    const v = selectedEntry.corpusOverview?.[d.key] ?? null
+                    return (
+                      <div
+                        key={d.key}
+                        title={d.source}
+                        className="rounded border border-stone-800/70 bg-slate-950/60 px-2 py-1"
+                      >
+                        <p className="truncate text-[9.5px] text-stone-500">{d.label}</p>
+                        <p className="font-mono text-[11.5px] font-semibold tabular-nums text-stone-200">
+                          {v === null ? '—' : viNum(v)}
+                        </p>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
             {/* Hàng badge phase + cờ runtime + inputMode (kế thừa BrainCard cũ) */}
             <div className="mt-2 flex flex-wrap items-center gap-1.5">
               <Badge variant="outline" className="h-3.5 px-1 bg-slate-950/70 font-mono text-[9px] text-stone-500 border-stone-600/50">{selectedEntry.phase}</Badge>

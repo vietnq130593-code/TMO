@@ -30,6 +30,9 @@ import { ensureDbReady } from '@/lib/db-setup'
 import { db } from '@/lib/db'
 import { runComprehensiveCheck, isAlistaCheckInFlight, getCheckState } from './comprehensive-check'
 import { sweepCompletedAlistaProposals } from './proposal-verify'
+// P3-c (task 31-f): backup SQLite hằng ngày 03:00 VN — executor chạy trong tick
+// này (executor='DB-BACKUP' — row riêng, owner pause độc lập với ca trực ALISTA)
+import { dailyBackupTick, ensureDailyBackupCronJob } from './db-backup'
 
 // ==================== CONSTANTS ====================
 
@@ -226,6 +229,17 @@ async function alistaTick(tickNo: number): Promise<void> {
 
     // (1c) FIX v1.2 — zombie sweep TaskExecution kẹt 'running'
     await sweepZombieChecks()
+
+    // (1d) P3-c (task 31-f) — Daily SQLite backup 03:00 VN: đảm bảo row tồn tại
+    // (tick đầu, idempotent — như ensureAlistaCronJob) rồi gate + bắn backup
+    // mỗi tick. ĐẶT TRƯỚC mọi early-return của ca trực ALISTA: backup có lịch
+    // riêng (03:00) và catch-up phải chạy được cả ngoài cửa sổ 23:30-05:30.
+    // dailyBackupTick fail-open tuyệt đối — không bao giờ phá tick ALISTA.
+    if (tickNo === 1) {
+      await ensureDailyBackupCronJob()
+    }
+    await dailyBackupTick(tickNo)
+
 
     // (2) Đọc CronJob row — owner có thể pause từ UI
     const job = await db.cronJob.findFirst({ where: { executor: ALISTA_EXECUTOR } })

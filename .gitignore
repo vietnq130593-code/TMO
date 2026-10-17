@@ -300,3 +300,15 @@ agent-runs/
 # tải lại được bất cứ lúc nào — không track 90MB dữ liệu); ảnh chụp verify UI
 scratch/*.db
 scratch/r24*.png
+# NGOẠI LỆ (R31 — 2026-10-18): 3 script vận hành CÓ GIÁ TRỊ nghiệm thu, phải
+# sống sót qua clone (tiền lệ matryoshka-benchmark.ts từng mất qua clone):
+#  (1) d2-baseline-report.ts — D2 baseline đối chứng (BLUEPRINT-EVO-NAO §8.2):
+#      report thật từ KbConsultLog → docs/REPORT-D2-BASELINE-KB.md + docs/D2-BASELINE.json
+#      (gate A1 của D3 phải thắng) — chạy lại: bun scripts/d2-baseline-report.ts
+#  (2) seed-daily-backup-cron.ts — đăng ký cron backup SQLite hằng ngày 03:00 VN
+#      (BLUEPRINT-DB §P3-c R31; executor DB-BACKUP trong tick ALISTA) — chạy 1 lần/máy.
+#  (3) restore-drill.sh — diễn tập khôi phục: backup mới nhất → DB tạm → integrity_check
+#      + so row-count 5 bảng (KHÔNG bao giờ đụng DB sống) — chạy: bash scripts/restore-drill.sh
+!/scripts/d2-baseline-report.ts
+!/scripts/seed-daily-backup-cron.ts
+!/scripts/restore-drill.sh

@@ -23,6 +23,13 @@
  * 3 cơ quan kill-switch policy_organ_* + report GET /api/brain/policy.
  */
 
+/**
+ * R31 — type-only import 6 chiều tổng quan corpus (BrainStatusEntry dùng cho
+ * knowledge). corpus-dims.ts THUẦN (không import db) nên registry giữ đúng
+ * doctrine "THUẦN HẰNG SỐ — an toàn client bundle" (import type bị erase).
+ */
+import type { KnowledgeCorpusOverview } from './corpus-dims'
+
 // ==================== TYPES ====================
 
 /**
@@ -161,6 +168,13 @@ export interface BrainStatusEntry extends BrainSpec {
    * Dùng cho bộ đếm tham số editor (validateBrainDraft outputUnitsOverride).
    */
   outputDim?: number | null
+  /**
+   * R31 — tổng quan corpus 6 chiều (đếm thật Neo4j/Qdrant, cache 60s —
+   * corpus-overview.ts): CHỈ có ở knowledge (Brain-D) — hiển thị SECTION 1
+   * + là định nghĩa 6 chiều input D3 (BLUEPRINT-EVO-NAO §8.5.2 R31).
+   * Type-only import từ corpus-dims (thuần) — registry vẫn client-safe.
+   */
+  corpusOverview?: KnowledgeCorpusOverview
 }
 
 export interface BrainApiResponse {
@@ -315,9 +329,11 @@ export const BRAIN_REGISTRY: readonly BrainSpec[] = [
     defaultInputMode: 'kb-features',
     planned: {
       layers: [
-        // input ≈ emb 2048 + ~30 chiều cfg (taskType hash-bucket · intent 1-hot 4
-        // · trạng thái KB · lịch sử consult — §8.5.2, chốt đếm chính thức khi D3)
-        { units: 0, activation: '', unitsLabel: 'emb 2048 + cfg ~30' },
+        // input ≈ emb 2048 + ~36 chiều cfg (taskType hash-bucket · intent 1-hot 4
+        // · trạng thái KB · lịch sử consult · 6 CHIỀU TỔNG QUAN CORPUS R31 —
+        // graphNodes/lessons/episodes/chunks/communities/memories log-scale,
+        // định nghĩa corpus-dims.ts; chốt đếm chính thức khi D3 §8.5.2)
+        { units: 0, activation: '', unitsLabel: 'emb 2048 + cfg ~36' },
         // trunk chung 2 lớp ẩn (tiền lệ Brain-C 32 tanh)
         { units: 32, activation: 'tanh' },
         { units: 16, activation: 'tanh' },

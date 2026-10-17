@@ -13,6 +13,11 @@
  *   proposal-verify.ts    — follow-up verification loop (v1.2): notify khi proposal
  *                          hoàn tất → re-check → đề xuất mới nếu chưa triệt để
  *   alista-scheduler.ts   — 60s tick, cửa sổ 23:30→05:30+1 catch-up, sweep follow-up
+ *   db-backup-core.ts     — (P3-c task 31-f) lõi THUẦN: lịch 03:00 VN + gate +
+ *                          diễn dịch response + chọn artifact freshness (test r119)
+ *   db-backup.ts          — (P3-c task 31-f) executor backup SQLite hằng ngày
+ *                          (CronJob row executor='DB-BACKUP', gọi trong tick
+ *                          alista-scheduler bước 1d) + collector freshness ⑦(i)
  *
  * Public API (sử dụng ngoài module):
  *   - runComprehensiveCheck, getCheckState, listChecks, isAlistaCheckInFlight — cho API route

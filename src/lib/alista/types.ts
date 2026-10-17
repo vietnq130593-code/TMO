@@ -124,6 +124,10 @@ export const RECHECK_TARGET_OVERRIDES_MS: Record<string, number> = {
   'db:queue_stuck': 6 * HOUR,
   'db:queue_backlog': 1 * DAY,
   'db:queue_failures': 1 * DAY,
+  // ⑦(i) P3-c task 31-f — backup freshness
+  'db:backup_stale_sqlite': 1 * HOUR, // chạy lại 1 backup là tuổi artifact reset về ~0 ngay
+  'db:backup_stale_qdrant': 1 * DAY, // snapshot-full cần vài phút tải lên
+  'db:backup_stale_neo4j': 1 * DAY,
 }
 
 /** Lý do con người đọc được — đi kèm window khi hoãn verify */
@@ -142,6 +146,9 @@ export const RECHECK_WHY: Record<string, string> = {
   'db:token_spike': 'pattern tiêu thụ token cần vài ngày để bình thường hoá',
   'db:token_drop': 'pattern tiêu thụ token cần vài ngày để bình thường hoá',
   'db:cron_stuck': 'scheduler self-heal qua tick 60s — 1 giờ là đủ kết luận',
+  'db:backup_stale_sqlite': 'chạy lại POST /api/storage/db-backup là tuổi artifact reset về ~0 ngay — 1 giờ đủ kết luận',
+  'db:backup_stale_qdrant': 'snapshot-full cần vài phút tải lên R2 — 1 ngày đủ kết luận',
+  'db:backup_stale_neo4j': 'snapshot-full cần vài phút tải lên R2 — 1 ngày đủ kết luận',
 }
 
 /** Tra recheck window + lý do cho 1 finding (slug + target) */

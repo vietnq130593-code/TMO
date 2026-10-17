@@ -1,6 +1,7 @@
 # BLUEPRINT GIAO THỨC QUAN SÁT V2 P1 → P4 — "TOÀN CẢNH VẬN HÀNH DATABASE · NÃO · TỰ HỌC"
 
 > **Phiên bản:** 0.3.1 — **Task 25 (2026-10-13, chỉ thị user): tab "Quan sát"
+> *(Hiệu đính R31 2026-10-18 — trung thực vị trí cuối: Task 26 (2026-10-13, chỉ thị user sau đó) đã DỜI vị trí OBS-P3 lần nữa — từ "tab console thứ 5 SECTION 3" thành **selector "Chế độ quan sát" ở SECTION 1 + panel hiển thị dưới Đài quan sát não SECTION 2** (brain-tab.tsx OBS_MODES + ObsNeuronsPanel/ObsTimelinePanel/ObsTracesPanel/ObsGoldenPanel); tab console SECTION 3 quay về 4 tab. Chức năng OBS-P3 nguyên vẹn (timeline + filter + drill-down + kim tuyến runId) — chỉ vị trí hiển thị đổi theo chỉ thị mới nhất.)*
 > TÍCH HỢP VÀO tab BRAIN › SECTION 3** (tab console thứ 5 "Quan sát" — không
 > còn tab riêng cấp module Smolab; prop điều hướng chéo đã gỡ; localStorage cũ
 > 'observation' chuyển hướng sang 'brain'; HyperNAS "Tìm kiếm" chuyển thành tab

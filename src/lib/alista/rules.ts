@@ -24,6 +24,8 @@ import type {
   ToolsHealthData, AgentRunsData, EscalationsData, DomainCoverageData,
   ThreeLayersData, SelfAssessmentData, DatabaseSystemData,
 } from './collectors'
+// P3-c (task 31-f) — ngưỡng tuổi artifact backup cho rule ⑦(i)
+import { SQLITE_BACKUP_MAX_AGE_HOURS, WEEKLY_SNAPSHOT_MAX_AGE_HOURS } from './db-backup-core'
 
 // ==================== COMMON HELPERS ====================
 
@@ -646,6 +648,56 @@ export function rulesForDatabaseSystem(data: DatabaseSystemData, threeLayersData
       target: 10,
       operator: 'lte',
     }))
+  }
+
+  // (i) Backup freshness — P3-c (task 31-f): "alert qua ALISTA nếu 2 ngày liên
+  // tiếp không có backup thành công". Chỉ alert khi ĐO ĐƯỢC (available=true;
+  // R2 disconnected đã có rule layer:r2 riêng — không double-alert) và tuổi
+  // artifact vượt ngưỡng: SQLite hằng ngày > 48h → high; snapshot Qdrant/Neo4j
+  // hằng tuần > 192h (7 ngày + 1 ngày grace) → medium.
+  if (data.backupFreshness.r2Configured) {
+    const s = data.backupFreshness.sqlite
+    if (s.available && (s.ageHours == null || s.ageHours > SQLITE_BACKUP_MAX_AGE_HOURS)) {
+      const staleDesc = s.ageHours == null
+        ? 'KHÔNG có artifact .db nào trong backups/sqlite/'
+        : `artifact mới nhất ${Math.round(s.ageHours)}h tuổi (> ngưỡng ${SQLITE_BACKUP_MAX_AGE_HOURS}h)`
+      out.push(makeFinding(7, 'db', 'backup_stale_sqlite', 'improvement', 'high', {
+        ageHours: s.ageHours,
+        maxAgeHours: SQLITE_BACKUP_MAX_AGE_HOURS,
+        newestKey: s.newestKey,
+        newestAt: s.newestAt,
+        totalArtifacts: s.totalArtifacts,
+      }, `Backup SQLite hằng ngày (P3-c, cron 03:00 VN executor DB-BACKUP) đang thất bại: ${staleDesc}${s.newestAt ? ` (lần cuối ${s.newestAt})` : ''}. Kịch bản mất dữ liệu: sandbox reset mà không có backup gần đây ≈ mất toàn bộ trạng thái document/agent. Cần (1) mở UI Automation check CronJob executor='DB-BACKUP' còn active + xem lastError, (2) chạy tay POST /api/storage/db-backup rồi xem response verify, (3) kiểm tra R2 endpoint/credentials nếu upload fail.`, {
+        metric: 'tuổi artifact backup SQLite mới nhất trên R2 (giờ)',
+        current: s.ageHours == null ? 'no_artifact' : Math.round(s.ageHours),
+        target: SQLITE_BACKUP_MAX_AGE_HOURS,
+        operator: 'lte',
+      }))
+    }
+
+    const weeklyStores: Array<{ key: 'qdrant' | 'neo4j'; label: string; f: typeof s }> = [
+      { key: 'qdrant', label: 'Qdrant snapshot', f: data.backupFreshness.qdrant },
+      { key: 'neo4j', label: 'Neo4j cypher dump', f: data.backupFreshness.neo4j },
+    ]
+    for (const w of weeklyStores) {
+      if (w.f.available && (w.f.ageHours == null || w.f.ageHours > WEEKLY_SNAPSHOT_MAX_AGE_HOURS)) {
+        const staleDesc = w.f.ageHours == null
+          ? 'KHÔNG có artifact nào'
+          : `artifact mới nhất ${Math.round(w.f.ageHours)}h tuổi (> ngưỡng ${WEEKLY_SNAPSHOT_MAX_AGE_HOURS}h = 7 ngày + 1 ngày grace)`
+        out.push(makeFinding(7, 'db', `backup_stale_${w.key}`, 'improvement', 'medium', {
+          ageHours: w.f.ageHours,
+          maxAgeHours: WEEKLY_SNAPSHOT_MAX_AGE_HOURS,
+          newestKey: w.f.newestKey,
+          newestAt: w.f.newestAt,
+          totalArtifacts: w.f.totalArtifacts,
+        }, `${w.label} hằng tuần (seed-weekly-backup-cron, Thứ 7 03:00) đang thất bại: ${staleDesc}${w.f.newestAt ? ` (lần cuối ${w.f.newestAt})` : ''}. Cần (1) chạy tay POST /api/storage/snapshot-full?store=all, (2) check CronJob weekly-backup còn active, (3) verify bucket R2 còn ghi được.`, {
+          metric: `tuổi artifact ${w.label} mới nhất trên R2 (giờ)`,
+          current: w.f.ageHours == null ? 'no_artifact' : Math.round(w.f.ageHours),
+          target: WEEKLY_SNAPSHOT_MAX_AGE_HOURS,
+          operator: 'lte',
+        }))
+      }
+    }
   }
 
   // Cap ≤2 sub-proposal từ ⑦ (tránh spam) — nhưng để LLM tách được, trả tối đa
