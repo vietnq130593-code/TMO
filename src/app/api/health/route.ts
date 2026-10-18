@@ -57,18 +57,19 @@ function checkLLMHealthSync(): Record<string, { available: boolean; model: strin
       : undefined,
   }
 
-  // ━━ NVIDIA NIM (R25 2026-10-18) — embed + extraction + agent/chat cores ━━
-  // Task 33 từng gỡ NIM khỏi agents/utility/extraction; R25 tái giới thiệu NIM
-  // cho extraction (glm-5.3-flash) + agent/chat (4 lõi — glm-5.3-flash chính).
+  // ━━ NVIDIA NIM (R39 2026-10-18) — embed + extraction + agent/chat cores ━━
+  // Task 33 từng gỡ NIM khỏi agents/utility/extraction; R25 tái giới thiệu NIM.
+  // R39 USER CHỐT: extraction = nemotron-550b (lõi trích xuất ổn định),
+  // glm-5.3-flash = lõi agent/chat + xử lý tác vụ chính.
   // Callers thật đã verified live: MEGATRON run provider=nvidia post-restore.
   const nvidiaAgentModels = getNvidiaModels()
   result.nvidia = {
     available: hasNvidiaKeys,
-    model: `nvidia/nemotron-3-embed-1b (embed) + ${nvidiaAgentModels[0]} (extraction + agent/chat chính, R25)`,
+    model: `nvidia/nemotron-3-embed-1b (embed) + nvidia/nemotron-3-ultra-550b-a55b (extraction chính, R39) + ${nvidiaAgentModels[0]} (agent/chat chính)`,
     active: hasNvidiaKeys,
     error: !hasNvidiaKeys ? 'No NVIDIA API keys configured (embed sẽ không chạy)' : undefined,
     note: hasNvidiaKeys
-      ? `Embed (generateEmbedding) + extraction glm-5.3-flash + agent/chat ${nvidiaAgentModels.join(' / ')} (R25 — glm-5.3-flash chính; model NIM lỗi → báo lỗi rõ ràng R19 không fallback)`
+      ? `Embed (generateEmbedding) + extraction nvidia/nemotron-3-ultra-550b-a55b (R39 — user chốt lõi trích xuất ổn định; xoay qua env EXTRACTION_MODEL) + agent/chat ${nvidiaAgentModels.join(' / ')} (glm-5.3-flash chính — xử lý tác vụ; model NIM lỗi → báo lỗi rõ ràng R19 không fallback)`
       : undefined,
   }
 

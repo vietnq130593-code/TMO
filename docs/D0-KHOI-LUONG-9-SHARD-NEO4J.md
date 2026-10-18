@@ -187,12 +187,16 @@ OOM) — nhưng communityId của node tạo sau job này chưa có, xem khuyế
    dự phòng hợp lệ nhưng KHÔNG còn bắt buộc.
 4. **9 chunk thiếu của 002**: chạy lại reExtract khi NIM khỏe (1 lệnh POST, driver có
    sẵn) — MERGE additive, không mất dữ liệu, không xóa node (H5).
-5. **Community-detect (Leiden) — DEFER đúng ràng buộc D0**: D0 không chủ động chạy.
-   Job nền tự kích hoạt đã chạy 1 lần (83.217 node có communityId — xem §3); node tạo
-   sau đó (kể cả 405 node của trial) chưa có communityId mới. Khuyến nghị: SAU khi
-   ingest xong đủ 9 shard, chạy lại community-detect MỘT lần để làm mới toàn đồ thị —
-   bằng chứng §3 cho thấy chạy được trên sandbox (84K node ~5 phút, không OOM) — thuộc
-   phase khác, **chờ user duyệt**.
+5. **Community-detect (Leiden) — ĐÃ CHẠY R39 (16:31 UTC 2026-10-18, user duyệt "1 đến 3")**:
+   compact bỏ 10.518 isolated → Leiden 90.018 node/210.600 cạnh (47,8s) → **1.069 cụm
+   thô → 351 cụm đạt ngưỡng ≥3 members** → viết communityId 88.582/88.582 node hợp lệ
+   (0 skipped, bulk elementId chunk) → tái tạo theopus_communities 351/351 summary
+   embed. Chất lượng: modularity 0,8329 · silhouette 0,8711 · DBI 3,31 (351 điểm/6
+   domain). Tổng thời gian 166s. Node không có communityId = 10.518 isolated + 1.436
+   thuộc cụm <3 members — đúng thiết kế, không phải lỗi. Hai lần chạy liên tiếp cho
+   kết quả deterministic giống hệt (166s/157s). Script: `scripts/refresh-communities.ts`
+   (pm2 wrapper `scratch/r39-communities.sh` — lưu ý pm2 autorestart exit-0: chạy 1-shot
+   bằng lệnh trực tiếp hoặc `--max-restarts 0`).
 6. **9 chunk × 3 shard N/A trong bảng mẫu** (004/008/009): không chặn quyết định (ngoại
    suy dùng median + khoảng tin cậy đã rộng); có thể đo bổ sung mẫu khi NIM khỏe nếu
    muốn thu hẹp khoảng.
@@ -305,3 +309,32 @@ curl -X POST 'http://localhost:3000/api/storage/db-backup' --max-time 600
 # 3) Khi sandbox reset: restore từ R2 (giây) thay vì re-ingest (giờ):
 curl -X POST 'http://localhost:3000/api/storage/restore-full?store=qdrant' --max-time 300
 ```
+
+### 7.3 · Hậu D0 R39 (16:20-17:00 UTC 2026-10-18) — user duyệt "1 đến 3"
+
+Sau khi D0 §7.1 đóng, user duyệt 3 mục còn hở (nguyên văn: "Duyệt từ 1 đến 3 riêng 3
+giữ nemotron vì lõi này trích xuất ổn định. GLM 5.3 Flash chủ yếu dùng để xử lý tác vụ
+thôi"):
+
+1. **Community-detect Leiden §5.5 — XONG** (kết quả đầy đủ ở §5 mục 5): 88.582/88.582
+   node hợp lệ có communityId mới · theopus_communities 351 điểm xanh · Q=0,8329.
+2. **Eval case knowledge-domain — XONG**: `scripts/seed-eval-knowledge.ts` seed 27
+   case hand-crafted bám ENTITY_NAME/DESCRIPTION_SHORT thật của 9 shard (3/shard,
+   category `knowledge`, source `d0_corpus`, difficulty e8/m13/h6) — lấp mismatch domain
+   R38 (EvalCase cũ toàn programming/algorithm/ml + security → 100% refusal).
+   **Kết quả run đầu sau seed (runId cmve1zdpd...): answered 23/27 (coverage 0,85) ·
+   refusal 4 · recall@5 0,74 · nDCG@5 0,75 · MRR 0,73 · f1 0,70 · hallucination 0** —
+   đường KB thật hoạt động (so với 0/27 trước seed). 4 refusal + faithfulness 0,42
+   (judge nemotron chặt) là tín hiệu thật để tinh chỉnh query phrasing/case sau.
+   Lưu ý vận hành: run đầu tiên 0/27 do answer model SBF (Zen) chết 404 từ sandbox +
+   judge kimi-k3 EOL 410 — observation protocol bắt live model.failover ×2 + alert
+   eval-starvation; chữa bằng env override thiết kế sẵn R4: EVAL_ANSWER_MODEL=
+   glm-5.3-flash (lõi tác vụ R39) + EVAL_JUDGE_MODEL=nemotron-550b (cross-model) +
+   EVAL_JUDGE_FALLBACK_MODEL=deepseek-v4.1-flash (xem khối .env R39).
+3. **Chính sách lõi — USER CHỐT**: extraction = `nvidia/nemotron-3-ultra-550b-a55b`
+   mặc định trong code (llm.ts R39 — env EXTRACTION_MODEL giữ làm pin tường minh +
+   đường xoay khẩn cấp); `z-ai/glm-5.3-flash` chuyển hẳn sang agent/chat + xử lý tác vụ
+   (vẫn NVIDIA_AGENT_MODELS[0]). Health route note cập nhật theo.
+
+Ghi chú vận hành thêm: pm2 wrapper cho script 1-shot cần `--max-restarts 0` (exit 0 vẫn
+bị pm2 autorestart — R39 dính 2 lần chạy thừa, may kết quả deterministic giống hệt).

@@ -4,10 +4,11 @@
  * ⚠ MODEL MATRIX (CẬP NHẬT R25 2026-10-18 — probe trực tiếp NIM /v1/models):
  *   NVIDIA NIM giữ 3 vai trò:
  *     1. LÕI EMBED (src/lib/embeddings.ts — nvidia/nemotron-3-embed-1b)
- *     2. LÕI TRÍCH XUẤT (triết tách) — z-ai/glm-5.3-flash LÕI CHÍNH MỚI
- *        (probe R25: 200/~0,7s — nhanh; nemotron-3-ultra-550b cũ bị NIM
- *        quá tải 503 liên tục nhiều ngày → hạ xuống lựa chọn, khôi phục qua
- *        env EXTRACTION_MODEL=nvidia/nemotron-3-ultra-550b-a55b khi khỏe lại)
+ *     2. LÕI TRÍCH XUẤT (triết tách) — nvidia/nemotron-3-ultra-550b-a55b
+ *        LÕI CHÍNH (R39 2026-10-18 — USER CHỐT: "lõi này trích xuất ổn định"
+ *        sau khi kéo sạch 868/868 chunk D0; glm-5.3-flash từng làm lõi R25
+ *        nhưng R38 bắt sóng hang 196s → chuyển hẳn sang vai trò agent/tác vụ.
+ *        Xoay lõi extraction khẩn cấp qua env EXTRACTION_MODEL, không sửa code)
  *     3. MODEL AGENT/CHAT — 4 lựa chọn dropdown: GLM 5.3 Flash (z-ai/glm-5.3-flash
  *        — nhanh, chính) · DeepSeek v4.1 Flash (deepseek-ai/deepseek-v4.1-flash
  *        — reasoning chậm ~135s/call tối giản) · GLM 5.3 (z-ai/glm-5.3 — siêu
@@ -330,13 +331,13 @@ const modelRotationCounters: Record<string, number> = {
  *
  *  NOTE: For EXTRACTION models, rotation is DISABLED (user Option C — 2026-08-21,
  *  reaffirmed as single-core directive 2026-08-25).
- *  R25: glm-5.3-flash is the ONLY extraction core.
+ *  R39: nemotron-3-ultra-550b is the ONLY extraction core (user chốt).
  */
 function getRotatedModels(provider: string, models: string[]): string[] {
-  // EXTRACTION models: no rotation — the single glm-5.3-flash core (R25)
+  // EXTRACTION models: no rotation — the single nemotron-550b core (R39)
   // Compare by reference — if it's the extraction list, skip rotation
   if (models === NVIDIA_EXTRACTION_MODELS) {
-    return models // Fixed order: [glm-5.3-flash] — lõi extraction duy nhất (R25)
+    return models // Fixed order: [nemotron-3-ultra-550b] — lõi extraction duy nhất (R39)
   }
   // AGENT/CHAT models (R25: glm-5.3-flash chính + ds-v4.1-flash + glm-5.3 +
   // nemotron-550b): no rotation — thứ tự cố định, không load-balance.
@@ -350,12 +351,14 @@ function getRotatedModels(provider: string, models: string[]): string[] {
   return [...models.slice(offset), ...models.slice(0, offset)]
 }
 
-/** NVIDIA NIM EXTRACTION models (R25 2026-10-18 — cập nhật từ probe trực tiếp):
- *  CHÍNH SÁCH: trích xuất (triết tách) tài liệu dùng z-ai/glm-5.3-flash làm
- *  LÕI CHÍNH (probe R25: HTTP 200 / ~0,7s — nhanh nhất trong catalog NIM
- *  còn sống; 550B nemotron cũ bị NIM quá tải 503 liên tục từ 2026-10-17,
- *  sóng 503/502 kéo dài nhiều ngày — nguồn lỗi extraction liên tục).
- *  Khôi phục nemotron khi NIM khỏe lại: env EXTRACTION_MODEL=nvidia/nemotron-3-ultra-550b-a55b
+/** NVIDIA NIM EXTRACTION models (R39 2026-10-18 — USER CHỐT CHÍNH SÁCH LÕI):
+ *  CHÍNH SÁCH MỚI (R39): trích xuất (triết tách) tài liệu dùng
+ *  nvidia/nemotron-3-ultra-550b-a55b làm LÕI CHÍNH — user đánh giá
+ *  "lõi này trích xuất ổn định" sau khi kéo 868/868 chunk D0 không lỗi;
+ *  glm-5.3-flash CHUYỂN HẲN sang vai trò agent/chat + xử lý tác vụ
+ *  (vẫn là NVIDIA_AGENT_MODELS[0] — lõi agent chính). Lịch sử sóng:
+ *  R25 nemotron 503 → glm làm chính; R38 glm hang 196s → nemotron sống
+ *  lại và kéo xong D0; R39 user chốt nemotron làm default.
  *  R19 (2026-10-15 — bỏ model fallback): lõi NIM fail → callLLMSlot trả lỗi,
  *  document sẽ retry sau (KHÔNG còn chuỗi fallback Zen cũ).
  *
@@ -367,7 +370,9 @@ function getRotatedModels(provider: string, models: string[]): string[] {
  *  cùng họ), trong khi nemotron-550b probe 1.75s OK (R32 MEGATRON live
  *  12 vòng — nghịch sóng với R25). Hai model thay phiên khỏe/bệnh trong
  *  ngày — env cho phép xoay lõi extraction theo sóng KHÔNG cần sửa code.
- *  Đổi về glm: bỏ dòng EXTRACTION_MODEL trong .env + restart.
+ *  Đổi về glm: đặt EXTRACTION_MODEL=z-ai/glm-5.3-flash + restart (R39:
+ *  default code giờ LÀ nemotron — .env giữ dòng trùng default làm pin tường
+ *  minh, xoay khẩn cấp vẫn qua env không cần sửa code).
  *
  *  nvidia/nemotron-3-ultra-550b-a55b: 550B MoE (55B active) — còn Listed
  *    (503 sóng ngắn R25 sáng 2026-10-18, R32/R38 probe: sống).
@@ -378,7 +383,9 @@ function getRotatedModels(provider: string, models: string[]): string[] {
  *  meta/llama-3.3-70b-instruct (chất lượng kém hơn 550b), gpt-oss-120b (410).
  */
 const NVIDIA_EXTRACTION_MODELS: string[] = [
-  process.env.EXTRACTION_MODEL?.trim() || 'z-ai/glm-5.3-flash',
+  // R39: default = nemotron-550b (user chốt lõi trích xuất ổn định) —
+  // env EXTRACTION_MODEL vẫn ghi đè được khi sóng đổi chiều.
+  process.env.EXTRACTION_MODEL?.trim() || 'nvidia/nemotron-3-ultra-550b-a55b',
 ]
 
 /** NVIDIA NIM AGENT/CHAT models (R25 2026-10-18 — catalog NIM sống thật,
@@ -403,8 +410,9 @@ const NVIDIA_AGENT_MODELS = [
   'nvidia/nemotron-3-ultra-550b-a55b',
 ]
 
-/** GLM 5.3 Flash NIM id — LÕI AGENT NIM CHÍNH MỚI (R25 2026-10-18) + lõi
- *  extraction (NVIDIA_EXTRACTION_MODELS). Dùng bởi callLLMForAgent (route
+/** GLM 5.3 Flash NIM id — LÕI AGENT/TÁC VỤ NIM CHÍNH (R25; R39 user chốt:
+ *  glm-5.3-flash CHỦ YẾU dùng xử lý tác vụ/agent/chat — không còn là lõi
+ *  extraction, nemotron-550b đảm nhiệm). Dùng bởi callLLMForAgent (route
  *  NIM thật) + UI/agents (validation phải TÔN TRỌNG giá trị này). */
 export const GLM_53_FLASH_NIM_ID = 'z-ai/glm-5.3-flash'
 
@@ -416,9 +424,10 @@ export const GLM_53_NIM_ID = 'z-ai/glm-5.3'
  *  2026-10-14; giữ nguyên R25 — reasoning chậm → slow-model timeout). */
 export const DEEPSEEK_V41_FLASH_NIM_ID = 'deepseek-ai/deepseek-v4.1-flash'
 
-/** Nemotron-3-Ultra-550B NIM id — lựa chọn agent (R17 từng là model chính;
- *  R25: NIM quá tải 503 liên tục — giữ làm lựa chọn, breaker fail-fast).
- *  Trước đây là lõi extraction — R25 chuyển extraction sang glm-5.3-flash. */
+/** Nemotron-3-Ultra-550B NIM id — LÕI EXTRACTION CHÍNH (R39 user chốt:
+ *  trích xuất ổn định — kéo 868/868 chunk D0) + lựa chọn agent dropdown
+ *  (R17 từng là model chính agent; sóng 503 R25 đã qua — breaker fail-fast
+ *  vẫn giữ cho vai trò agent). */
 export const NEMOTRON_550B_NIM_ID = 'nvidia/nemotron-3-ultra-550b-a55b'
 
 /** Model NIM đã EOL — cấu hình agent cũ còn trỏ các id này nhận lỗi rõ ràng
@@ -462,7 +471,7 @@ function isSlowNimModel(model: string): boolean {
 /**
  * NVIDIA_MODELS (R25 2026-10-18): = NVIDIA_AGENT_MODELS (4 lõi chat —
  * glm-5.3-flash chính + ds-v4.1-flash + glm-5.3 + nemotron-550b).
- * Extraction tách riêng (NVIDIA_EXTRACTION_MODELS — glm-5.3-flash).
+ * Extraction tách riêng (NVIDIA_EXTRACTION_MODELS — nemotron-550b, R39).
  * Deprecated (404/410): kimi-k3 (2026-10-15), kimi-k2.6, glm-5.1,
  * glm-5.2, minimax-m2.7/m3, qwen3.5-397b, dòng deepseek v4.0, gpt-oss-120b.
  */

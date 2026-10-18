@@ -23,19 +23,20 @@
 // ==================== PROVIDER + MODEL DATA ====================
 
 /** EXTRACTION models — lõi trích xuất (triết tách) tài liệu (callLLMSlot)
- *  (R25 2026-10-18: lõi chính z-ai/glm-5.3-flash — probe 200/~0,7s;
- *   nemotron-3-ultra-550b 503 quá tải liên tục từ 2026-10-17, khôi phục qua
- *   env EXTRACTION_MODEL khi NIM khỏe lại)
+ *  (R39 2026-10-18 — USER CHỐT: lõi chính nvidia/nemotron-3-ultra-550b-a55b
+ *   "trích xuất ổn định" — kéo 868/868 chunk D0 không lỗi; glm-5.3-flash
+ *   chuyển hẳn sang vai trò agent/xử lý tác vụ. Lịch sử: R25 glm chính khi
+ *   nemotron 503; R38 glm hang 196s → nemotron sống lại; R39 chốt default)
  *  Đã bỏ (404/410): llama-3.1-nemotron-ultra-253b-v1, nemotron-4-340b-instruct,
  *  gpt-oss-120b (EOL 2026-09-03)
  */
 export const EXTRACTION_MODELS: Record<string, Array<{ id: string; label: string }>> = {
-  // R25: extraction (triết tách) NIM-FIRST — lõi chính z-ai/glm-5.3-flash
+  // R39: extraction (triết tách) NIM-FIRST — lõi chính nemotron-3-ultra-550b
   // (llm.ts callLLMSlot gọi NIM xoay 4 key; R19 không fallback — document
-  // retry sau). Khôi phục nemotron: env EXTRACTION_MODEL=nvidia/nemotron-3-ultra-550b-a55b.
+  // retry sau). Xoay khẩn cấp sang glm: env EXTRACTION_MODEL=z-ai/glm-5.3-flash.
   nvidia: [
-    { id: 'z-ai/glm-5.3-flash', label: 'glm-5.3-flash (extraction chính — NIM, R25)' },
-    { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (extraction cũ — 503 quá tải, khôi phục bằng env EXTRACTION_MODEL)' },
+    { id: 'nvidia/nemotron-3-ultra-550b-a55b', label: 'nemotron-3-ultra-550b (extraction chính — R39 user chốt lõi ổn định)' },
+    { id: 'z-ai/glm-5.3-flash', label: 'glm-5.3-flash (extraction dự phòng qua env EXTRACTION_MODEL — lõi agent/tác vụ chính)' },
   ],
   zen: [
     { id: 'space-bunny-free', label: 'space-bunny-free (extraction fallback — zen)' },

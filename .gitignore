@@ -312,3 +312,9 @@ scratch/r24*.png
 !/scripts/d2-baseline-report.ts
 !/scripts/seed-daily-backup-cron.ts
 !/scripts/restore-drill.sh
+# NGOẠI LỆ R39: 2 script nghiệm thu hậu D0 — refresh-communities.ts (chạy lại
+# community-detect Leiden toàn đồ thị sau ingest, D0 §5.5/§7.3) + seed-eval-
+# knowledge.ts (27 eval case knowledge-domain bám corpus 9 shard, D0 §7.3).
+# Track để fresh clone tái chạy được phép nghiệm thu (idempotent cả hai).
+!/scripts/refresh-communities.ts
+!/scripts/seed-eval-knowledge.ts
