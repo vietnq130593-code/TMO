@@ -13,7 +13,7 @@ import { checkNeo4jHealth } from '@/lib/neo4j'
 import { checkR2Health } from '@/lib/r2-storage'
 import { checkSupabaseHealth } from '@/lib/supabase-sync'
 import { db } from '@/lib/db'
-import { getProviderDiagnostics, getDailyQuotaStatus, getModelBlockBreakers, getZenStatus } from '@/lib/llm'
+import { getProviderDiagnostics, getDailyQuotaStatus, getModelBlockBreakers, getZenStatus, getNvidiaModels } from '@/lib/llm'
 
 export const dynamic = 'force-dynamic'
 
@@ -39,7 +39,8 @@ function checkLLMHealthSync(): Record<string, { available: boolean; model: strin
   // (2026-09-27 TASK 33) z-ai-sdk provider ĐÃ GỠ BỎ toàn bộ theo user directive
   // ("bỏ luôn cả z-ai" — sdk chỉ tồn tại trong sandbox, không có trên máy local).
 
-  // ━━ OpenCode Zen — LÕI DUY NHẤT cho agents/utility/extraction (Task 33) ━━
+  // ━━ OpenCode Zen — utility cores + model-switch chat + ZEN FAILOVER của agent stack ━━
+  // (R25 2026-10-18: agents chính chuyển sang lõi NIM — Zen giữ utility/failover.)
   const zenStatus = getZenStatus()
   // TASK 34 — model bị cache chặn free-tier (policy Zen ~25-26/09: model free
   // chặn oc_sk API key ở cả HTTP lẫn CLI; các cặp này tự skip → ZEN FAILOVER)
@@ -52,17 +53,23 @@ function checkLLMHealthSync(): Record<string, { available: boolean; model: strin
     active: zenStatus.configured,
     error: !zenStatus.configured ? 'No ZEN_API_KEY configured' : undefined,
     note: zenStatus.configured
-      ? `${zenStatus.keyCount} key(s) · ${zenStatus.availableKeys} available · ${zenStatus.rateLimitedKeys} rate-limited · space-bunny-free (lõi chính — HTTP xoay key) + ling-3.1-flash-free / mimo-v2.6-flash-free / step-5-preview-free / longcat-2.5-preview-free / big-pickle (model free khác — qua CLI native, r72)${blockedNote}`
+      ? `${zenStatus.keyCount} key(s) · ${zenStatus.availableKeys} available · ${zenStatus.rateLimitedKeys} rate-limited · space-bunny-free (lõi utility mặc định + ZEN FAILOVER — R25: agents chính chuyển sang lõi NIM; policy Zen có thể chặn model free qua HTTP oc_sk → đường thoát: CLI native auth account, r72) + ling-3.1-flash-free / mimo-v2.6-flash-free / step-5-preview-free / longcat-2.5-preview-free / big-pickle (model free khác — qua CLI native, r72)${blockedNote}`
       : undefined,
   }
 
-  // ━━ NVIDIA NIM — CHỈ còn lõi EMBED (Task 33) ━━
+  // ━━ NVIDIA NIM (R25 2026-10-18) — embed + extraction + agent/chat cores ━━
+  // Task 33 từng gỡ NIM khỏi agents/utility/extraction; R25 tái giới thiệu NIM
+  // cho extraction (glm-5.3-flash) + agent/chat (4 lõi — glm-5.3-flash chính).
+  // Callers thật đã verified live: MEGATRON run provider=nvidia post-restore.
+  const nvidiaAgentModels = getNvidiaModels()
   result.nvidia = {
     available: hasNvidiaKeys,
-    model: 'nvidia/nemotron-3-embed-1b (embed only)',
+    model: `nvidia/nemotron-3-embed-1b (embed) + ${nvidiaAgentModels[0]} (extraction + agent/chat chính, R25)`,
     active: hasNvidiaKeys,
     error: !hasNvidiaKeys ? 'No NVIDIA API keys configured (embed sẽ không chạy)' : undefined,
-    note: hasNvidiaKeys ? 'CHỈ dùng cho lõi embed (generateEmbedding) — NIM đã gỡ khỏi tác vụ agents/utility/extraction (Task 33)' : undefined,
+    note: hasNvidiaKeys
+      ? `Embed (generateEmbedding) + extraction glm-5.3-flash + agent/chat ${nvidiaAgentModels.join(' / ')} (R25 — glm-5.3-flash chính; model NIM lỗi → báo lỗi rõ ràng R19 không fallback)`
+      : undefined,
   }
 
   return result
