@@ -61,6 +61,8 @@ import {
   type BrainDraftSpec,
 } from '@/lib/brain/spec-schema'
 import type { BrainKey } from '@/lib/brain/registry'
+// OBS-V3 H4 (R34) — proposal.apply khi kiến trúc trở thành ACTIVE
+import { observeEvent } from '@/lib/observation/ledger'
 
 export const dynamic = 'force-dynamic'
 
@@ -106,9 +108,9 @@ async function loadDraftOverride(
 }
 
 export async function POST(request: Request) {
-  let body: { brain?: unknown; inputMode?: unknown; useDraft?: unknown; force?: unknown } = {}
+  let body: { brain?: unknown; inputMode?: unknown; useDraft?: unknown; force?: unknown; origin?: unknown } = {}
   try {
-    body = (await request.json()) as { brain?: unknown; inputMode?: unknown; useDraft?: unknown; force?: unknown }
+    body = (await request.json()) as { brain?: unknown; inputMode?: unknown; useDraft?: unknown; force?: unknown; origin?: unknown }
   } catch {
     return NextResponse.json({ error: 'Body phải là JSON { brain }' }, { status: 400 })
   }
@@ -123,6 +125,11 @@ export async function POST(request: Request) {
       { status: 400 },
     )
   }
+
+  // OBS-V3 H4 (BLUEPRINT-OBSERVATION-V3 §C.1 — R34): origin tùy chọn từ client
+  // (whitelist 'evo-deploy' — deployEvoArchitecture truyền qua saveDraft/train)
+  // — chỉ để GHI NHÃN nguồn vào sự kiện proposal.apply, không đổi hành vi.
+  const origin = body.origin === 'evo-deploy' ? ('evo-deploy' as const) : undefined
 
   // R7 — force: hiệu chỉnh chủ đích (user/agents qua tab BRAIN) áp dụng THẬT
   const force = body.force === true
@@ -156,6 +163,49 @@ export async function POST(request: Request) {
   }
   const override = draftLoad.override
 
+  /**
+   * OBS-V3 H4 (R34) — phát `proposal.apply` khi một kiến trúc/spec TRỞ THÀNH
+   * ACTIVE qua đường route này (R7: mọi lệnh train từ tab BRAIN là áp dụng chủ
+   * đích; đường auto-retrain trong lib không qua route — không lặp). Kind khai
+   * báo từ OBS-P1 nhưng chưa từng có call-site; từ giờ lúc QUAN TRỌNG NHẤT
+   * (kiến trúc mới vận hành thật) timeline có dấu vết — neo cho impact tracker
+   * P7 (anchor 'evo-deploy' khi origin=evo-deploy). Fail-open tuyệt đối.
+   */
+  const emitProposalApply = (
+    result: { version: number | null; active: boolean; improved: boolean; forced?: boolean },
+    ctx: { inputMode: string; score?: string },
+  ): void => {
+    try {
+      if (!result.active) return
+      const archSummary = override?.hidden?.length
+        ? override.hidden.map(h => `${h.units}·${h.activation}`).join(' → ')
+        : null
+      observeEvent({
+        actor: 'user',
+        kind: 'proposal.apply',
+        table: 'BrainModel',
+        rowKey: `${brain}#v${result.version ?? '?'}`,
+        summary:
+          `ÁP DỤNG kiến trúc ${brain} v${result.version} ACTIVE` +
+          `${result.improved ? ' (thắng CV)' : ' (theo chỉ định — CV chưa thắng)'}` +
+          `${archSummary ? ` · ${archSummary}` : ''}` +
+          `${origin ? ' · nguồn EVO' : ''}`,
+        payload: {
+          brain,
+          version: result.version,
+          active: true,
+          improved: result.improved,
+          forced: result.forced === true,
+          inputMode: ctx.inputMode,
+          useDraft: body.useDraft === true,
+          origin: origin ?? 'editor',
+          archSummary,
+          ...(ctx.score ? { score: ctx.score } : {}),
+        },
+      })
+    } catch { /* fail-open — quan sát không được làm hỏng train */ }
+  }
+
   try {
     if (brain === 'calibration_v3') {
       // ── Brain-A "V3" (BRAIN-P2) — CV so V2 đối chứng ──
@@ -173,6 +223,10 @@ export async function POST(request: Request) {
         )
       }
       const flagOn = result.active ? await ensureFlagOn() : false
+      emitProposalApply(result, {
+        inputMode,
+        score: result.cvBrier != null ? `cvBrier ${result.cvBrier.toFixed(4)} vs V2 ${result.brierV2?.toFixed(4) ?? '—'}` : undefined,
+      })
       return NextResponse.json({
         trained: true,
         brain,
@@ -213,6 +267,10 @@ export async function POST(request: Request) {
         )
       }
       const flagOn = result.active ? await ensureFlagOn() : false
+      emitProposalApply(result, {
+        inputMode,
+        score: result.cv ? `CE mixture ${result.cv.cvCeMixture?.toFixed(4) ?? '—'} vs π_Q ${result.cv.ceBaseline?.toFixed(4) ?? '—'}` : undefined,
+      })
       return NextResponse.json({
         trained: true,
         brain,
@@ -258,6 +316,10 @@ export async function POST(request: Request) {
       )
     }
     const flagOn = result.active ? await ensureFlagOn() : false
+    emitProposalApply(result, {
+      inputMode,
+      score: result.heads?.success ? `Brier ${result.heads.success.cvBrier?.toFixed(4) ?? '—'} vs base ${result.heads.success.brierBaseline?.toFixed(4) ?? '—'}` : undefined,
+    })
     return NextResponse.json({
       trained: true,
       brain,

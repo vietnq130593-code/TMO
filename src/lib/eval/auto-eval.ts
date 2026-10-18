@@ -111,6 +111,26 @@ export async function maybeRunAutoKbEval(): Promise<
     })
     if (selected.length === 0) return 'no-cases'
     const run = await db.evalRun.create({ data: { status: 'running', caseCount: selected.length } })
+    // OBS-V3 H1 (R34): start sự kiện eval.run cho đợt auto (mirror route
+    // POST /api/eval/run — cùng shape payload, origin 'auto' phân biệt).
+    try {
+      const { observeEvent } = await import('@/lib/observation/ledger')
+      observeEvent({
+        actor: 'system:eval',
+        kind: 'eval.run',
+        table: 'EvalRun',
+        rowKey: run.id,
+        summary: `Eval auto bắt đầu (xưởng nhãn Brain-A) — ${selected.length} case`,
+        payload: {
+          phase: 'start',
+          runId: run.id,
+          nCases: selected.length,
+          caseLimit: AUTO_EVAL_CASE_LIMIT,
+          categories: null,
+          origin: 'auto',
+        },
+      })
+    } catch { /* fail-open */ }
     st.running = true
     console.log(
       `[AutoEval] Xưởng nhãn Brain-A: bắn đợt eval tự động ${selected.length} case (run ${run.id}) — EvalResult ${totalResults}/${AUTO_EVAL_TARGET}, lần gần nhất ${latestRun ? new Date(latestRun.startedAt).toISOString() : 'chưa có'}`,

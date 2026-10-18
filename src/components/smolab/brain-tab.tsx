@@ -460,13 +460,13 @@ export function BrainTabContent() {
   // bạch) + server tự bật cờ runtime tương ứng → model VẬN HÀNH thật trong
   // chuỗi runtime. Định nghĩa TRƯỚC saveDraft vì saveDraft gọi nó (auto-apply).
   const [trainingBrains, setTrainingBrains] = useState<Set<string>>(new Set())
-  const trainBrain = useCallback(async (key: BrainKey, useDraft: boolean, force = true) => {
+  const trainBrain = useCallback(async (key: BrainKey, useDraft: boolean, force = true, origin?: 'evo-deploy') => {
     setTrainingBrains(prev => new Set(prev).add(key))
     try {
       const res = await fetch('/api/brain/train', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brain: key, useDraft: useDraft || undefined, force: force || undefined }),
+        body: JSON.stringify({ brain: key, useDraft: useDraft || undefined, force: force || undefined, ...(origin ? { origin } : {}) }),
       })
       const json = (await res.json().catch(() => ({}))) as {
         error?: string; version?: number; active?: boolean; improved?: boolean; sampleSize?: number
@@ -538,7 +538,7 @@ export function BrainTabContent() {
   /// trúc/hyper mới trở thành bản ACTIVE vận hành thật (kèm bật cờ runtime,
   /// server lo). Nếu thiếu dữ liệu train → toast nói rõ cần thêm mẫu (đó là
   /// giới hạn DỮ LIỆU, không phải chế độ nháp nữa).
-  const saveDraft = useCallback(async (key: BrainKey, specOverride?: BrainDraftSpec) => {
+  const saveDraft = useCallback(async (key: BrainKey, specOverride?: BrainDraftSpec, origin?: 'evo-deploy') => {
     const spec = specOverride ?? draftsByBrain[key] ?? defaultDraftFor(key)
     const inputDim = brainData?.brains.find(b => b.key === key)?.inputDim ?? null
     const v = validateBrainDraft({ ...spec, brain: key }, inputDim)
@@ -578,7 +578,7 @@ export function BrainTabContent() {
       toast.info('Đã lưu cấu hình — đang huấn luyện & áp dụng ngay…', {
         description: 'Hiệu chỉnh sẽ lên runtime THẬT (bản active + cờ bật) ngay khi train xong.',
       })
-      await trainBrain(key, true, true)
+      await trainBrain(key, true, true, origin)
     } catch (err) {
       setSaveErrors([err instanceof Error ? err.message : String(err)])
     } finally {
@@ -655,7 +655,9 @@ export function BrainTabContent() {
     toast.info('Triển khai kiến trúc tiến hoá…', {
       description: 'Lưu nháp → huấn luyện → áp dụng active — Đài quan sát não (phần 2) hiển thị kiến trúc mới.',
     })
-    void saveDraft(selectedBrainKey, v.normalized) // PUT + auto-train force (R7)
+    // OBS-V3 H4 (R34): origin 'evo-deploy' — server gắn nhãn nguồn EVO vào sự
+    // kiện proposal.apply (timeline + neo impact tracker P7)
+    void saveDraft(selectedBrainKey, v.normalized, 'evo-deploy') // PUT + auto-train force (R7)
   }, [selectedBrainKey, draftsByBrain, dirtyBrains, brainData, onDraftChange, saveDraft])
 
   // ==================== TUNING ACTIONS (copy panel cũ) ====================

@@ -155,6 +155,46 @@ export type EvoSessionEndPayload = {
   note?: string
 }
 
+// ==================== SESSION SWEPT (OBS-V3 H4b — R34) ====================
+
+/**
+ * Sweep mồ côi trên GET (evolve.ts — heartbeat stale > 60s đánh failed).
+ * Trước R34 sweep im lặng: DB đổi status nhưng timeline KHÔNG có sự kiện
+ * end → trợ lý vận hành không thấy "worker chết (restart?)". Payload tự
+ * khai swept:true phân biệt với end thường của vòng chạy.
+ */
+export type EvoSessionSweptPayload = {
+  phase: 'end'
+  swept: true
+  brain: string
+  runId: string
+  status: 'failed'
+  staleMinutes: number
+  reason: string
+}
+
+export function buildEvoSessionSwept(input: {
+  brain: string
+  runId: string
+  staleMs: number
+}): EvoObsEvent<EvoSessionSweptPayload> {
+  const staleMinutes = Math.max(1, Math.round(input.staleMs / 60_000))
+  return {
+    summary:
+      `Tiến hoá ${input.brain} session ${input.runId.slice(0, 8)} bị SWEEP đóng sổ` +
+      ` — heartbeat stale ${staleMinutes} phút (worker chết/restart?) → đánh dấu failed`,
+    payload: {
+      phase: 'end',
+      swept: true,
+      brain: input.brain,
+      runId: input.runId,
+      status: 'failed',
+      staleMinutes,
+      reason: 'sweep heartbeat stale > 60s (HN §4.2-2b) — GET state phát hiện session mồ côi',
+    },
+  }
+}
+
 export function buildEvoSessionEnd(input: {
   brain: string
   runId: string

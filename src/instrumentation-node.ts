@@ -1013,6 +1013,28 @@ function sweepEscalationImprovements(): void {
           source: 'scan',
           createdBy: 'episodic-escalation-sweep',
         })
+        // OBS-V3 H5 (BLUEPRINT-OBSERVATION-V3 §C.1 — R34): pattern lỗi lặp ≥3
+        // lần đã leo lên thành SelfDirectionProposal — vào timeline quan sát
+        // (trước giờ chỉ thấy qua UI duyệt đề xuất). Fail-open tuyệt đối.
+        try {
+          const { observeEvent } = await import('./lib/observation/ledger')
+          observeEvent({
+            actor: 'system:episodic',
+            kind: 'learn.escalate',
+            table: 'SelfDirectionProposal',
+            summary:
+              `Escalate bài học — root cause "${cand.rootCause.slice(0, 120)}" lặp ${cand.occurrences} lần` +
+              ` (chưa resolve ${unresolved}) → đề xuất cải tiến ${unresolved >= 10 ? 'ưu tiên cao' : 'ưu tiên trung'}`,
+            payload: {
+              rootCause: cand.rootCause.slice(0, 200),
+              occurrences: cand.occurrences,
+              resolved: cand.resolved,
+              unresolved,
+              priority: unresolved >= 10 ? 'high' : 'medium',
+              recentErrors: cand.recentErrors.slice(0, 3),
+            },
+          })
+        } catch { /* fail-open — quan sát không được làm hỏng sweep */ }
         existingTitles.push(`[escalation] root cause "${cand.rootCause.replace(/"/g, "'")}" lặp ${cand.occurrences} lần`.toLowerCase())
         created++
       }

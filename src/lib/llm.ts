@@ -2781,7 +2781,50 @@ export function startModelHealthProber(): void {
   console.log(`[LLM-Prober] khởi động: probe ${probeTargets().length} lõi mỗi ${Math.round(PROBE_INTERVAL_MS / 60000)} phút (timeout ${Math.round(PROBE_TIMEOUT_MS / 1000)}s/lõi, bắt đầu sau ${Math.round(PROBER_BOOT_DELAY_MS / 1000)}s)`)
 }
 
-async function callModelWithKeyRotation(
+/**
+ * OBS-V3 H7 (BLUEPRINT-OBSERVATION-V3 §C.1 — R34) — phát sự kiện
+ * `model.failover` vào ledger quan sát khi nguồn LLM fail (toàn chuỗi xoay
+ * key NIM hoặc Zen HTTP+CLI) — throttle 10'/lỗi qua observeEventThrottled
+ * (model chết + caller retry liên tục không spam timeline). Tiền lệ vận
+ * hành: Zen 403 FreeTierError (R32) phát hiện THỦ CÔNG bằng probe — từ giờ
+ * mọi fail cấp nguồn thành sự kiện. Fire-and-forget fail-open tuyệt đối.
+ */
+function emitModelFailoverObs(input: {
+  provider: string
+  model: string
+  taskLabel: string
+  path: string
+  error: string
+}): void {
+  try {
+    void import('@/lib/observation/ledger')
+      .then(m => {
+        const errTag = String(input.error).slice(0, 120).replace(/\s+/g, ' ')
+        m.observeEventThrottled(
+          `model.failover:${input.provider}:${input.model}:${errTag}`,
+          {
+            actor: `system:${input.provider}`,
+            kind: 'model.failover',
+            summary:
+              `${input.provider} ${input.model} (${input.taskLabel}) FAIL ${input.path}` +
+              ` — ${errTag.slice(0, 140)}`,
+            payload: {
+              provider: input.provider,
+              model: input.model,
+              taskLabel: input.taskLabel,
+              path: input.path,
+              error: String(input.error).slice(0, 300),
+            },
+          },
+        )
+      })
+      .catch(() => { /* fail-open — quan sát không được chặn đường LLM */ })
+  } catch {
+    /* fail-open — không bao giờ throw trên đường provider */
+  }
+}
+
+async function callModelWithKeyRotationInner(
   model: string,
   prompt: string,
   systemPrompt: string | undefined,
@@ -3007,6 +3050,32 @@ async function callModelWithKeyRotation(
 
   console.warn(`[LLM] 🔄 ${model}: hết chuỗi xoay vòng (${attemptNo} attempts, R19 1 lượt/key) — mọi key đều fail (${lastFailDetail})`)
   return { content: '', provider: 'nvidia', model, error: `hết chuỗi xoay key sau ${attemptNo} attempts — lỗi gần nhất: ${lastFailDetail}` }
+}
+
+/**
+ * OBS-V3 H7 (R34) — wrapper quan sát quanh chuỗi xoay key NIM: toàn chuỗi
+ * fail (result.error) → phát model.failover (throttle 10'/lỗi). null = abort
+ * NGƯỜI DÙNG bấm Dừng — KHÔNG phải fail, không phát. Logic gốc nguyên vẹn
+ * trong Inner (rename thuần — 0 thay đổi hành vi).
+ */
+async function callModelWithKeyRotation(
+  model: string,
+  prompt: string,
+  systemPrompt: string | undefined,
+  options?: LLMCallOptions,
+  rotationOpts?: { startKeyIndex?: number; timeoutMs?: number; maxTokens?: number; temperature?: number; taskLabel?: string },
+): Promise<LLMResult | null> {
+  const result = await callModelWithKeyRotationInner(model, prompt, systemPrompt, options, rotationOpts)
+  if (result && result.error) {
+    emitModelFailoverObs({
+      provider: 'nvidia',
+      model,
+      taskLabel: rotationOpts?.taskLabel || 'rotation',
+      path: 'nim-rotation',
+      error: result.error,
+    })
+  }
+  return result
 }
 
 /** Counter xoay vòng start key cho agent/chat calls — phân tải đều các key */
@@ -3789,6 +3858,15 @@ export async function callUtilityLLM(
     // cả HTTP + CLI → trả lỗi NGAY (bỏ ZEN FAILOVER + NIM RESCUE cũ) — caller
     // fail-open như thiết kế, KHÔNG âm thầm đổi model.
     console.warn(`[LLM] Utility-core "${taskLabel}": model ${utilModel} thất bại (HTTP + CLI — không fallback R19) — caller sẽ fail-open: ${String(zen?.error || cliResult?.error || 'unknown').slice(0, 150)}`)
+    // OBS-V3 H7 (R34) — nguồn LLM utility chết (tiền lệ: Zen 403 FreeTierError
+    // làm utility cores fail-open âm thầm R32) → thành sự kiện model.failover
+    emitModelFailoverObs({
+      provider: 'zen',
+      model: utilModel,
+      taskLabel: `utility-core:${taskLabel}`,
+      path: 'zen-http+cli',
+      error: String(zen?.error || cliResult?.error || 'unknown'),
+    })
     return {
       content: '',
       provider: 'zen',

@@ -130,6 +130,44 @@ export function kpiDateOf(t: Date): string {
   return t.toISOString().slice(0, 10)
 }
 
+/** Kết quả tra cửa sổ snapshot quanh 1 mốc đổi (P7 dùng chung với pass 1). */
+export interface DailyImpactWindow {
+  before: KpiSnapshotLite
+  after: KpiSnapshotLite
+}
+
+/**
+ * PURE (OBS-P7 — R34 tách từ pass 1 để 2 neo dùng chung): tìm snapshot NGÀY
+ * LIỀN TRƯỚC vs NGÀY LIỀN SAU mốc changedAt trong cửa sổ ±LOOK ngày mỗi bên
+ * (Q5 §7 chốt — FB-OBS-R1-01/R1-02: cùng ngày đổi bị bỏ, ngoài cửa sổ bị bỏ).
+ * arr PHẢI sorted asc theo date. Không đủ 2 bên trong cửa sổ → null.
+ */
+export function findDailyImpactWindow(
+  arr: KpiSnapshotLite[],
+  changedAt: Date,
+): DailyImpactWindow | null {
+  const changeDay = kpiDateOf(changedAt)
+  const minDay = kpiDateOf(new Date(changedAt.getTime() - OBS_IMPACT_LOOK_DAYS * 24 * 3600_000))
+  const maxDay = kpiDateOf(new Date(changedAt.getTime() + OBS_IMPACT_LOOK_DAYS * 24 * 3600_000))
+  let before: KpiSnapshotLite | null = null
+  let after: KpiSnapshotLite | null = null
+  for (const s of arr) {
+    if (s.date < changeDay) {
+      // ngày liền TRƯỚC (gần nhất < changeDay) — chỉ nhận trong [minDay, changeDay)
+      if (s.date >= minDay) before = s
+    } else if (s.date === changeDay) {
+      continue // FB-OBS-R1-02: cùng ngày đổi = dữ liệu trộn trước/sau — bỏ, tìm ngày KẾ
+    } else {
+      // snapshot đầu tiên > changeDay quyết định — trong maxDay mới nhận
+      if (s.date <= maxDay) after = s
+      break // sau đó chỉ xa hơn — dừng (arr sorted asc)
+    }
+    if (before && after) break
+  }
+  if (!before || !after) return null
+  return { before, after }
+}
+
 /**
  * Chấm impact cho các TuningChangeLog đủ tuổi + chưa chấm. Trả số sự kiện
  * đã ghi. Dedup: mọi impact.estimate hiện có (payloadJson chứa changeLogId)
@@ -180,29 +218,11 @@ export async function computeImpactEstimates(): Promise<number> {
   for (const change of pending) {
     const kpis: KpiImpactEstimate[] = []
     for (const [kpiKey, arr] of byKpi) {
-      const changeDay = kpiDateOf(change.createdAt)
-      // FB-OBS-R1-01: cửa sổ ±LOOK ngày mỗi bên (Q5 §7 chốt — trước đây
-      // OBS_IMPACT_LOOK_DAYS khai báo nhưng dead, snapshot cách 10 ngày vẫn chấm)
-      const minDay = kpiDateOf(new Date(change.createdAt.getTime() - OBS_IMPACT_LOOK_DAYS * 24 * 3600_000))
-      const maxDay = kpiDateOf(new Date(change.createdAt.getTime() + OBS_IMPACT_LOOK_DAYS * 24 * 3600_000))
-      let before: KpiSnapshotLite | null = null
-      let after: KpiSnapshotLite | null = null
-      for (const s of arr) {
-        if (s.date < changeDay) {
-          // ngày liền TRƯỚC (gần nhất < changeDay) — chỉ nhận trong [minDay, changeDay)
-          if (s.date >= minDay) before = s
-        } else if (s.date === changeDay) {
-          continue // FB-OBS-R1-02: cùng ngày đổi = dữ liệu trộn trước/sau — bỏ, tìm ngày KẾ (trước đây chặn cả KPI)
-        } else {
-          // snapshot đầu tiên > changeDay quyết định — trong maxDay mới nhận
-          if (s.date <= maxDay) after = s
-          break // sau đó chỉ xa hơn — dừng (arr sorted asc)
-        }
-        if (before && after) break
-      }
-      // cần đủ 2 bên TRONG cửa sổ ±LOOK ngày (Q5 §7 chốt)
-      if (!before || !after) continue
-      kpis.push(estimateKpiImpact(kpiKey, before, after, directionByKey.get(kpiKey)))
+      // OBS-P7 (R34): tách findDailyImpactWindow dùng chung 2 neo (hành vi
+      // nguyên vẹn FB-OBS-R1-01/R1-02 — r98 C1-C6 pin qua DB)
+      const w = findDailyImpactWindow(arr, change.createdAt)
+      if (!w) continue
+      kpis.push(estimateKpiImpact(kpiKey, w.before, w.after, directionByKey.get(kpiKey)))
     }
     // Chỉ ghi khi có ít nhất 1 KPI đo được 2 bên
     if (kpis.length === 0) continue
@@ -222,6 +242,100 @@ export async function computeImpactEstimates(): Promise<number> {
           granularity: 'daily-snapshot',
           lookDays: OBS_IMPACT_LOOK_DAYS,
           note: 'so sánh KPI snapshot ngày liền trước vs liền sau change (tra ±3 ngày mỗi bên) — correlation window, KHÔNG phải nhân quả (nhiều thứ đổi song song)',
+        },
+        kpis,
+      },
+    })
+    written++
+  }
+  if (written > 0) await flushObservationQueue()
+  return written
+}
+
+// ==================== IMPACT PASS 2 — NEO EVO-DEPLOY (OBS-P7 — R34) ====================
+
+/**
+ * Chấm impact cho các sự kiện `proposal.apply` (kiến trúc trở thành ACTIVE —
+ * OBS-P5 H4 phát) đủ tuổi ≥ 24h mà chưa chấm. Cùng cơ chế Q5 §7 như neo 1
+ * (TuningChangeLog): snapshot ngày liền trước vs liền sau (±3 ngày mỗi bên,
+ * cần đủ 2 bên). Framing trung thực RO-6: correlation — KHÔNG claim nhân quả.
+ * Dedup theo `evoDeploySeq` (seq sự kiện proposal.apply) trong payload
+ * impact.estimate đã có. Trả số sự kiện đã ghi.
+ */
+export async function computeProposalApplyImpactEstimates(): Promise<number> {
+  // FB-OBS-R1-11 precedent: obs_ledger off → không quét (dedup không nhúng
+  // được → rescan mãi mỗi tick vô ích)
+  if (!isObsLedgerEnabled()) return 0
+  const cutoff = new Date(Date.now() - OBS_IMPACT_MIN_AGE_MS)
+  const proposals = await db.observationEvent.findMany({
+    where: { kind: 'proposal.apply', ts: { lte: cutoff } },
+    orderBy: { ts: 'asc' },
+    take: 200,
+    select: { seq: true, ts: true, payloadJson: true },
+  })
+  if (proposals.length === 0) return 0
+
+  // Dedup — evoDeploySeq đã chấm
+  const done = new Set<number>()
+  const existing = await db.observationEvent.findMany({
+    where: { kind: 'impact.estimate' },
+    select: { payloadJson: true },
+  })
+  for (const row of existing) {
+    try {
+      const p = JSON.parse(row.payloadJson) as { evoDeploySeq?: number }
+      if (typeof p.evoDeploySeq === 'number') done.add(p.evoDeploySeq)
+    } catch { /* payload rác — bỏ qua */ }
+  }
+  const pending = proposals.filter(p => !done.has(p.seq)).slice(0, OBS_IMPACT_BATCH)
+  if (pending.length === 0) return 0
+
+  // Load TOÀN BỘ KpiSnapshot 1 lần (nhỏ — 1 dòng/ngày/KPI)
+  const snapshots = await db.kpiSnapshot.findMany({
+    orderBy: { date: 'asc' },
+    select: { date: true, kpi: true, value: true, sampleSize: true },
+  })
+  const byKpi = new Map<string, KpiSnapshotLite[]>()
+  for (const s of snapshots) {
+    const arr = byKpi.get(s.kpi) ?? []
+    arr.push({ date: s.date, value: s.value, sampleSize: s.sampleSize })
+    byKpi.set(s.kpi, arr)
+  }
+  const directionByKey = new Map(KPI_REGISTRY.map(k => [k.key, k.goal] as const))
+
+  let written = 0
+  for (const prop of pending) {
+    let meta: { brain?: string; version?: number; archSummary?: string | null; origin?: string; improved?: boolean } = {}
+    try {
+      meta = JSON.parse(prop.payloadJson) as typeof meta
+    } catch { /* payload rác — vẫn chấm với meta rỗng (seq là khóa) */ }
+    const kpis: KpiImpactEstimate[] = []
+    for (const [kpiKey, arr] of byKpi) {
+      const w = findDailyImpactWindow(arr, prop.ts)
+      if (!w) continue
+      kpis.push(estimateKpiImpact(kpiKey, w.before, w.after, directionByKey.get(kpiKey)))
+    }
+    if (kpis.length === 0) continue
+    const top = kpis.slice(0, 3).map(k => `${k.kpi} ${formatImpactDelta(k.delta)}`).join(' · ')
+    observeEvent({
+      actor: 'system',
+      kind: 'impact.estimate',
+      summary:
+        `Tác động triển khai kiến trúc ${meta.brain ?? '?'} v${meta.version ?? '?'}${meta.origin === 'evo-deploy' ? ' (EVO)' : ''}: ${top}` +
+        ' — correlation, không claim nhân quả',
+      payload: {
+        anchor: 'evo-deploy',
+        evoDeploySeq: prop.seq,
+        brain: meta.brain ?? null,
+        version: meta.version ?? null,
+        archSummary: meta.archSummary ?? null,
+        origin: meta.origin ?? null,
+        improved: meta.improved ?? null,
+        changedAt: prop.ts.toISOString(),
+        window: {
+          granularity: 'daily-snapshot',
+          lookDays: OBS_IMPACT_LOOK_DAYS,
+          note: 'so sánh KPI snapshot ngày liền trước vs liền sau deploy (tra ±3 ngày mỗi bên) — correlation window, KHÔNG phải nhân quả (nhiều thứ đổi song song)',
         },
         kpis,
       },
@@ -302,6 +416,9 @@ async function tick(): Promise<void> {
     // không quét dedup/KPI vô ích + không đếm giả)
     if (isObsLedgerEnabled()) {
       await computeImpactEstimates()
+      // OBS-P7 (R34) — neo impact thứ 2: triển khai kiến trúc (proposal.apply
+      // → ACTIVE) — cùng cơ chế Q5 §7, anchor 'evo-deploy' trong payload.
+      await computeProposalApplyImpactEstimates()
       // GAP-1 (Task 26-BE): ensure KpiSnapshot hôm nay (làm mới 2h) + hôm qua
       // (final 1 lần nếu thiếu) — dynamic import vì kpi-snapshots import
       // kpiDateOf từ impact này (chống chu trình tĩnh — tiền lệ ledger note)

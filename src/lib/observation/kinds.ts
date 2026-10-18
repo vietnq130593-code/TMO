@@ -38,18 +38,36 @@ export const OBS_KINDS: readonly ObsKindDef[] = [
   // Task 33 (§0b lượt 2): nhịp sống run trong pha EXECUTE (tool calls) —
   // paced 2 phút/run từ recordAgentRunTool; nuôi rule stall D1.1 khỏi mù.
   { kind: 'run.heart', group: 'run', label: 'Run nhịp sống' },
+  // OBS-V3 H8 (BLUEPRINT-OBSERVATION-V3 §C.1 — R34): chat fast-path ĐÃ phát
+  // thật từ openclaw/chat/route.ts (R26) nhưng chưa đăng ký — chip rơi nhóm
+  // 'db' trung tính. Đăng ký về nhóm 'run' đúng bản chất (vòng đời phản hồi).
+  { kind: 'chat.fastpath', group: 'run', label: 'Chat fast-path' },
   { kind: 'db.write', group: 'db', label: 'Ghi DB' },
   { kind: 'qentry.add', group: 'db', label: 'QEntry' },
   { kind: 'verdict.add', group: 'db', label: 'Phán quyết' },
   { kind: 'learn.episode', group: 'db', label: 'Học episode/lesson' },
+  // OBS-V3 H2 (R34): lượt KB consult (KbConsultLog D1) — Brain-D + confidence
+  // calibrate của Brain-A trên đường KB; queryHash thay nội dung (RO-V3-2).
+  { kind: 'kb.consult', group: 'db', label: 'KB consult' },
+  // OBS-V3 H5 (R34): sweep escalation tạo SelfDirectionProposal từ pattern
+  // lỗi lặp ≥3 (instrumentation-node.ts) — trước giờ chỉ thấy qua UI duyệt.
+  { kind: 'learn.escalate', group: 'db', label: 'Escalate bài học' },
   { kind: 'brain.train', group: 'brain', label: 'Brain train' },
   { kind: 'brain.infer-ref', group: 'brain', label: 'Não suy diễn' },
+  // OBS-V3 H1 (BLUEPRINT-OBSERVATION-V3 §C.1 — R34): vòng đời EvalRun —
+  // sinh nhãn huấn luyện cho Brain-A/D; refusal-rate 100% (R33: 36/36) là
+  // tín hiệu chẩn đoán "não không thể thức tỉnh" quan trọng nhất.
+  { kind: 'eval.run', group: 'brain', label: 'Eval run' },
   { kind: 'tuning.change', group: 'tuning', label: 'Đổi tham số' },
   { kind: 'flag.flip', group: 'tuning', label: 'Bật/tắt cờ' },
   // R5 (2026-10-14): đồng bộ danh sách model free opencode/zen — mọi lần sync
   // (thêm/bớt/không đổi/thất bại) vào Đài quan sát để thay đổi catalog KHÔNG
   // thể âm thầm (bài học R4: giao thức quan sát phải THẤY cả nguồn cung cấp).
   { kind: 'model.sync', group: 'tuning', label: 'Đồng bộ model free' },
+  // OBS-V3 H7 (R34): provider/model fail (toàn chuỗi xoay key NIM hoặc Zen
+  // HTTP+CLI) — tiền lệ Zen 403 FreeTierError phát hiện THỦ CÔNG ở R32; từ
+  // giờ mọi fail cấp nguồn LLM thành sự kiện (throttle 10'/lỗi).
+  { kind: 'model.failover', group: 'tuning', label: 'Failover provider' },
   { kind: 'reward.log', group: 'reward', label: 'Reward (log-only)' },
   // search.* — reserved HyperNAS §9 (chưa có call-site — HN-P2 xếp hàng kế tiếp)
   { kind: 'search.session', group: 'search', label: 'Search session' },
@@ -61,6 +79,9 @@ export const OBS_KINDS: readonly ObsKindDef[] = [
   // D1.1/D1.4 + HyperNAS §4.2-2b) — phát bởi alerts.ts; badge đếm qua field
   // alerts24h của /api/observation/timeline
   { kind: 'obs.alert', group: 'alert', label: 'Cảnh báo quan sát' },
+  // OBS-V3 H6 (R34): Layer 9 chỉ thị TẠM DỪNG mở rộng phạm vi (lỗi lặp ≥3 cách
+  // trong session) — trước giờ chỉ SSE omega_escalation, mất theo reload.
+  { kind: 'adapt.escalate', group: 'alert', label: 'Thích ứng dừng mở rộng' },
 ]
 
 const KIND_BY_NAME = new Map<string, ObsKindDef>(OBS_KINDS.map(k => [k.kind, k]))

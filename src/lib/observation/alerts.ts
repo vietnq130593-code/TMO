@@ -816,6 +816,289 @@ async function checkChatTraceLoss(now: number): Promise<void> {
  * đối: KHÔNG throw, KHÔNG log spam (tối đa 1 dòng console.error mỗi rule khi
  * rule đó lỗi).
  */
+// ============================================================================
+// OBS-P6 (BLUEPRINT-OBSERVATION-V3 §C.2 — R34) — ALERT THẾ HỆ 2
+// 5 rule cho failure mode của kiến trúc 4 não + NAS/EVO + eval + provider.
+// Cùng pattern rule thế hệ 1: fail-open + dedupe 2 lớp (rule, targetId)/1h +
+// phần quyết định tách PURE để test pin biên (r122).
+// ============================================================================
+
+/** EVO worker kẹt/chết khi heartbeat stale > 5 phút (candidate train thật
+ * < 60s — Q2 per-candidate budget; job-stale thế hệ 1 giữ backstop 30 phút). */
+export const ALERT_EVO_STUCK_AFTER_MS = 5 * 60_000
+/** train-gate-repeat: ≥ 3 lần train blocked / não / 24h. */
+export const ALERT_TRAIN_GATE_LIMIT = 3
+export const ALERT_TRAIN_GATE_WINDOW_MS = 24 * 3600_000
+/** provider-degraded: cùng (provider, model) fail ≥ 3 lần / 1h. */
+export const ALERT_PROVIDER_DEGRADED_LIMIT = 3
+export const ALERT_PROVIDER_DEGRADED_WINDOW_MS = 60 * 60_000
+/** evo-budget-burn: nAbandoned ≥ 3 VÀ > 50% candidatesMax. */
+export const ALERT_EVO_BURN_MIN_ABANDONED = 3
+export const ALERT_EVO_BURN_RATIO = 0.5
+
+// ---------- PURE (test r122 pin biên — strict như thế hệ 1) ----------
+
+/** EVO stuck khi heartbeat cũ HƠN 5 phút (strict: đúng 5 phút chưa là stuck). */
+export function shouldAlertEvoStuck(heartbeatAtMs: number, now: number): boolean {
+  return now - heartbeatAtMs > ALERT_EVO_STUCK_AFTER_MS
+}
+
+export interface EvalRunLite { caseCount: number; refusalCount: number }
+
+/**
+ * Eval starvation khi 2 run completed GẦN NHẤT (mới nhất đầu) ĐỀU 100%
+ * refusal (refusalCount ≥ caseCount > 0) — não không thể thức tỉnh vì không
+ * bao giờ có nhãn positive (tiền lệ R33: 36/36 refusal → train gate class
+ * imbalance Positive=0/44).
+ */
+export function shouldAlertEvalStarvation(recentCompleted: EvalRunLite[]): boolean {
+  if (recentCompleted.length < 2) return false
+  const [a, b] = recentCompleted
+  return a.caseCount > 0 && b.caseCount > 0
+    && a.refusalCount >= a.caseCount
+    && b.refusalCount >= b.caseCount
+}
+
+/** Train-gate-repeat khi số lần train blocked (trained=false) ≥ 3 (strict). */
+export function shouldAlertTrainGateRepeat(blockedCount: number): boolean {
+  return blockedCount >= ALERT_TRAIN_GATE_LIMIT
+}
+
+/** Provider-degraded khi cùng (provider, model) fail ≥ 3 lần trong 1h. */
+export function shouldAlertProviderDegraded(failCount: number): boolean {
+  return failCount >= ALERT_PROVIDER_DEGRADED_LIMIT
+}
+
+/** Evo-budget-burn khi nAbandoned ≥ 3 VÀ tỉ lệ bỏ > 50% (strict >, không ≥). */
+export function shouldAlertEvoBudgetBurn(nAbandoned: number, candidatesMax: number): boolean {
+  return candidatesMax > 0
+    && nAbandoned >= ALERT_EVO_BURN_MIN_ABANDONED
+    && (nAbandoned / candidatesMax) > ALERT_EVO_BURN_RATIO
+}
+
+// ---------- RULE ENGINE (query + emit; mọi DB op try/catch) ----------
+
+/** Rule 8 — EVO-STUCK: BrainSearchRun running mà heartbeat stale > 5 phút
+ * (không cần ai mở tab Tiến hoá — GET sweep 60s chỉ chạy khi có người nhìn). */
+async function checkEvoStuck(now: number): Promise<void> {
+  try {
+    const stuck = await db.brainSearchRun.findMany({
+      where: { status: 'running', heartbeatAt: { lt: new Date(now - ALERT_EVO_STUCK_AFTER_MS) } },
+      select: { id: true, brain: true, heartbeatAt: true, startedAt: true, candidatesMax: true },
+      take: SCAN_CAP_JOBS,
+    })
+    for (const s of stuck) {
+      if (!shouldAlertEvoStuck(s.heartbeatAt.getTime(), now)) continue
+      const targetId = `brain_search_run:${s.id}`
+      if (await isDuplicated('evo-stuck', targetId, now)) continue
+      markAlerted('evo-stuck', targetId, now)
+      const staleMinutes = Math.round((now - s.heartbeatAt.getTime()) / 60_000)
+      emitAlert(
+        {
+          rule: 'evo-stuck',
+          kind: 'brain_search_run',
+          targetId,
+          rowId: s.id,
+          brain: s.brain,
+          staleMinutes,
+          heartbeatAt: s.heartbeatAt.toISOString(),
+          startedAt: s.startedAt.toISOString(),
+          thresholdMinutes: ALERT_EVO_STUCK_AFTER_MS / 60_000,
+          source: 'OBS-P6 (BLUEPRINT-OBSERVATION-V3 §C.2) — EVO worker chết/kẹt, chưa ai poll GET để sweep',
+        },
+        `EVO ${s.brain} (session ${s.id.slice(0, 8)}) heartbeat stale ${staleMinutes} phút — worker chết/kẹt giữa ứng viên (nobody polled — GET sweep chưa chạy)`,
+        null,
+      )
+    }
+  } catch (err) {
+    console.error('[OBS-ALERT] rule evo-stuck thất bại (fail-open):', err instanceof Error ? err.message : String(err))
+  }
+}
+
+/** Rule 9 — EVAL-STARVATION: 2 run completed gần nhất đều 100% refusal —
+ * xưởng nhãn chết đói nhãn positive, não A/D không bao giờ thức tỉnh được. */
+async function checkEvalStarvation(now: number): Promise<void> {
+  try {
+    const runs = await db.evalRun.findMany({
+      where: { status: 'completed' },
+      orderBy: { startedAt: 'desc' },
+      take: 3,
+      select: { id: true, caseCount: true, refusalCount: true, answeredCount: true, startedAt: true },
+    })
+    if (runs.length < 2) return
+    const lite: EvalRunLite[] = runs.map(r => ({ caseCount: r.caseCount, refusalCount: r.refusalCount }))
+    if (!shouldAlertEvalStarvation(lite)) return
+    const targetId = `eval:starvation`
+    if (await isDuplicated('eval-starvation', targetId, now)) return
+    markAlerted('eval-starvation', targetId, now)
+    emitAlert(
+      {
+        rule: 'eval-starvation',
+        kind: 'eval_runs',
+        targetId,
+        runs: runs.slice(0, 2).map(r => ({
+          runId: r.id,
+          caseCount: r.caseCount,
+          refusalCount: r.refusalCount,
+          answeredCount: r.answeredCount,
+          startedAt: r.startedAt.toISOString(),
+        })),
+        source: 'OBS-P6 §C.2 — 2 eval run gần nhất 100% refusal → không nhãn positive → train gate class imbalance (tiền lệ R33: 36/36, Positive=0/44)',
+      },
+      `Eval toàn refusal 2 run liên tiếp (${runs[0].refusalCount}/${runs[0].caseCount} + ${runs[1].refusalCount}/${runs[1].caseCount}) — não không thể thức tỉnh: xem retrieval/Qdrant thay vì chạy eval tiếp`,
+      null,
+    )
+  } catch (err) {
+    console.error('[OBS-ALERT] rule eval-starvation thất bại (fail-open):', err instanceof Error ? err.message : String(err))
+  }
+}
+
+/** Rule 10 — TRAIN-GATE-REPEAT: brain.train end trained=false ≥ 3 lần /
+ * não / 24h — đốt compute thử train mà gate luôn chặn (thiếu dữ liệu/lệch lớp). */
+async function checkTrainGateRepeat(now: number): Promise<void> {
+  try {
+    const events = await db.observationEvent.findMany({
+      where: { kind: 'brain.train', ts: { gte: new Date(now - ALERT_TRAIN_GATE_WINDOW_MS) } },
+      orderBy: { ts: 'desc' },
+      select: { payloadJson: true, ts: true },
+      take: 400,
+    })
+    const blockedByBrain = new Map<string, { count: number; latestError: string | null }>()
+    for (const e of events) {
+      try {
+        const p = JSON.parse(e.payloadJson) as {
+          phase?: string; brain?: string; trained?: boolean; resultError?: string | null; error?: string | null
+        }
+        if (p.phase !== 'end' || typeof p.brain !== 'string' || p.trained === true) continue
+        const cur = blockedByBrain.get(p.brain) ?? { count: 0, latestError: null }
+        cur.count++
+        if (cur.latestError === null) cur.latestError = p.resultError ?? p.error ?? null
+        blockedByBrain.set(p.brain, cur)
+      } catch {
+        /* payload rác — bỏ qua */
+      }
+    }
+    for (const [brain, info] of blockedByBrain) {
+      if (!shouldAlertTrainGateRepeat(info.count)) continue
+      const targetId = `brain:${brain}`
+      if (await isDuplicated('train-gate-repeat', targetId, now)) continue
+      markAlerted('train-gate-repeat', targetId, now)
+      emitAlert(
+        {
+          rule: 'train-gate-repeat',
+          kind: 'brain_train_gate',
+          targetId,
+          brain,
+          blockedCount: info.count,
+          windowHours: ALERT_TRAIN_GATE_WINDOW_MS / 3600_000,
+          latestError: info.latestError,
+          source: 'OBS-P6 §C.2 — train bị gate chặn lặp lại; xem dữ liệu (imbalance/thiếu mẫu) thay vì thử train tiếp',
+        },
+        `${brain} train bị chặn ${info.count} lần/24h — gate lặp (lý do gần nhất: ${String(info.latestError ?? '—').slice(0, 100)}) — xử lý dữ liệu thay vì đốt compute thử tiếp`,
+        null,
+      )
+    }
+  } catch (err) {
+    console.error('[OBS-ALERT] rule train-gate-repeat thất bại (fail-open):', err instanceof Error ? err.message : String(err))
+  }
+}
+
+/** Rule 11 — PROVIDER-DEGRADED: model.failover cùng (provider, model) ≥ 3
+ * lần/1h — nguồn LLM đang lỗi lặp (tiền lệ Zen 403 FreeTierError R32). */
+async function checkProviderDegraded(now: number): Promise<void> {
+  try {
+    const events = await db.observationEvent.findMany({
+      where: { kind: 'model.failover', ts: { gte: new Date(now - ALERT_PROVIDER_DEGRADED_WINDOW_MS) } },
+      orderBy: { ts: 'desc' },
+      select: { payloadJson: true },
+      take: 200,
+    })
+    const failCount = new Map<string, { provider: string; model: string; count: number; latestError: string | null }>()
+    for (const e of events) {
+      try {
+        const p = JSON.parse(e.payloadJson) as { provider?: string; model?: string; error?: string }
+        if (typeof p.provider !== 'string' || typeof p.model !== 'string') continue
+        const key = `${p.provider}:${p.model}`
+        const cur = failCount.get(key) ?? { provider: p.provider, model: p.model, count: 0, latestError: null }
+        cur.count++
+        if (cur.latestError === null) cur.latestError = typeof p.error === 'string' ? p.error : null
+        failCount.set(key, cur)
+      } catch {
+        /* payload rác — bỏ qua */
+      }
+    }
+    for (const [, info] of failCount) {
+      if (!shouldAlertProviderDegraded(info.count)) continue
+      const targetId = `provider:${info.provider}:${info.model}`
+      if (await isDuplicated('provider-degraded', targetId, now)) continue
+      markAlerted('provider-degraded', targetId, now)
+      emitAlert(
+        {
+          rule: 'provider-degraded',
+          kind: 'model_provider',
+          targetId,
+          provider: info.provider,
+          model: info.model,
+          failCount: info.count,
+          windowMinutes: ALERT_PROVIDER_DEGRADED_WINDOW_MS / 60_000,
+          latestError: info.latestError,
+          source: 'OBS-P6 §C.2 — nguồn LLM lỗi lặp (tiền lệ Zen 403 FreeTierError R32 phát hiện thủ công)',
+        },
+        `${info.provider}/${info.model} fail ${info.count} lần trong 1h — kiểm tra policy upstream/key (lỗi gần nhất: ${String(info.latestError ?? '—').slice(0, 100)})`,
+        null,
+      )
+    }
+  } catch (err) {
+    console.error('[OBS-ALERT] rule provider-degraded thất bại (fail-open):', err instanceof Error ? err.message : String(err))
+  }
+}
+
+/** Rule 12 — EVO-BUDGET-BURN: search.session end có nAbandoned ≥ 3 VÀ
+ * > 50% candidatesMax — Q2 bỏ chấm quá nửa, ngân sách ứng viên lệch. */
+async function checkEvoBudgetBurn(now: number): Promise<void> {
+  try {
+    const events = await db.observationEvent.findMany({
+      where: { kind: 'search.session', ts: { gte: new Date(now - ALERT_TRAIN_GATE_WINDOW_MS) } },
+      orderBy: { ts: 'desc' },
+      select: { payloadJson: true, ts: true },
+      take: 200,
+    })
+    for (const e of events) {
+      try {
+        const p = JSON.parse(e.payloadJson) as {
+          phase?: string; brain?: string; runId?: string; nAbandoned?: number; candidatesMax?: number
+        }
+        if (p.phase !== 'end' || typeof p.runId !== 'string') continue
+        const nAbandoned = typeof p.nAbandoned === 'number' ? p.nAbandoned : 0
+        const candidatesMax = typeof p.candidatesMax === 'number' ? p.candidatesMax : 0
+        if (!shouldAlertEvoBudgetBurn(nAbandoned, candidatesMax)) continue
+        const targetId = `brain_search_run:${p.runId}`
+        if (await isDuplicated('evo-budget-burn', targetId, now)) continue
+        markAlerted('evo-budget-burn', targetId, now)
+        emitAlert(
+          {
+            rule: 'evo-budget-burn',
+            kind: 'brain_search_run',
+            targetId,
+            rowId: p.runId,
+            brain: typeof p.brain === 'string' ? p.brain : null,
+            nAbandoned,
+            candidatesMax,
+            ratio: candidatesMax > 0 ? nAbandoned / candidatesMax : null,
+            source: 'OBS-P6 §C.2 — Q2 bỏ chấm quá nửa ứng viên (vượt ngân sách wall trước khi train)',
+          },
+          `EVO ${String(p.brain ?? '?')} session ${p.runId.slice(0, 8)} bỏ chấm ${nAbandoned}/${candidatesMax} ứng viên theo Q2 — ngân sách ứng viên lệch (mỗi ứng viên tốn quá lâu trước khi train)`,
+          null,
+        )
+      } catch {
+        /* payload rác — bỏ qua */
+      }
+    }
+  } catch (err) {
+    console.error('[OBS-ALERT] rule evo-budget-burn thất bại (fail-open):', err instanceof Error ? err.message : String(err))
+  }
+}
+
 export async function runAlertChecks(): Promise<void> {
   try {
     if (!isObsAlertsEnabled()) return // cờ off → rỗng (check MỖI vòng — hiệu lực ngay)
@@ -833,6 +1116,12 @@ export async function runAlertChecks(): Promise<void> {
     // ngay trong cùng tick.
     await checkBrainLabelStarvation(now)
     await checkChatTraceLoss(now)
+    // OBS-P6 (R34) — 5 rule thế hệ 2: EVO/NAS + eval + train gate + provider.
+    await checkEvoStuck(now)
+    await checkEvalStarvation(now)
+    await checkTrainGateRepeat(now)
+    await checkProviderDegraded(now)
+    await checkEvoBudgetBurn(now)
     // alert vừa phát là fire-and-forget — flush để dedup query của TICK SAU
     // (và test) thấy ngay (an toàn: flush fail-open nội bộ ledger)
     await flushObservationQueue().catch(() => {})

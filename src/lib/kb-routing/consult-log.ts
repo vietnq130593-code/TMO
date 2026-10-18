@@ -20,6 +20,7 @@
 import { db } from '@/lib/db'
 import { getTuningEnum } from '@/lib/learning/tuning-store'
 import { getKbConsultContext } from '@/lib/kb-routing/consult-context'
+import { observeEvent } from '@/lib/observation/ledger'
 
 /** Giới hạn JSON field (byte UTF-8 — truncate + flag). */
 const MAX_QUERY_TEXT_BYTES = 2_000
@@ -138,6 +139,12 @@ function isConsultLogEnabled(): boolean {
 /**
  * Ghi 1 row KbConsultLog — NEVER THROWS (caller fire-and-forget được).
  * Trả về Promise chỉ để caller muốn await (test); production KHÔNG await.
+ *
+ * OBS-V3 H2 (BLUEPRINT-OBSERVATION-V3 §C.1 — R34): sau khi row ghi THÀNH CÔNG,
+ * phát 1 sự kiện `kb.consult` vào ledger quan sát (single-source — mọi caller
+ * gồm logKbConsultFallback đều qua đây). queryHash SHA-256 12 ký tự THAY nội
+ * dung câu hỏi (chốt §7 Q-V3-2 — RO-2 không lưu context nhạy cảm). Dynamic
+ * import không cần — kb-routing → observation một chiều, check-imports sạch.
  */
 export async function logKbConsult(entry: KbConsultLogEntry): Promise<void> {
   try {
@@ -160,6 +167,40 @@ export async function logKbConsult(entry: KbConsultLogEntry): Promise<void> {
         agentId: entry.agentId ?? null,
       },
     })
+
+    // OBS-V3 H2 — sự kiện kb.consult (fail-open tuyệt đối, trong cùng try:
+    // lỗi observeEvent rơi xuống catch chung đã throttle — KHÔNG ảnh hưởng gì)
+    try {
+      const { createHash } = await import('node:crypto')
+      const hash = entry.queryText
+        ? createHash('sha256').update(entry.queryText).digest('hex').slice(0, 12)
+        : null
+      const nTop = Array.isArray(entry.topResults) ? entry.topResults.length : 0
+      observeEvent({
+        actor: 'system:kb',
+        kind: 'kb.consult',
+        table: 'KbConsultLog',
+        ...(entry.runId ? { runId: entry.runId } : {}),
+        ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+        summary:
+          `KB consult [${entry.taskType ?? '—'}]${entry.intent ? ` · ${entry.intent}` : ''}` +
+          ` — conf ${entry.confidence != null ? entry.confidence.toFixed(2) : '—'}` +
+          ` (raw ${entry.rawConfidence != null ? entry.rawConfidence.toFixed(2) : '—'})` +
+          ` · top ${nTop} · ${Math.max(0, Math.round(entry.latencyMs))}ms`,
+        payload: {
+          taskType: entry.taskType ?? null,
+          intent: entry.intent ?? null,
+          queryHash: hash,
+          confidence: entry.confidence ?? null,
+          rawConfidence: entry.rawConfidence ?? null,
+          tokensUsed: entry.tokensUsed ?? 0,
+          latencyMs: Math.max(0, Math.round(entry.latencyMs)),
+          nTop,
+          hasRunId: entry.runId != null,
+          agentId: entry.agentId ?? null,
+        },
+      })
+    } catch { /* fail-open — quan sát không được làm hỏng ghi log */ }
   } catch (err) {
     const now = Date.now()
     const g = globalForConsultLog

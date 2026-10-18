@@ -83,6 +83,7 @@ import {
   buildEvoCandidate,
   buildEvoSessionEnd,
   buildEvoSessionStart,
+  buildEvoSessionSwept,
 } from '@/lib/brain/evo/observe'
 import { observeEvent } from '@/lib/observation/ledger'
 import { formatArchSummary } from '@/lib/brain/evo/blocks'
@@ -859,12 +860,20 @@ export async function getEvoRunState(
     }
     let status = run.status as EvolveRunState['status']
     // Sweep mồ côi: running mà heartbeat stale > 60s → failed (HN §4.2-2b)
+    // OBS-V3 H4b (R34): sweep từ giờ PHÁT sự kiện search.session end (swept)
+    // — trước giờ im lặng, timeline đứt ở session kẹt (GAP-V3-8 hiệu đính 0.2)
     if (status === 'running' && Date.now() - run.heartbeatAt.getTime() > EVO_HEARTBEAT_STALE_MS) {
+      const staleMs = Date.now() - run.heartbeatAt.getTime()
       status = 'failed'
       await db.brainSearchRun.update({
         where: { id: run.id },
         data: { status: 'failed', error: 'worker chết (restart?) — heartbeat stale > 60s', finishedAt: new Date() },
       }).catch(() => {})
+      emitEvoObs({
+        kind: 'search.session',
+        rowKey: run.id,
+        ...buildEvoSessionSwept({ brain: run.brain, runId: run.id, staleMs }),
+      })
     }
     const rows = await db.brainSearchCandidate.findMany({
       where: { runId: run.id },

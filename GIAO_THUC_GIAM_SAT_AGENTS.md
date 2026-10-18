@@ -1,6 +1,7 @@
 # GIAO THỨC GIÁM SÁT AGENTS — HỆ THỐNG VẬN HÀNH TMO (The Magnum Opus)
 
-> **Phiên bản:** 1.5 — 2026-10-14 (Task 32: bổ sung **§0b MỤC ĐÍCH KÍCH HOẠT** theo chỉ đạo user — chuẩn mực đứng: mỗi khi user yêu cầu "kích hoạt giao thức quan sát" thì thực hiện đúng mục đích §0b; kèm rule 4 ORPHAN SWEEP + verdict.add gắn runId + obs.health lộ lý do ghi fail). v1.4 — 2026-10-08 (round 68: theo chỉ đạo user — **SỔ GHI NHẬN bug.md** trong lúc quan sát mission: mọi vấn đề quan sát được ở TỪNG BƯỚC triển khai/thực thi của agents phải được ghi NGAY LẬP TỨC vào `bug.md` ở repo root (mỗi mục 1 dòng thời điểm + hiện tượng + bằng chứng + đánh giá) — tránh quá tải ngữ cảnh và bỏ sót; cuối phiên tổng hợp toàn bộ vào chính file đó. Bản mẫu: `bug.md` round-68 với 25 mục + phần tổng hợp + bảng fix). v1.3 — 2026-10-07 (round 57: rà soát lượt 2 sau hậu kiểm mission …iahkk3 — tự kiểm định chính watcher: FIX C1/C2/C3 chống nhiễu + false-positive; chính sách hoãn Opus review theo quyết định user; FIX B1 agentRole symmetry + FIX B4 heartbeat pha chuyển chu kỳ + parser A1 bên TMO). v1.2 2026-10-07 round 56: đổi tên "quy trình" → **giao thức** giám sát theo chỉ đạo user; bổ sung kênh quan sát thứ 5 **FINAL REPORTS**. v1.1 2026-10-07 round 52–55: mục 1b kích hoạt theo dõi đồng bộ + kênh THINKING; v1.0 2026-10-01 vòng 18–19)
+> **Phiên bản:** 1.6 — 2026-10-18 (**OBS-V3 / R34** — theo chỉ đạo user: *"giao thức này không nằm trong vận hành app mà nó sinh ra để cho bạn quan sát được mọi thông tin cần thiết trong quá trình vận hành của agents"* — mở rộng theo kiến trúc 4 não + NAS/EVO: **§0b mục 3-4 mở rộng** (não thứ 4 knowledge + EVO/NAS search + eval pipeline + KB consult + lesson/adaptation engine + provider failover) · **5 rule cảnh báo thế hệ 2** (evo-stuck · eval-starvation · train-gate-repeat · provider-degraded · evo-budget-burn — alerts.ts) · **6 kind mới** (eval.run · kb.consult · learn.escalate · adapt.escalate · model.failover + đăng ký chat.fastpath — kinds.ts) · **neo impact thứ 2** (proposal.apply → KPI window, anchor 'evo-deploy' — impact.ts) · **D1.5 + D5.4 rubric mới** · chi tiết BLUEPRINT-OBSERVATION-V3-P5-P8.md). NGUYÊN TẮC ĐỨNG MỚI: giao thức quan sát là **HỆ QUAN SÁT NGOẠI VI THỤ ĐỘNG** — tuyệt đối fail-open/fire-and-forget, không bao giờ chặn/nghẽn nghiệp vụ; giao diện tiêu thụ chính của trợ lý vận hành = **ledger ObservationEvent + GET /api/observation/timeline + SQL read-only**.
+> v1.5 — 2026-10-14 (Task 32: bổ sung **§0b MỤC ĐÍCH KÍCH HOẠT** theo chỉ đạo user — chuẩn mực đứng: mỗi khi user yêu cầu "kích hoạt giao thức quan sát" thì thực hiện đúng mục đích §0b; kèm rule 4 ORPHAN SWEEP + verdict.add gắn runId + obs.health lộ lý do ghi fail). v1.4 — 2026-10-08 (round 68: theo chỉ đạo user — **SỔ GHI NHẬN bug.md** trong lúc quan sát mission: mọi vấn đề quan sát được ở TỪNG BƯỚC triển khai/thực thi của agents phải được ghi NGAY LẬP TỨC vào `bug.md` ở repo root (mỗi mục 1 dòng thời điểm + hiện tượng + bằng chứng + đánh giá) — tránh quá tải ngữ cảnh và bỏ sót; cuối phiên tổng hợp toàn bộ vào chính file đó. Bản mẫu: `bug.md` round-68 với 25 mục + phần tổng hợp + bảng fix). v1.3 — 2026-10-07 (round 57: rà soát lượt 2 sau hậu kiểm mission …iahkk3 — tự kiểm định chính watcher: FIX C1/C2/C3 chống nhiễu + false-positive; chính sách hoãn Opus review theo quyết định user; FIX B1 agentRole symmetry + FIX B4 heartbeat pha chuyển chu kỳ + parser A1 bên TMO). v1.2 2026-10-07 round 56: đổi tên "quy trình" → **giao thức** giám sát theo chỉ đạo user; bổ sung kênh quan sát thứ 5 **FINAL REPORTS**. v1.1 2026-10-07 round 52–55: mục 1b kích hoạt theo dõi đồng bộ + kênh THINKING; v1.0 2026-10-01 vòng 18–19)
 > **Phạm vi:** giám sát toàn bộ agents (Omega, Opus, ALISTA, SENTINEL, NEMESIS, Code Team…) trong vòng đời mission: từ dispatch chỉ đạo → thực thi goal-loop → phán quyết → đóng sổ.
 > **Người dùng:** operator / trọng tài vận hành (người hoặc agent giám sát).
 > **Cấu trúc:** mỗi lĩnh vực gồm 4 khối — (1) Mục tiêu · (2) Công việc · (3) Nguồn bằng chứng & cách đo · (4) **Rubric chấm điểm**.
@@ -25,8 +26,8 @@
 **Mục đích:** Xác định các **vấn đề trong vận hành** của:
 1. **Agent** — vòng đời run: stall, treo, fail, mồ côi, đốt token bất thường
 2. **Database** — ghi bảng học (QEntry / ArbiterVerdict / AutoLearnRecord / Episode), lỗi ghi, sai lệch dữ liệu, health ledger
-3. **Não agent** (brain) — train / infer-ref, trace vector vào/ra, pipeline calibration/surrogate/policy
-4. **Quá trình thực thi của agent** — tool calls lỗi, vòng lặp lặp, cú pháp tool-call hỏng, verdict thiếu/tự tin sai, thiếu sót trong thực thi
+3. **Não agent** (brain) — *(v1.6: mở rộng theo kiến trúc 4 não + NAS/EVO)* train / infer-ref, trace vector vào/ra, pipeline **4 não** (A calibration_v3 · B surrogate · C policy · D knowledge — D ăn KbConsultLog D2/D3, train disabled tới D3), **EVO/NAS tiến hoá** (search.session/candidate — BrainSearchRun, sweep mồ côi, deploy proposal.apply), **eval pipeline** (EvalRun sinh nhãn — refusal-rate 100% = não không thể thức tỉnh), pipeline calibration/surrogate/policy
+4. **Quá trình thực thi của agent** — tool calls lỗi, vòng lặp lặp, cú pháp tool-call hỏng, verdict thiếu/tự tin sai, thiếu sót trong thực thi; *(v1.6 thêm)* **KB consult** (confidence calibrate của não A trên đường KB — kind kb.consult), **lesson engine escalate** (pattern lỗi lặp ≥3 → SelfDirectionProposal — learn.escalate), **adaptation engine Layer 9** (chỉ thị TẠM DỪNG — adapt.escalate), **provider failover** (NIM xoay key / Zen HTTP+CLI fail — model.failover)
 
 ...nhằm xem có **lỗi, vấn đề hay thiếu sót nào cần xử lý hoặc bổ sung** — và **tiến hành xử lý/bổ sung NGAY khi phát hiện** (không chỉ báo cáo rồi để đó).
 
@@ -43,14 +44,16 @@
 |---|---|---|
 | Timeline obs | obs.health `healthy:false` · failed>0 · dropped>0 | đọc lastError (Task 32 lộ lý do) → sửa gốc rễ |
 | obs.alert | stall D1.1 · token-burn D1.4 · orphan-sweep D1.2 | đối chiếu run thật (trace jsonl) → can thiệp mục 6 |
+| obs.alert **thế hệ 2** (v1.6) | evo-stuck (EVO heartbeat stale >5') · eval-starvation (2 run liên tiếp 100% refusal) · train-gate-repeat (train bị chặn ≥3 lần/não/24h) · provider-degraded (cùng provider:model fail ≥3 lần/h) · evo-budget-burn (Q2 bỏ chấm >50%) | EVO chết → xem worker/restart · eval starvation → xem retrieval/Qdrant (không chạy eval tiếp) · train gate lặp → xử lý dữ liệu (không thử train tiếp) · provider → xem policy upstream/key |
 | AgentRunRecord | status 'running' vô lý (không run tương ứng) · failed liên tiếp cùng stopReason | sweep + phân tích gốc rễ |
 | ArbiterVerdict | complete=false lặp · confidence thấp lặp · forcedDowngrade | đọc missing/rootCause → xem thực thi thiếu gì |
 | ToolMetric | tool fail rate cao · cùng tool lặp N lần | soi pattern → fix cấu trúc (tiền lệ stall brake) |
 | BrainInferenceTrace | trace fail · queue dài | xem worker não + Qdrant |
+| EvalRun / kind eval.run (v1.6) | refusalCount ≥ caseCount (100% refusal) · answeredCount = 0 kéo dài | não A/D không có nhãn positive → xem retrieval (Qdrant trống?) thay vì chạy eval tiếp |
 
 ---
 
-## 1. GIÁM SÁT THỰC THI VÒNG LẶP — 12 điểm
+## 1. GIÁM SÁT THỰC THI VÒNG LẶP — 15 điểm (v1.6: 12 + D1.5)
 
 **Mục tiêu:** mọi goal-loop job chạy có người theo dõi; stall/failed bị phát hiện nhanh; không job kẹt mồ côi.
 
@@ -82,8 +85,9 @@ WHERE timestamp > :windowStart GROUP BY agentRole, toolName, success;
 | D1.2 | 0 job kẹt quá hạn | 3 | Truy vấn job kẹt trả về 0 hàng |
 | D1.3 | 100% run thất bại có root-cause ghi nhận | 3 | Mỗi run failed/incomplete trong kỳ chấm có phân tích nguyên nhân trong worklog hoặc issue |
 | D1.4 | Run đốt > 500k token được cảnh báo & post-mortem | 3 | Có alert + bản ghi phân tích (vd: run 973k token vòng 18) |
+| D1.5 | 0 session EVO/eval kẹt mồ côi > 24h (v1.6 — OBS-P6) | 3 | BrainSearchRun 'running' stale + EvalRun 'running' treo đều bị phát hiện (alert evo-stuck / sweep) trong 24h — không session nào chết im lặng |
 
-**Ngưỡng xử lý:** D1 < 6/12 → rà toàn bộ jobs ngay trong phiên làm việc.
+**Ngưỡng xử lý:** D1 < 8/15 → rà toàn bộ jobs ngay trong phiên làm việc (v1.6: 12 → 15 điểm do D1.5).
 
 ---
 
@@ -230,7 +234,7 @@ Lệnh hệ thống: `pm2 list` (↺ restart counter không tăng bất thườn
 
 ---
 
-## 5. NGÂN SÁCH & CHỐNG LÃNG PHÍ — 10 điểm
+## 5. NGÂN SÁCH & CHỐNG LÃNG PHÍ — 13 điểm (v1.6: 10 + D5.4)
 
 **Mục tiêu:** token/spend đúng mục đích; lãng phí bị phát hiện sớm, không để cháy xong mới biết.
 
@@ -252,8 +256,9 @@ WHERE tokensUsed > 500000 ORDER BY createdAt DESC LIMIT 10;
 | D5.1 | Chi tiêu đúng ngân sách chỉ đạo | 4 | Không run vượt phạm vi ngân sách ghi trong directive |
 | D5.2 | Lãng phí lớn phát hiện TRONG lúc chạy hoặc ngay sau | 3 | Alert trong ≤ 15 phút sau khi run kết thúc |
 | D5.3 | Phanh ngân sách hoạt động (stall brake cắt được run) | 3 | Có bằng chứng brake cắt run (stopReason=no_progress do CI-1) |
+| D5.4 | Ngân sách EVO/eval được theo dõi (v1.6 — OBS-P6) | 3 | Vòng EVO bỏ chấm >50% ứng viên (Q2) có alert evo-budget-burn + post-mortem; eval spend nhìn thấy qua kind eval.run (durationMs) |
 
-**Ngưỡng xử lý:** D5 < 5/10 → rà cấu hình brake/budget trước khi mở mission mới.
+**Ngưỡng xử lý:** D5 < 6/13 → rà cấu hình brake/budget trước khi mở mission mới (v1.6: 10 → 13 điểm do D5.4).
 
 ---
 
@@ -322,14 +327,14 @@ WHERE tokensUsed > 500000 ORDER BY createdAt DESC LIMIT 10;
 
 ## 9. TỔNG HỢP ĐIỂM & XẾP LOẠI SỨC KHỎE
 
-**Công thức:** `Tổng = D1(12) + D2(20) + D3(12) + D4(16) + D5(10) + D6(10) + D7(10) + D8(10) = 100`
+**Công thức (v1.6):** `Tổng = D1(15) + D2(20) + D3(12) + D4(16) + D5(13) + D6(10) + D7(10) + D8(10) = 106` *(điểm tối đa từng lĩnh vực ghi ở rubric — chấm theo tỉ lệ % nếu cần so kỳ cũ)*
 
-| Tổng điểm | Xếp loại | Ý nghĩa & hành động |
+| Tổng điểm (trên 106 — v1.6) | Xếp loại | Ý nghĩa & hành động |
 |---|---|---|
-| 90–100 | 🟢 XANH | Vận hành chuẩn. Tiếp tục nhịp giám sát thường lệ. |
-| 75–89 | 🟡 VÀNG | Có điểm yếu. Ghi issue theo dõi, nhắc lại trong phiên kế. |
-| 60–74 | 🟠 CAM | Cần can thiệp trong phiên làm việc hiện tại, không mở phạm vi mới. |
-| < 60 | 🔴 ĐỎ | Nguy cơ mất kiểm soát. Dừng mission mới, xử lý dồn sức, báo cáo ngay. |
+| ≥ 95 (≈90%) | 🟢 XANH | Vận hành chuẩn. Tiếp tục nhịp giám sát thường lệ. |
+| 80–94 (≈75–89%) | 🟡 VÀNG | Có điểm yếu. Ghi issue theo dõi, nhắc lại trong phiên kế. |
+| 64–79 (≈60–74%) | 🟠 CAM | Cần can thiệp trong phiên làm việc hiện tại, không mở phạm vi mới. |
+| < 64 (<60%) | 🔴 ĐỎ | Nguy cơ mất kiểm soát. Dừng mission mới, xử lý dồn sức, báo cáo ngay. |
 
 **Quy tắc đặc biệt:**
 - **Veto một chiều:** D2 (trung thực) < 12 → toàn hệ thống tối đa là CAM bất kể tổng điểm.

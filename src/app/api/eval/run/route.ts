@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { runEval } from '@/lib/eval/runner'
+import { observeEvent } from '@/lib/observation/ledger'
 
 // Phase 4 SMOLAB Proposal 11' — Eval run endpoint.
 //
@@ -56,6 +57,27 @@ export async function POST(req: Request) {
     const run = await db.evalRun.create({
       data: { status: 'running', caseCount: selected.length },
     })
+
+    // OBS-V3 H1 (BLUEPRINT-OBSERVATION-V3 §C.1 — R34): eval là xưởng nhãn cho
+    // Brain-A/D — vòng đời EvalRun phải vào timeline quan sát (R33: refusal
+    // 36/36 là tín hiệu chẩn đoán #1 nhưng vô hình). 1 start + 1 end/run.
+    try {
+      observeEvent({
+        actor: 'system:eval',
+        kind: 'eval.run',
+        table: 'EvalRun',
+        rowKey: run.id,
+        summary: `Eval run bắt đầu — ${selected.length} case${categories?.length ? ` · ${categories.join(',')}` : ''}`,
+        payload: {
+          phase: 'start',
+          runId: run.id,
+          nCases: selected.length,
+          caseLimit,
+          categories: categories ?? null,
+          origin: 'api',
+        },
+      })
+    } catch { /* fail-open */ }
 
     // Fire-and-forget — NEVER await this in the HTTP request.
     runEval({ runId: run.id, caseLimit, categories }).catch((err) => {

@@ -154,6 +154,59 @@ export async function flushObservationQueue(): Promise<void> {
   if (st2.drainPromise) await st2.drainPromise.catch(() => {})
 }
 
+// ==================== THROTTLE (OBS-V3 H7 — R34) ====================
+
+/** Cửa sổ throttle mặc định — 1 sự kiện/khóa/10 phút (H7: model chết + caller
+ * retry liên tục không được spam timeline; rule P6 provider-degraded vẫn đủ
+ * 3 sample trong 1h vì các lần cách nhau >10' đếm là các lần THẬT). */
+export const OBS_THROTTLE_WINDOW_MS = 10 * 60_000
+
+/**
+ * observeEvent + throttle in-memory theo khóa — cho call-site tần suất lỗi
+ * lặp cao (tiền lệ: model.failover khi provider chết, mọi call đều fail).
+ * Cùng fail-open tuyệt đối: throttle lỗi → vẫn gọi observeEvent thường (thà
+ * dư 1 sự kiện hơn mất tín hiệu). Test r122 pin cửa sổ + reset.
+ */
+export function observeEventThrottled(
+  throttleKey: string,
+  evt: ObserveEventInput,
+  opts?: { windowMs?: number },
+): void {
+  try {
+    const windowMs = opts?.windowMs ?? OBS_THROTTLE_WINDOW_MS
+    const now = Date.now()
+    const g = globalThis as unknown as { __tmoObsThrottle?: Map<string, number> }
+    if (!g.__tmoObsThrottle) g.__tmoObsThrottle = new Map()
+    const last = g.__tmoObsThrottle.get(throttleKey)
+    if (typeof last === 'number' && now - last < windowMs) return // trong cửa sổ — nuốt
+    g.__tmoObsThrottle.set(throttleKey, now)
+    // Map lớn dần theo số khóa lỗi — dọn 1 lần/tuần tương đương (rẻ, không cron)
+    if (g.__tmoObsThrottle.size > 512) {
+      for (const [k, ts] of g.__tmoObsThrottle) {
+        if (now - ts > 7 * 24 * 3600_000) g.__tmoObsThrottle.delete(k)
+      }
+    }
+    observeEvent(evt)
+  } catch {
+    // fail-open — throttle không được phép nuốt LUÔN: thử đường thường
+    try {
+      observeEvent(evt)
+    } catch {
+      /* observeEvent vốn không throw — đây là lớp phòng thủ cuối */
+    }
+  }
+}
+
+/** Reset throttle cho TEST (cô lập giữa các case — precedent resetAlertDedupState). */
+export function resetObservationThrottle(): void {
+  try {
+    const g = globalThis as unknown as { __tmoObsThrottle?: Map<string, number> }
+    g.__tmoObsThrottle?.clear()
+  } catch {
+    /* no-op */
+  }
+}
+
 /** Drain tuần tự — single-writer tự nhiên: seq không race (RO-4). */
 async function drain(): Promise<void> {
   for (;;) {

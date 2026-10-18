@@ -32,6 +32,9 @@ import { trainBrainCalibrationV3 } from '@/lib/brain/calibration-v3'
 // P1-M2 — ranking metrics (nDCG@5/MRR) trên thứ tự trả về của hybrid search
 import { ndcgAtK, mrr, meanCI } from '@/lib/stats'
 import { type ExpectedEntity, normalizeForEntityMatch, buildRelevanceVector } from './relevance'
+// OBS-V3 H1 (BLUEPRINT-OBSERVATION-V3 §C.1 — R34): end sự kiện eval.run
+// (completed/failed) — cùng origin mọi đường gọi (route + auto-eval).
+import { observeEvent } from '@/lib/observation/ledger'
 
 /** System-under-test answer generator — the PRODUCTION chat core
  *  (Zen space-bunny-free — model thật mà agents dùng hằng ngày, user
@@ -148,6 +151,8 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
   const { runId } = opts
   const caseLimit = opts.caseLimit && opts.caseLimit > 0 ? opts.caseLimit : DEFAULT_CASE_LIMIT
   const categories = opts.categories && opts.categories.length > 0 ? opts.categories : undefined
+  // OBS-V3 H1 — mốc đo duration cho sự kiện end (additive, không đụng logic)
+  const evalT0 = Date.now()
 
   try {
     // Stratified case selection (round-robin across categories): with
@@ -403,6 +408,34 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
       `hallucinations=${hallucinationCount}`
     )
 
+    // OBS-V3 H1 (R34) — eval.run phase end (completed): refusal-rate là tín
+    // hiệu chẩn đoán "não không thể thức tỉnh" (R33: 36/36 → train gate class
+    // imbalance) — từ giờ vào timeline quan sát cho rule eval-starvation.
+    try {
+      observeEvent({
+        actor: 'system:eval',
+        kind: 'eval.run',
+        table: 'EvalRun',
+        rowKey: runId,
+        summary:
+          `Eval run xong — ${processed} case · trả lời ${answeredCount} · từ chối ${refusalCount}` +
+          ` (coverage ${(processed > 0 ? (answeredCount / processed) : 0).toFixed(2)}) · ${Math.round((Date.now() - evalT0) / 1000)}s`,
+        payload: {
+          phase: 'end',
+          status: 'completed',
+          runId,
+          nCases: processed,
+          answered: answeredCount,
+          refusals: refusalCount,
+          avgCoverage: processed > 0 ? answeredCount / processed : 0,
+          avgRecallAt5: processed > 0 ? sumRecall / processed : 0,
+          avgFaithfulness: processed > 0 ? sumFaithfulness / processed : 0,
+          hallucinations: hallucinationCount,
+          durationMs: Date.now() - evalT0,
+        },
+      })
+    } catch { /* fail-open — quan sát không được làm hỏng eval */ }
+
     // Task 20-c — AUTO-RETRAIN calibration sau eval run hoàn tất: đủ ≥10
     // EvalResult usable là train lại CalibrationModel (fail-open tuyệt đối —
     // retrain fail KHÔNG được làm fail eval run đã completed).
@@ -458,6 +491,23 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
     // Catastrophic error — mark the run failed.
     const message = err instanceof Error ? err.message : String(err)
     console.error(`[EvalRunner] Run ${runId} FAILED:`, message)
+    // OBS-V3 H1 (R34) — eval.run phase end (failed)
+    try {
+      observeEvent({
+        actor: 'system:eval',
+        kind: 'eval.run',
+        table: 'EvalRun',
+        rowKey: runId,
+        summary: `Eval run LỖI — ${message.slice(0, 140)}`,
+        payload: {
+          phase: 'end',
+          status: 'failed',
+          runId,
+          error: message.slice(0, 300),
+          durationMs: Date.now() - evalT0,
+        },
+      })
+    } catch { /* fail-open */ }
     try {
       await db.evalRun.update({
         where: { id: runId },

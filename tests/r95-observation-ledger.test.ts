@@ -365,8 +365,8 @@ describe('r95 · H — source-scan wiring đợt 1+2 (OBS-P1/P2 hooks)', () => {
     expect(getTuningSpec('obs_alerts')?.envKey).toBe('OBS_ALERTS') // 26-BE — cờ thứ 30
   })
 
-  test('H6 kinds.ts — 19 kind chuẩn + obs.alert nhóm alert (Task 26-BE GAP-2) + run.heart nhóm run (Task 33) + model.sync nhóm tuning (R5) + kind HyperNAS search.* đặt trước (single-source §9 HyperNAS)', () => {
-    expect(OBS_KINDS.length).toBe(19) // PIN UPDATE R5: 18 → 19 (model.sync — đồng bộ danh sách model free, Đài quan sát thấy diff catalog)
+  test('H6 kinds.ts — 25 kind chuẩn + obs.alert nhóm alert (Task 26-BE GAP-2) + run.heart nhóm run (Task 33) + model.sync nhóm tuning (R5) + kind HyperNAS search.* đặt trước (single-source §9 HyperNAS)', () => {
+    expect(OBS_KINDS.length).toBe(25) // PIN UPDATE R34 OBS-V3: 19 → 25 (6 kind mới: eval.run + kb.consult + learn.escalate + adapt.escalate + model.failover + chat.fastpath) // PIN UPDATE R5: 18 → 19 (model.sync — đồng bộ danh sách model free, Đài quan sát thấy diff catalog)
     expect(OBS_KINDS.map(k => k.kind)).toContain('search.session')
     expect(OBS_KINDS.map(k => k.kind)).toContain('impact.estimate')
     expect(OBS_KINDS.map(k => k.kind)).toContain('brain.infer-ref')

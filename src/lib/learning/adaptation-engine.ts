@@ -288,6 +288,27 @@ export function consumeEscalationEmit(sessionId: string): boolean {
     state.escalationEmittedAt = new Date().toISOString()
     store.delete(sessionId)
     store.set(sessionId, state)
+    // OBS-V3 H6 (BLUEPRINT-OBSERVATION-V3 §C.1 — R34): Layer 9 chỉ thị TẠM DỪNG
+    // mở rộng phạm vi — trước giờ chỉ SSE omega_escalation (mất theo reload);
+    // vào ledger quan sát để trợ lý vận hành thấy mọi can thiệp thích ứng.
+    // Dynamic import chống chu trình tĩnh (tiền lệ reward.ts). Fire-and-forget.
+    void import('@/lib/observation/ledger')
+      .then(m =>
+        m.observeEvent({
+          actor: 'system:adaptation',
+          kind: 'adapt.escalate',
+          sessionId,
+          summary:
+            `Layer 9 TẠM DỪNG mở rộng phạm vi (session ${sessionId.slice(0, 8)})` +
+            ' — lỗi lặp ≥3 cách khác nhau; agent chỉ thị hoàn thiện phần chắc chắn + tổng hợp câu hỏi cho user',
+          payload: {
+            sessionId,
+            reason: 'Layer 9 adaptation: lỗi lặp ≥3 cách trong session',
+            escalationEmittedAt: state.escalationEmittedAt,
+          },
+        })
+      )
+      .catch(() => { /* fail-open — quan sát không được làm hỏng escalation */ })
     return true
   } catch {
     return false

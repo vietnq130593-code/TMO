@@ -1,7 +1,29 @@
 # BLUEPRINT GIAO THỨC QUAN SÁT V3 P5 → P8 — "MỞ RỘNG THEO 4 NÃO + NAS/EVO + CHUỖI HỌC"
 
-> **Phiên bản:** 0.1 — 2026-10-18 (Task R34-OBSV3-AUDIT — chỉ ĐÁNH GIÁ + THIẾT KẾ,
-> chưa triển khai code; chờ user chốt §7).
+> **Phiên bản:** 0.2 — 2026-10-18 (Task R34-OBSV3-DEPLOY). **Hiệu đính sau
+> review-đối-chiếu-code-thật (user chỉ thị: "review lại và vá nếu có vấn đề")**:
+> (1) GAP-V3-3 + hook H3 **HỦY** — não A calibration_v3 CÓ phát `brain.train`
+> (`calibration-v3.ts:347/355/376` — observeBrainTrain start/end đầy đủ như não
+> B/C; kết luận sai trong 0.1 do grep bị cắt ngắn); (2) GAP-V3-8 hiệu chỉnh —
+> rule `job-stale` ĐÃ theo dõi BrainSearchRun (30 phút, alerts.ts:347) nhưng
+> sweep 60s trên GET (evolve.ts:862) đánh failed IM LẶNG + cửa sổ mù 60s–30'
+> → H4b phát `search.session` end khi sweep + rule `evo-stuck` 5 phút; (3) H5
+> đổi call-site — KHÔNG có fire-site "escalate → Goal Generator" riêng; đường
+> THẬT là sweep `sweepEscalationImprovements` (instrumentation-node.ts:955,
+> boot + 6h) tạo SelfDirectionProposal → hook tại mỗi proposal được tạo;
+> (4) H6 hook trong `consumeEscalationEmit` (adaptation-engine.ts:280 — single-
+> source cho mọi caller); (5) H7 thêm throttle (1 event/provider:model:lỗi/10'
+> — chống spam timeline khi model chết + caller retry liên tục); (6) r99-C1
+> pin OBS_KINDS 19 → 25 (PIN UPDATE precedent R5).
+>
+> **Nguyên tắc đứng theo chỉ đạo user (2026-10-18):** GIAO THỨC QUAN SÁT
+> KHÔNG nằm trong vận hành app — nó sinh ra để **trợ lý vận hành quan sát được
+> mọi thông tin cần thiết trong quá trình vận hành của agents**. Hệ quả: tuyệt
+> đối thụ động (fail-open, fire-and-forget, không bao giờ chặn/nghẽn nghiệp
+> vụ), và giao diện tiêu thụ chính của trợ lý là **ledger + timeline API +
+> SQL read-only** (UI Đài quan sát chỉ là phần bù cho người).
+>
+> 0.1 — 2026-10-18 (Task R34-OBSV3-AUDIT — đánh giá + thiết kế).
 > Sinh từ yêu cầu user (2026-10-18): *"Kiểm tra giao thức quan sát, hiện tại đã
 > có thêm 4 bộ não, mạng NAS … nghĩa là việc liên quan quá trình xử lý tác vụ
 > của agent đã tăng lên. Xác định cho tôi giao thức quan sát có cần mở rộng
@@ -16,7 +38,7 @@
 
 ---
 
-## TRẢ LỜI TRỰC TIẾP 2 CÂU HỎI USER
+## TRẢ LỜI TRỰC TIẾP 2 CÂU HỎI USER (0.1 — giữ nguyên từ bản đánh giá)
 
 **Câu 2 — Giao thức hiện tại có mục tiêu/mục đích không?**
 **CÓ — 3 tầng**, nhưng **đã stale một phần**:
@@ -121,7 +143,7 @@ user → chat (fast-path | triage) → KB consult (Brain-A calibrate confidence,
 |---|---|---|---|
 | **GAP-V3-1** | **Mục đích §0b stale** — ghi 3 não "calibration/surrogate/policy", không có não D, EVO/NAS, eval, KB, adapt | `GIAO_THUC_GIAM_SAT_AGENTS.md` §0b (v1.5 2026-10-14) vs kiến trúc R28–R33 | Kích hoạt giao thức theo §0b sẽ KHÔNG tự nhìn các đối tượng mới — mục đích đứng bị lạc hậu phạm vi |
 | **GAP-V3-2** | **Eval pipeline 0 sự kiện** — /api/eval/* + lib/eval/* không có observeEvent | rg "observeEvent" trong `src/lib/eval*` + `src/app/api/eval` = 0 kết quả | R33: eval 36 case **refusal 36/36** = tín hiệu "não không thể thức tỉnh" quan trọng nhất — vô hình trong timeline; kim tuyến không nối run → eval → train-blocked |
-| **GAP-V3-3** | **Brain-A train không phát brain.train** — chỉ não B/C phát | `calibration-v3.ts` không import observeBrainTrain; route `/api/brain/train` nhánh calibration_v3 (route.ts:160) không hook | R33: train bị chặn class imbalance "Positive=0/44" — chỉ thấy trong response API + console UI, KHÔNG trong Đài quan sát |
+| ~~**GAP-V3-3**~~ | ~~Brain-A train không phát brain.train~~ **HỦY ở 0.2 — kết luận 0.1 SAI** (grep bị cắt): calibration-v3.ts:347/355/376 phát observeBrainTrain start/end đầy đủ; train bị chặn class imbalance VẸN hiển thị qua kind `brain.train` (phase end, trained=false, resultError) | `calibration-v3.ts:347/355/376` | (không còn gap — rule P6 `train-gate-repeat` vẫn có giá trị: đếm chuỗi gate-block từ các event này) |
 | **GAP-V3-4** | **KB consult không có sự kiện** — KbConsultLog D1 LOG-ONLY chỉ nằm bảng riêng | rg trong `kb-routing/` = 0 observeEvent | Não D + ngưỡng D2/D3 + confidence calibrate của não A trên đường KB — toàn bộ im lặng với timeline; kim tuyến "run X consult gì, confidence bao nhiêu" đứt |
 | **GAP-V3-5** | **proposal.apply KHÔNG BAO GIỜ phát** — khai báo từ OBS-P1, call-site = 0 | `evo/observe.ts:11-13` ghi "CÓ TÌNH KHÔNG phát (client-side)"; `evolve-tab.tsx` applyEvoHiddenToDraft/deployEvoArchitecture không hook | Lúc QUAN TRỌNG NHẤT (kiến trúc mới trở thành active!) timeline mù; impact tracker không có anchor (GAP-V3-9) |
 | **GAP-V3-6** | **Lesson escalate + Adaptation Layer 9 chỉ SSE/console** — không ledger | `lessons.ts` + `agent-brain.ts` + `adaptation-engine.ts:27` (escalate_to_user → SSE warning) = 0 observeEvent | Chỉ thị TẠM DỪNG can thiệp run + escalate Goal Generator (≥3 pattern) biến mất theo session — vi phạm nguyên tắc #1 bằng chứng máy |
@@ -145,31 +167,39 @@ Nguyên tắc giữ nguyên V2 §C.3: fire-and-forget · check cờ `obs_ledger`
 khi ghi (overhead 0 khi off) · mỗi hook ~1 dòng + test · payload metadata +
 hash (RO-2 không lưu full context).
 
-| Hook | Kind | Call-site đề xuất | Payload chính |
+| Hook | Kind | Call-site THẬT (hiệu đính 0.2 sau đối chiếu code) | Payload chính |
 |---|---|---|---|
-| H1 | `eval.run` (group 'brain') | lib/eval/runner.ts start/end (+ auto-eval.ts) | phase, nCases, durationMs, refusalCount, labelDist (Pos/Neg), tokensUsed |
-| H2 | `kb.consult` (group 'db') | kb-routing nơi ghi KbConsultLog D1 (hàm ghi — precedent episodic-db) | statement hash, stage, calibratedConf, topScore, hasOutcome, runId nếu có |
-| H3 | `brain.train` (não A — dùng kind sẵn) | bọc trainBrainCalibrationV3 (wrapper như policy.ts:537/545/566) | start/end + error (kể cả gate: insufficient-data / class-imbalance + số liệu Positive/Negative) |
-| H4 | `proposal.apply` (kind sẵn) | API/server action mà deployEvoArchitecture gọi để ghi active spec (server-side, KHÔNG client) | brain, runId (BrainSearchRun), candidateIdx, archSummary, mode (draft/hidden/deploy) |
-| H5 | `learn.escalate` (group 'db') | lessons.ts chỗ escalate ≥3 pattern → Goal Generator | pattern hash, nOccurrences, goal title |
-| H6 | `adapt.escalate` (group 'alert') | adaptation-engine.ts chỗ set escalate_to_user (1 lần/session) | sessionId, errorKey, nDistinctApproaches |
-| H7 | `model.failover` (group 'tuning') | provider chain chỗ bắt lỗi đổi provider/key (utility + agent cores) | from, to, errorTag, httpStatus |
-| H8 | đăng ký `chat.fastpath` vào OBS_KINDS (group 'run') | kinds.ts 1 dòng | — |
+| H1 | `eval.run` (group 'brain') | (a) start: POST /api/eval/run sau `db.evalRun.create` (route.ts:56) + auto-eval.ts:113; (b) end: runner.ts sau update completed (~:397) + nhánh catch failed (~:463) — 1 start + 1 end/run, KHÔNG per-case | phase, runId (rowKey), nCases, answered, refusals, avgCoverage, avgRecall, durationMs, status |
+| H2 | `kb.consult` (group 'db') | consult-log.ts `logKbConsult` sau create thành công (single-source — mọi caller gồm fallback đều qua đây) | taskType, intent, confidence, rawConfidence, latencyMs, tokensUsed, queryHash (SHA-256 12 ký tự — KHÔNG lưu nội dung), nTop, runId/sessionId nếu có |
+| ~~H3~~ | ~~brain.train não A~~ | **HỦY 0.2** — đã có sẵn (calibration-v3.ts:347/355/376) | — |
+| H4 | `proposal.apply` (kind sẵn) | POST /api/brain/train — phát khi `result.active && useDraft` (đường deploy duy nhất lên active: R7 saveDraft → train force); client deployEvoArchitecture truyền thêm `origin:'evo-deploy'` (body tùy chọn, whitelist) | brain, version, forced, improved, cvScore, inputMode, origin ('evo-deploy' | 'editor'), archSummary (hidden từ draft override) |
+| H5 | `learn.escalate` (group 'db') | instrumentation-node.ts `sweepEscalationImprovements` (boot + 6h) — phát khi 1 SelfDirectionProposal escalation ĐƯỢC TẠO (created++) | rootCause (cắt 200), occurrences, unresolved, priority |
+| H6 | `adapt.escalate` (group 'alert') | adaptation-engine.ts `consumeEscalationEmit` — phát đúng LẦN ĐẦU/session (single-source cho mọi caller: workflow-engine, redteam, tương lai) | sessionId, reason 'Layer 9: lỗi lặp ≥3 cách', escalationEmittedAt |
+| H7 | `model.failover` (group 'tuning') | llm.ts 2 điểm: (a) wrapper quanh `callModelWithKeyRotation` — phát khi toàn chuỗi xoay key NIM fail (result.error); (b) `callUtilityLLM` nhánh return lỗi cuối (Zen HTTP + CLI đều fail) — dùng `observeEventThrottled` 1 event/(provider:model:errorTag)/10' chống spam | provider, model, taskLabel, error (cắt 300), path ('nim-rotation' | 'zen-http+cli') |
+| H4b | `search.session` end khi sweep (GAP-V3-8 thật) | evolve.ts:862 — sweep đánh failed kèm emit builder mới `buildEvoSessionSwept` (evo/observe.ts) — mọi lượt GET sweep từ giờ hiển thị trong timeline | phase end, status failed, swept:true, reason heartbeat stale | 
+| H8 | đăng ký `chat.fastpath` vào OBS_KINDS (group 'run') | kinds.ts 1 dòng (+5 kinds mới H1/H2/H5/H6/H7 → OBS_KINDS 19 → 25; pin r99-C1 cập nhật precedent R5) | — |
 
-Ghi chú H4: observe.ts hiện cố tình không phát vì client-side — giải pháp là
-hook TẠI điểm server ghi active spec (draft save / deploy persist), giữ client
-thuần. runId đặt vào `rowKey` + payload (tiền lệ 31-e: không đè evt.runId vì
-FK là kim tuyến AgentRunRecord).
+Ghi chú H4 (0.2): đường deploy LÊN ACTIVE duy nhất là train (R7) — spec-draft
+PUT chỉ lưu nháp. Nên hook tại train route khi `result.active && useDraft`;
+client chỉ THÊM trường `origin` (tùy chọn, whitelist 'evo-deploy') qua chuỗi
+deployEvoArchitecture → saveDraft → trainBrain — observation vẫn 100% server-
+side. runId BrainSearchRun đặt vào `rowKey` + payload (tiền lệ 31-e: không đè
+evt.runId vì FK là kim tuyến AgentRunRecord).
+
+Ghi chú H7 (0.2): llm.ts là module nền — import ledger qua dynamic import()
+tại call-site (tiền lệ reward.ts/agent-run-tracker, chống chu trình tĩnh).
+Throttle `observeEventThrottled` thêm vào ledger.ts (in-memory theo
+`${kind}:${throttleKey}`, mặc định 10') — test được ở r122.
 
 ### C.2 OBS-P6 — Alert rules thế hệ 2 (5 rule, precedent dedupe + markAlerted)
 
-| Rule | Điều kiện (đề xuất — chốt §7) | Hành động |
+| Rule | Điều kiện (chốt §7 theo khuyến nghị — ngưỡng bám hằng số sẵn có) | Hành động |
 |---|---|---|
-| `evo-stuck` | BrainSearchRun status 'running' + heartbeat stale > 60s (đúng ngưỡng sweep) HOẶC sweep đã đánh failed | obs.alert + summary "worker chết/restart" |
-| `eval-starvation` | eval.run end có refusalRate = 100% trong ≥ 2 run liên tiếp HOẶC label Positive = 0 | obs.alert "não không thể thức tỉnh — thiếu nhãn positive" |
-| `train-gate-repeat` | brain.train end với gate-block ≥ 3 lần / não / 24h | obs.alert "đốt compute thử train mà gate luôn chặn — xem dữ liệu thay vì thử tiếp" |
-| `provider-degraded` | model.failover cùng (from,errorTag) ≥ 3 lần / 1h | obs.alert "provider/key lỗi lặp — kiểm tra policy upstream (tiền lệ Zen 403)" |
-| `evo-budget-burn` | search.session end có nAbandoned/nCandidates > 50% | obs.alert "Q2 bỏ chấm quá nửa — ngân sách ứng viên lệch" |
+| `evo-stuck` | BrainSearchRun status='running' + heartbeat stale > 5 phút (an toàn: candidate train thực tế < 60s — Q2;補 sung cho job-stale 30') | obs.alert "EVO worker chết/kẹt — nobody polled" |
+| `eval-starvation` | ≥ 2 EvalRun completed LIÊN TIẾP gần nhất đều refusalCount ≥ caseCount > 0 (100% refusal) | obs.alert "não không thể thức tỉnh — eval toàn refusal (tiền lệ R33: Positive=0/44)" |
+| `train-gate-repeat` | kind brain.train phase end với trained=false ≥ 3 lần / não / 24h (parse payloadJson) | obs.alert "đốt compute thử train mà gate luôn chặn — xem dữ liệu thay vì thử tiếp" |
+| `provider-degraded` | kind model.failover cùng (provider, model) ≥ 3 lần / 1h | obs.alert "provider/model lỗi lặp — kiểm tra policy upstream (tiền lệ Zen 403)" |
+| `evo-budget-burn` | kind search.session end có nAbandoned ≥ 3 VÀ nAbandoned/candidatesMax > 50% | obs.alert "Q2 bỏ chấm quá nửa — ngân sách ứng viên lệch" |
 
 ### C.3 OBS-P7 — Impact tracker neo thứ 2 (proposal.apply)
 
@@ -241,15 +271,15 @@ P5 và P6 có thể gộp 1 đợt triển khai nếu user duyệt cả hai.
 
 ---
 
-## 7. CÂU HỎI MỞ CHỜ USER CHỐT
+## 7. DANH SÁCH CHỐT — ☑ TẤT CẢ THEO KHUYẾN NGHỊ (user chỉ thị 2026-10-18: "Câu hỏi thì theo đề xuất của bạn hết đi, tiến hành bổ sung giao thức quan sát")
 
-| # | Câu hỏi | Khuyến nghị |
-|---|---|---|
-| Q-V3-1 | Triển khai ngay OBS-P5 (hooks) hay chờ? | Triển khai ngay — additive, overhead 0 khi cờ off, cùng luận điệu Q1 V2 (ledger rỗng chạy vô hại) |
-| Q-V3-2 | `kb.consult` chi tiết mức nào? | Hash statement + metadata (RO-V3-1), KHÔNG lưu nội dung câu hỏi |
-| Q-V3-3 | Ngưỡng 5 rule P6 chốt như đề xuất C.2? | Theo đề xuất (số liệu đều lấy từ hằng số hiện có); tinh chỉnh sau 1 tuần chạy thật |
-| Q-V3-4 | Impact neo EVO-deploy (P7) cần window gì? | Giữ nguyên cơ chế Q5 V2 (snapshot ngày liền trước/sau ±3 ngày) — trung thực với nguồn dữ liệu |
-| Q-V3-5 | mission-watch kênh 6 BRAIN/EVO có cần không? | TÙY — timeline UI đã live-poll 2,5s; chỉ thêm nếu user hay theo dõi mission bằng terminal |
+| # | Câu hỏi | Khuyến nghị | Trạng thái chốt |
+|---|---|---|---|
+| Q-V3-1 | Triển khai ngay OBS-P5 (hooks) hay chờ? | Triển khai ngay — additive, overhead 0 khi cờ off, cùng luận điệu Q1 V2 (ledger rỗng chạy vô hại) | ☑ CHỐT triển khai ngay (P5+P6 gộp 1 đợt) |
+| Q-V3-2 | `kb.consult` chi tiết mức nào? | Hash statement + metadata (RO-V3-1), KHÔNG lưu nội dung câu hỏi | ☑ CHỐT hash (SHA-256 12 ký tự) + metadata |
+| Q-V3-3 | Ngưỡng 5 rule P6 chốt như đề xuất C.2? | Theo đề xuất (số liệu đều lấy từ hằng số hiện có); tinh chỉnh sau 1 tuần chạy thật | ☑ CHỐT theo C.2 (hiệu chỉnh 0.2: evo-stuck 5 phút) |
+| Q-V3-4 | Impact neo EVO-deploy (P7) cần window gì? | Giữ nguyên cơ chế Q5 V2 (snapshot ngày liền trước/sau ±3 ngày) — trung thực với nguồn dữ liệu | ☑ CHỐT cùng cơ chế Q5 V2 (anchor 'evo-deploy') |
+| Q-V3-5 | mission-watch kênh 6 BRAIN/EVO có cần không? | TÙY — timeline UI đã live-poll 2,5s; chỉ thêm nếu user hay theo dõi mission bằng terminal | ☑ CHỐT KHÔNG thêm kênh 6 — theo nguyên tắc đứng mới (giao thức cho trợ lý vận hành): trợ lý quan sát qua timeline API + SQL read-only đã có; UI live-poll là phần bù |
 
 ---
 
