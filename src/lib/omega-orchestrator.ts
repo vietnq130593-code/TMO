@@ -916,16 +916,42 @@ export async function dispatchAgentsParallel(params: {
 }> {
   const { tasks, parentAgentName = 'Omega', sessionId = null, parentRunId = null } = params
   const MAX_PARALLEL = 4 // cap số task/lần call — giờ là cap chiều DÀI hàng đợi tuần tự (R14), không phải concurrency
-  const valid = (Array.isArray(tasks) ? tasks : [])
+  const allValid = (Array.isArray(tasks) ? tasks : [])
     .filter(t => t && typeof t.agent === 'string' && t.agent.trim() && typeof t.task === 'string' && t.task.trim())
     .slice(0, MAX_PARALLEL)
 
-  if (valid.length === 0) {
+  if (allValid.length === 0) {
     return {
       success: false, mode: 'fan_out', total: 0, succeeded: 0, failed: 0, tokensUsed: 0,
       results: [], conflicts: [],
       merged: 'Không có task hợp lệ — mỗi task cần {"agent": "TÊN", "task": "nhiệm vụ cụ thể"} (tối đa 4 task/lần).',
     }
+  }
+
+  // ===== R41 — DEDUPE CÙNG AGENT TRONG 1 LẦN GỌI (user directive 2026-10-18:
+  // "khi gọi Omega vẫn có trường hợp gọi 2 agent mà 2 agent cùng là 1 agent —
+  // lập kế hoạch gọi nhiều agent được, nhưng mỗi lượt làm việc chỉ 1 agent").
+  // Hiện tượng: Omega (LLM) lập plan chứa 2+ task TRÙNG TÊN agent (vd 2×
+  // SENTINEL) → hệ thống cũ nhận cả 2, chạy tuần tự 2 sub-agent cùng tên trong
+  // 1 lần gọi → UI log "gửi 2 agent" trong khi thực chất là 1 agent chạy 2
+  // lượt. Giờ: MỖI agent chỉ 1 task/lượt — task trùng bị HOÃN (không chạy,
+  // không tiêu token), báo rõ trong results để LLM cha re-dispatch ở chu kỳ
+  // sau nếu còn cần. Agent khác nhau vẫn chạy tuần tự đầy đủ (R14 pool 1-slot
+  // giữ nguyên). =====
+  const seenAgents = new Set<string>()
+  const valid: typeof allValid = []
+  const deferredSameAgent: Array<{ agent: string; task: string }> = []
+  for (const t of allValid) {
+    const key = t.agent.trim().toLowerCase()
+    if (seenAgents.has(key)) {
+      deferredSameAgent.push({ agent: t.agent.trim(), task: t.task.slice(0, 120) })
+      continue
+    }
+    seenAgents.add(key)
+    valid.push(t)
+  }
+  if (deferredSameAgent.length > 0) {
+    console.warn(`[OmegaOrchestrator] R41 DEDUPE: hoãn ${deferredSameAgent.length} task trùng agent trong 1 lượt (${deferredSameAgent.map(d => d.agent).join(', ')}) — mỗi agent 1 task/lượt, task thừa để chu kỳ sau`)
   }
 
   console.log(`[OmegaOrchestrator] FAN-OUT: ${valid.length} sub-agent — TUẦN TỰ: mỗi lượt 1 sub-agent, hoàn tất (kết quả + evaluation) mới tới kế tiếp (user directive R14, ghi đè 2026-10-29b) (${valid.map(t => t.agent).join(', ')}) theo yêu cầu của ${parentAgentName}`)
@@ -1002,11 +1028,25 @@ export async function dispatchAgentsParallel(params: {
     }
   }
 
+  // R41 — task bị hoãn vì trùng agent: vào results với endedBy riêng để LLM cha
+  // biết task nào CHƯA chạy (không nhầm là đã làm + fail) và re-dispatch chu kỳ sau.
+  for (const d of deferredSameAgent) {
+    results.push({
+      agent: d.agent,
+      success: false,
+      report: '',
+      tokensUsed: 0,
+      toolCalls: 0,
+      endedBy: 'deferred_same_agent',
+      error: `HOÃN — agent "${d.agent}" đã có 1 task khác trong lượt gọi này (mỗi agent 1 task/lượt, mỗi lượt làm việc 1 agent — user directive R41). Task này KHÔNG chạy. Hãy dispatch lại ở chu kỳ/lượt sau nếu còn cần.`,
+    })
+  }
+
   const failed = results.length - succeeded
   const summaryLines = [
-    `FAN-OUT ${results.length} sub-agent tuần tự (mỗi lượt 1) — ${succeeded} đạt / ${failed} chưa đạt · ${tokensUsed} tokens${conflicts.length > 0 ? ` · ⚠️ ${conflicts.length} xung đột tiềm năng` : ''}`,
+    `FAN-OUT ${results.length} sub-agent tuần tự (mỗi lượt 1) — ${succeeded} đạt / ${failed} chưa đạt · ${tokensUsed} tokens${deferredSameAgent.length > 0 ? ` · ⏳ ${deferredSameAgent.length} task HOÃN (trùng agent trong 1 lượt — R41)` : ''}${conflicts.length > 0 ? ` · ⚠️ ${conflicts.length} xung đột tiềm năng` : ''}`,
     ...results.map(r =>
-      `${r.success ? '✅' : '❌'} ${r.agent}: ${(r.error && !r.report ? r.error : (r.report || r.error || '(không có báo cáo)')).slice(0, 600)}${r.report && r.error ? `\n   ⚠️ ${r.error.slice(0, 200)}` : ''}`,
+      `${r.success ? '✅' : (r.endedBy === 'deferred_same_agent' ? '⏳' : '❌')} ${r.agent}: ${(r.error && !r.report ? r.error : (r.report || r.error || '(không có báo cáo)')).slice(0, 600)}${r.report && r.error ? `\n   ⚠️ ${r.error.slice(0, 200)}` : ''}`,
     ),
   ]
   if (conflicts.length > 0) {

@@ -180,7 +180,14 @@ import type { GoalLoopCheckpoint, GoalLoopDurableHooks } from '@/lib/goal-loop-d
 // B-03 modelsUsedThisRun persist qua checkpoint (dominantModel đủ chu kỳ sau
 // resume) — thấy nhau với goal-loop-durable-types.modelsUsed (optional field,
 // checkpoint cũ không có → Map rỗng như cũ).
-export const GOAL_LOOP_CODE_REV = 'fbp6w1'
+// r41w1 (R41 — user directive 2026-10-18 "gọi 2 agent mà 2 agent cùng là 1
+// agent" + "không còn nhịp"): FIX-2 dedupe cùng agent trong fan-out batch
+// (delegation trùng tên agent bị HOÃN pre-flight — mỗi agent 1 task/lượt,
+// R14 tuần tự giữ nguyên cho agent khác nhau) · FIX-3 chống chip "Không còn
+// nhịp" giả pha AUTO-ESCALATE (thought TRƯỚC consultOmega #1+#2 + 
+// markRunAwaitingDelegation/clear quanh auto-apply dispatchAgentByOmega qua
+// try/finally) · FIX-4 prompt hint quy tắc mỗi-agent-1-task/lượt.
+export const GOAL_LOOP_CODE_REV = 'r41w1'
 
 /** Gọn args để nhét vào working memory (chống phình) */
 function compactToolArgs(args: Record<string, unknown>, maxLen = 120): string {
@@ -900,7 +907,7 @@ function buildOrchestrationProtocol(hasDispatch: boolean, hasCreate: boolean): s
   lines.push('- Escalate xong: LÀM THEO tư vấn của Omega (đổi cách tiếp cận / điều agent khác / dùng tool theo hướng dẫn mới) — không lặp lại cách cũ đã fail.')
   if (hasDispatch) {
     lines.push('- Điều động agent BẤT KỲ trong Agent Roster: tool_call: dispatch_agent({"agent": "TÊN", "task": "nhiệm vụ cụ thể", "context": "..."}) — agent chạy tự chủ, trả báo cáo nén (context của bạn không phình). Điều LÂU DÀI vào team: thêm {"duration": "long_term", "team": "code", "position": "G4"}.')
-    lines.push('- NHIỀU việc ĐỘC LẬP: tool_call: dispatch_agents_parallel({"tasks": [{"agent": "MEGATRON", "task": "..."}, {"agent": "SENTINEL", "task": "..."}]}) — tối đa 4 task/lần, chạy TUẦN TỰ: mỗi lượt 1 sub-agent hoàn tất mới tới kế tiếp (user directive R14, thay chế độ 3-đồng-thời 2026-10-29b để tránh lỗi đồng thời), kết quả hợp nhất về 1 báo cáo; xung đột (cùng đụng 1 file) được liệt kê trong "conflicts" — tự phân xử.')
+    lines.push('- NHIỀU việc ĐỘC LẬP: tool_call: dispatch_agents_parallel({"tasks": [{"agent": "MEGATRON", "task": "..."}, {"agent": "SENTINEL", "task": "..."}]}) — tối đa 4 task/lần, chạy TUẦN TỰ: mỗi lượt 1 sub-agent hoàn tất mới tới kế tiếp (user directive R14, thay chế độ 3-đồng-thời 2026-10-29b để tránh lỗi đồng thời), kết quả hợp nhất về 1 báo cáo; xung đột (cùng đụng 1 file) được liệt kê trong "conflicts" — tự phân xử. QUY TẮC MỖI AGENT 1 TASK/LƯỢT (R41): KHÔNG lập 2 task cho cùng 1 agent trong 1 lần gọi — task trùng agent bị hệ thống HOÃN tự động (endedBy "deferred_same_agent", không tiêu token); việc còn lại của agent đó hãy để chu kỳ sau hoặc giao agent khác.')
   }
   if (hasCreate) {
     lines.push('- Hệ thống THIẾU agent có kỹ năng phù hợp (đã kiểm tra Agent Roster): tool_call: create_agent({"name": "...", "description": "mô tả vai trò", "instruction": "system prompt chi tiết", "model": "space-bunny-free", "avatar": "🤖", "temperature": 0.7, "maxTokens": 4096, "tools": ["file_read", "..."]}) — agent mới hiện trong module Agents, giao việc NGAY qua dispatch_agent.')
@@ -4592,7 +4599,29 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             ? 0
             : Math.floor(budgetForDelegation / SUBAGENT_TOKEN_ESTIMATE) + 1
           console.log(`[GoalLoop] ${agentName} DELEGATION FAN-OUT: ${delegationIdxs.length} delegation trong 1 batch → hàng đợi FIFO pool 1-slot, thực thi TUẦN TỰ (sub-agent trước hoàn tất mới tới kế tiếp — user directive R14), cap ${maxLaunch} theo budget`)
+          // R41 — DEDUPE CÙNG AGENT trong 1 batch (user directive 2026-10-18:
+          // "gọi 2 agent mà 2 agent cùng là 1 agent" — LLM cha đôi khi phát 2
+          // tool call delegate/dispatch TRÙNG agent trong cùng 1 lượt). Mỗi
+          // agent chỉ 1 delegation/lượt: delegation trùng (rank ≥ 2 cùng tên
+          // agent) bị HOÃN qua pre-flight — agent khác nhau vẫn chạy tuần tự
+          // đủ (R14 pool 1-slot giữ nguyên).
+          const seenDelegationAgents = new Set<string>()
           for (const [delegationRank, { tc, i }] of delegationIdxs.entries()) {
+            const targetAgentRaw = String(tc.args?.agent ?? tc.args?.agentName ?? '').trim()
+            const targetKey = targetAgentRaw.toLowerCase()
+            if (targetKey && seenDelegationAgents.has(targetKey)) {
+              if (agentSessionId) {
+                // 2026-10-27 (user directive phiên 3) — DELEGATION LOG ⏳
+                const t = buildDelegationRefusedThought(cycle, agentName, tc, `trùng agent "${targetAgentRaw}" đã có delegation khác trong lượt này (mỗi agent 1 task/lượt — R41)`)
+                if (t) recordAgentThought(agentSessionId, t, totalIterations)
+              }
+              delegationPromises.set(i, Promise.resolve({
+                tcIdx: i,
+                preFlightFail: `Từ chối delegate (thứ ${delegationRank + 1} trong batch) — agent "${targetAgentRaw}" đã có 1 delegation khác trong lượt này. Mỗi lượt làm việc chỉ 1 agent (user directive R41): delegation ĐẦU của agent này đã được xếp hàng chạy; task còn lại hãy gọi lại ở CHU KỲ SAU.`,
+              }))
+              continue
+            }
+            if (targetKey) seenDelegationAgents.add(targetKey)
             if (delegationRank >= maxLaunch) {
               // Vượt cap budget → pre-flight fail cho delegation này (kết quả
               // vẫn về đúng vị trí message — KHÔNG sập batch).
@@ -5690,6 +5719,13 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           .slice(-5)
           .map(e => `- ${e.tool}: ${e.text.slice(0, 120)}`)
           .join('\n')
+        // R41 — thought TRƯỚC khi consult (chống chip "Không còn nhịp" giả):
+        // consultOmega là LLM call có thể kéo dài vài phút; trước đây thought
+        // duy nhất ghi SAU khi consult trả về → trong lúc chờ panel không có
+        // event mới (≥5' → chip "Không còn nhịp" dù job vẫn có nhịp DB qua
+        // runWithBatchHeartbeat). Ghi dấu "đang hỏi" refresh event clock + cho
+        // người quản trị biết agent đang làm gì.
+        recordAgentThought(agentSessionId, `🧠 Chu kỳ ${cycle} chưa kiểm định được (verified=false) — đang hỏi Omega orchestrator tư vấn căn nguyên + hướng đi (có thể mất 1-2 phút)...`, totalIterations)
         const consult = await runWithBatchHeartbeat(() => consultOmega({
           problem: `Agent "${agentName}" đã làm ${cycle} chu kỳ nhưng trọng tài độc lập kết luận: mục tiêu CHƯA hoàn thành và kết quả CHƯA được kiểm định bằng tool (verified=false). Căn nguyên theo trọng tài: ${verdict.rootCause || '(không rõ)'}. Còn thiếu: ${verdict.missing.join('; ') || '(không liệt kê)'}. Tool fail gần nhất:\n${failedRecent || '(không có tool fail nào)'}`,
           context: `Mục tiêu: ${userMessage.slice(0, 800)}\nKế hoạch trọng tài đề xuất cho chu kỳ sau: ${verdict.nextPlan.join('; ') || '(trống)'}\nAgent này có tools: ${effectiveTools.slice(0, 30).join(', ')}`,
@@ -5724,6 +5760,14 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           // tiêu token thật. Fail-open: auto-dispatch lỗi → giữ advisory thuần.
           const suggested = consult.advisory?.dispatchAgent?.trim()
           if (suggested && tokenLeft() > REPORT_RESERVE_TOKENS + 15_000 && !isCancelled()) {
+            // R41 — đánh dấu "đang chờ sub-agent" quanh auto-dispatch (chống
+            // chip "Không còn nhịp" GIẢ): dispatchAgentByOmega chạy NGOÀI tool
+            // batch → markRunAwaitingDelegation của R18 (chỉ phủ tool batch)
+            // KHÔNG bắt được quãng này — sub-agent rescue có thể chạy tới 15'
+            // trong khi panel cha im lặng → chip sai. Job DB vẫn tươi nhịp qua
+            // runWithBatchHeartbeat (r57w1 B4) — chỉ thiếu tín hiệu UI. Hoàn
+            // tác ở MỌI lối thoát (try/finally — kể cả throw fail-open).
+            markRunAwaitingDelegation(agentSessionId, runId)
             try {
               const { dispatchAgentByOmega } = await import('@/lib/omega-orchestrator')
               // IMP-2 (G — điều tra Task G): template rescue mở-ended ("Xử lý giúp
@@ -5757,6 +5801,10 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
                 recordAgentThought(agentSessionId, `🚀 AUTO-APPLY advisory: Omega điều ${dispatched.agent} xử lý giúp — báo cáo kèm tư vấn chu kỳ ${cycle + 1}`, totalIterations)
               }
             } catch { /* fail-open — advisory thuần vẫn inject */ }
+            finally {
+              // R41 — hoàn tác cờ "đang chờ sub-agent" ở MỌI lối thoát
+              clearRunAwaitingDelegation(agentSessionId, runId)
+            }
           }
         }
       } catch { /* fail-open — không escalate được thì theo kế hoạch evaluator */ }
@@ -5775,6 +5823,9 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         if (!omegaConsulted && tokenLeft() > REPORT_RESERVE_TOKENS + 8_000) {
           try {
             const { consultOmega } = await import('@/lib/omega-orchestrator')
+            // R41 — thought TRƯỚC consult (chống chip "Không còn nhịp" giả —
+            // mirror AUTO-ESCALATE #1 phía trên)
+            recordAgentThought(agentSessionId, `🧠 Phát hiện lặp hành động không tiến triển (chu kỳ ${cycle}) — đang hỏi Omega orchestrator cách tiếp cận mới (có thể mất 1-2 phút)...`, totalIterations)
             const consult = await runWithBatchHeartbeat(() => consultOmega({
               problem: `Agent "${agentName}" bị phát hiện LẶP LẠI hành động không tiến triển (fingerprint chu kỳ ${cycle} trùng chu kỳ trước — dấu hiệu bế tắc kinh điển: agent đang xoay vòng cùng cách tiếp cận đã fail).`,
               context: `Mục tiêu: ${userMessage.slice(0, 800)}\nChẩn đoán trọng tài: ${lastVerdict?.rootCause || '(không rõ)'}\nCòn thiếu: ${lastVerdict?.missing.join('; ') || '(không liệt kê)'}\nAgent này có tools: ${effectiveTools.slice(0, 30).join(', ')}`,
