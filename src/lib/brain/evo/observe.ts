@@ -8,9 +8,10 @@
  * — audit 31-a). Kind-name single-source: src/lib/observation/kinds.ts
  * (doctrine #9) — `search.session` + `search.candidate` (group 'search').
  *
- * `proposal.apply` CỐ TÌNH KHÔNG phát ở đây (31-e ngoài phạm vi): đường áp
- * dụng đề xuất sống trong client components (evolve-tab.tsx → brain-tab
- * applyEvoHiddenToDraft / deployEvoArchitecture) do main session sở hữu.
+ * `proposal.apply` KHÔNG phát ở đây (module giữ thuần cho kinds `search.*`):
+ * từ R34 hook H4 phát SERVER-SIDE tại POST /api/brain/train khi kiến trúc
+ * nháp trở thành ACTIVE (origin 'evo-deploy' + searchRunId thread qua chuỗi
+ * client deployEvoArchitecture → saveDraft → trainBrain — xem route).
  *
  * Convention payload (theo precedent observeBrainTrain — kinds.ts không pin
  * payload từng kind, chuẩn của codebase là emitter tự ghi shape + field

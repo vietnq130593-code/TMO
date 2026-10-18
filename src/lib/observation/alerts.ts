@@ -3,10 +3,11 @@
  * BLUEPRINT-HYPERNAS-P1-P5 §4.2-2b) — CẢNH BÁO CHỦ ĐỘNG
  * ==========================================================================
  *
- * `runAlertChecks()` — 6 rule (4 cảnh báo + 1 dọn mồ côi Task 32 + 1 repair
- * R4) chạy trong tick 10 phút của worker impact.ts (CÙNG setInterval —
- * KHÔNG timer mới; gọi NGAY SAU pass impact; static import an toàn vì
- * alerts KHÔNG import ngược impact):
+ * `runAlertChecks()` — 11 rule (thế hệ 1: 4 cảnh báo + 1 dọn mồ côi Task 32
+ * + 1 repair R4; thế hệ 2 OBS-P6 R34: evo-stuck + eval-starvation +
+ * train-gate-repeat + provider-degraded + evo-budget-burn) chạy trong tick
+ * 10 phút của worker impact.ts (CÙNG setInterval — KHÔNG timer mới; gọi NGAY
+ * SAU pass impact; static import an toàn vì alerts KHÔNG import ngược impact):
  *
  *   1. STALL (D1.1 — phát stall trong ≤ 15 phút): AgentRunRecord
  *      status='running' mà mốc hoạt động cuối (createdAt — AgentRunRecord
@@ -54,8 +55,11 @@
  *   - Lớp query: obs.alert 1 giờ gần nhất trùng (rule, targetId) trong
  *     payload — chính thức qua restart.
  * Phần quyết định tách HẰNG pure (shouldAlertStall/shouldAlertTokenBurn/
- * isHeartbeatStale/shouldAlertCronOverdue) — rule engine chỉ lo query + IO;
- * test r99 pin biên trực tiếp. Mọi DB op try/catch — worker KHÔNG throw.
+ * isHeartbeatStale/shouldAlertCronOverdue + thế hệ 2: shouldAlertEvoStuck/
+ * shouldAlertEvalStarvation/shouldAlertTrainGateRepeat/
+ * shouldAlertProviderDegraded/shouldAlertEvoBudgetBurn) — rule engine chỉ lo
+ * query + IO; test r99/r122 pin biên trực tiếp. Mọi DB op try/catch —
+ * worker KHÔNG throw.
  */
 
 import { db } from '@/lib/db'
@@ -809,8 +813,10 @@ async function checkChatTraceLoss(now: number): Promise<void> {
 // ==================== ENTRY (gọi từ tick impact.ts) ====================
 
 /**
- * Chạy toàn bộ 6 rule (4 cảnh báo + 1 dọn mồ côi + 1 repair) — gọi từ tick
- * worker impact.ts mỗi 10 phút.
+ * Chạy toàn bộ 11 rule (thế hệ 1: 4 cảnh báo + 1 dọn mồ côi + 1 repair; thế
+ * hệ 2 OBS-P6 R34: 5 rule evo-stuck/eval-starvation/train-gate-repeat/
+ * provider-degraded/evo-budget-burn) — gọi từ tick worker impact.ts mỗi
+ * 10 phút.
  * Cờ obs_alerts off → return NGAY (rẻ). Cờ obs_ledger off → console.warn vẫn
  * phát; sự kiện obs.alert tự no-op ở ledger (xem header). Fail-open tuyệt
  * đối: KHÔNG throw, KHÔNG log spam (tối đa 1 dòng console.error mỗi rule khi
@@ -832,6 +838,11 @@ export const ALERT_TRAIN_GATE_WINDOW_MS = 24 * 3600_000
 /** provider-degraded: cùng (provider, model) fail ≥ 3 lần / 1h. */
 export const ALERT_PROVIDER_DEGRADED_LIMIT = 3
 export const ALERT_PROVIDER_DEGRADED_WINDOW_MS = 60 * 60_000
+
+/** FB-OBSV3-R1-09.3 (R35 fixbug): cửa sổ evo-budget-burn TÁCH hằng riêng —
+ * trước R35 mượn ALERT_TRAIN_GATE_WINDOW_MS nên ai tinh chỉnh cửa sổ
+ * train-gate vô tình đổi cửa sổ budget-burn (coupling ngữ nghĩa không lý do). */
+export const ALERT_EVO_BUDGET_WINDOW_MS = 24 * 3600_000
 /** evo-budget-burn: nAbandoned ≥ 3 VÀ > 50% candidatesMax. */
 export const ALERT_EVO_BURN_MIN_ABANDONED = 3
 export const ALERT_EVO_BURN_RATIO = 0.5
@@ -922,7 +933,7 @@ async function checkEvalStarvation(now: number): Promise<void> {
     const runs = await db.evalRun.findMany({
       where: { status: 'completed' },
       orderBy: { startedAt: 'desc' },
-      take: 3,
+      take: 2, // FB-OBSV3-R1-09.1: đúng "2 run gần nhất" — pure chỉ dùng 2
       select: { id: true, caseCount: true, refusalCount: true, answeredCount: true, startedAt: true },
     })
     if (runs.length < 2) return
@@ -969,7 +980,13 @@ async function checkTrainGateRepeat(now: number): Promise<void> {
         const p = JSON.parse(e.payloadJson) as {
           phase?: string; brain?: string; trained?: boolean; resultError?: string | null; error?: string | null
         }
-        if (p.phase !== 'end' || typeof p.brain !== 'string' || p.trained === true) continue
+        if (p.phase !== 'end' || typeof p.brain !== 'string' || p.trained !== false) continue
+        // FB-OBSV3-R1-06: CHỈ đếm trained === false (gate chặn THẬT theo spec
+        // §C.2 "trained=false ≥3"). Trước R35 skip mỗi khi trained===true nên
+        // sự kiện end theo đường catch (payload KHÔNG có field trained —
+        // observeBrainTrain exception-path) bị đếm nhầm thành "gate chặn" →
+        // thông điệp alert sai chế độ lỗi (crash cần xem lỗi, không phải xử lý
+        // dữ liệu). Exception-path vẫn hiện timeline qua brain.train end.
         const cur = blockedByBrain.get(p.brain) ?? { count: 0, latestError: null }
         cur.count++
         if (cur.latestError === null) cur.latestError = p.resultError ?? p.error ?? null
@@ -1058,7 +1075,7 @@ async function checkProviderDegraded(now: number): Promise<void> {
 async function checkEvoBudgetBurn(now: number): Promise<void> {
   try {
     const events = await db.observationEvent.findMany({
-      where: { kind: 'search.session', ts: { gte: new Date(now - ALERT_TRAIN_GATE_WINDOW_MS) } },
+      where: { kind: 'search.session', ts: { gte: new Date(now - ALERT_EVO_BUDGET_WINDOW_MS) } },
       orderBy: { ts: 'desc' },
       select: { payloadJson: true, ts: true },
       take: 200,

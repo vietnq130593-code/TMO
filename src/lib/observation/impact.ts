@@ -255,12 +255,16 @@ export async function computeImpactEstimates(): Promise<number> {
 // ==================== IMPACT PASS 2 — NEO EVO-DEPLOY (OBS-P7 — R34) ====================
 
 /**
- * Chấm impact cho các sự kiện `proposal.apply` (kiến trúc trở thành ACTIVE —
- * OBS-P5 H4 phát) đủ tuổi ≥ 24h mà chưa chấm. Cùng cơ chế Q5 §7 như neo 1
- * (TuningChangeLog): snapshot ngày liền trước vs liền sau (±3 ngày mỗi bên,
- * cần đủ 2 bên). Framing trung thực RO-6: correlation — KHÔNG claim nhân quả.
- * Dedup theo `evoDeploySeq` (seq sự kiện proposal.apply) trong payload
- * impact.estimate đã có. Trả số sự kiện đã ghi.
+ * Chấm impact cho các sự kiện `proposal.apply` (TRIỂN KHAI KIẾN TRÚC EVO —
+ * OBS-P5 H4 phát) đủ tuổi ≥ 24h mà chưa chấm. FB-OBSV3-R1-01 (R35 fixbug):
+ * CHỈ chấm sự kiện origin 'evo-deploy' (spec OBS-P7 "đo tác động TRIỂN KHAI
+ * kiến trúc EVO") — deploy editor-draft (origin 'editor') vẫn hiện timeline
+ * nhưng KHÔNG thành neo impact (trộn 2 loại deploy làm vỡ ngữ cảnh
+ * correlation). Cùng cơ chế Q5 §7 như neo 1 (TuningChangeLog): snapshot ngày
+ * liền trước vs liền sau (±3 ngày mỗi bên, cần đủ 2 bên). Framing trung
+ * thực RO-6: correlation — KHÔNG claim nhân quả. Dedup theo `evoDeploySeq`
+ * (seq sự kiện proposal.apply) trong payload impact.estimate đã có. Trả số
+ * sự kiện đã ghi.
  */
 export async function computeProposalApplyImpactEstimates(): Promise<number> {
   // FB-OBS-R1-11 precedent: obs_ledger off → không quét (dedup không nhúng
@@ -309,6 +313,9 @@ export async function computeProposalApplyImpactEstimates(): Promise<number> {
     try {
       meta = JSON.parse(prop.payloadJson) as typeof meta
     } catch { /* payload rác — vẫn chấm với meta rỗng (seq là khóa) */ }
+    // FB-OBSV3-R1-01: neo P7 đo TRIỂN KHAI EVO — bỏ qua deploy editor-draft
+    // (origin 'editor' / payload rác không origin) để không trộn 2 ngữ cảnh.
+    if (meta.origin !== 'evo-deploy') continue
     const kpis: KpiImpactEstimate[] = []
     for (const [kpiKey, arr] of byKpi) {
       const w = findDailyImpactWindow(arr, prop.ts)

@@ -1649,3 +1649,83 @@
 - **Kiểm chứng:** r110-B6 pass; các caller không truyền query (undefined) vẫn NULL như cũ.
 
 > **Ghi chú vận hành FB-BRAIN-D1 (R21):** (1) Máy user nhận fix bằng `git pull` rồi: nếu đang migrate-managed → `bun run db:deploy` (tạo bảng); nếu đang db push → `bun run db:push` (schema đã có sẵn bảng — 2 đường đều sống). (2) Corpus D1-v1 phạm vi: mọi lượt searchUserKB + mọi lượt rơi vào fallback dense-only (lý do) + mọi agentGraphQuery Cypher; kết quả CHI TIẾT fallback nằm ở diagnostics tool (ngoài corpus); searchModelKnowledge/writeback chưa instrument (chưa có production caller / thuộc LAYER 3 — bàn khi D3 cần). (3) r110 giờ 21 test — các file pin count khác không đổi (không thêm cờ/node/edge mới).
+
+---
+
+## ĐỢT FB-OBSV3 (R35 — 2026-10-18): rà soát giao thức fixbug trên đợt triển khai OBSERVATION-V3 P5→P8 (commit 5563fc8)
+
+> Scope: 21 file của 5563fc8 (kinds/ledger/alerts/impact + hooks H1-H7 + r122 + docs v1.6/0.2). Vòng R1 = auditor độc lập subagent Explore (10 phát hiện + 9 sai-kỳ-vọng tự bác) + coordinator chấm chéo (bác 2, bổ sung 3) + full-suite gate (bắt thêm fail-khi-chạy-chung). Vòng R2 = verify 0 phát hiện mới → khép. Chi tiết biên bản: fixbug.md §6 đợt FB-OBSV3.
+
+### BUG2-277 · H·P2 — H4 phát `proposal.apply` cho MỌI train active, không chỉ train theo nháp (spec §C.1 `result.active && useDraft`) → ô nhiễm neo impact P7
+- **Hiện tượng (auditor R1-01):** `train/route.ts` emitProposalApply guard chỉ `if (!result.active) return` — retrain weights THƯỜNG (nút train không draft, useDraft=false) thành active cũng phát `proposal.apply` origin 'editor'; pass 2 impact (impact.ts) query MỌI proposal.apply với `anchor:'evo-deploy'` gắn cứng → sau 24h retrain thường bị chấm KPI window như deploy EVO.
+- **Tác động:** tín hiệu P7 "triển khai kiến trúc EVO có tốt hơn không" trộn với retrain thường → kết luận correlation sai ngữ cảnh; kind mất nghĩa phân biệt.
+- **Fix:** (1) route guard `if (!result.active || !override) return` (override != null ⟺ useDraft + draft hợp lệ — về đúng spec); (2) pass 2 `if (meta.origin !== 'evo-deploy') continue` — chỉ neo deploy EVO thật. Blueprint 0.3 ghi chú H4 cập nhật.
+- **Kiểm chứng:** r122-H2 mới (2 deploy cùng đủ tuổi/khung snapshot, khác origin → editor 0 chấm, evo-deploy 1 chấm) pass; full suite 1985/0 fail. DB thật chưa có event proposal.apply nào (R34 E2E chưa từng thắng gate) — không cần dọn dữ liệu.
+
+### BUG2-278 · C·P3 — proposal.apply thiếu `searchRunId` (id BrainSearchRun) trong rowKey + payload — đứt kim tuyến "session EVO nào sinh ra kiến trúc đang ACTIVE"
+- **Hiện tượng (auditor R1-02):** blueprint Ghi chú H4 yêu cầu runId BrainSearchRun vào rowKey + payload (tiền lệ 31-e); code chỉ có `rowKey: brain#v{version}`.
+- **Tác động:** không trả lời được "search.session nào đẻ ra kiến trúc đang ACTIVE" — trái tinh thần kim tuyến của chính giao thức (search.* vẫn làm đúng).
+- **Fix:** client thread runId: evolve-tab `onDeployNow(hidden, run?.id ?? null)` (2 call-site: gợi ý + ứng viên tốt nhất) → brain-tab deployEvoArchitecture → saveDraft → trainBrain body `{searchRunId}`; route whitelist (string 1-64 ký tự) → `rowKey: brain#v{version}@{searchRunId}` + payload.searchRunId.
+- **Kiểm chứng:** tsc 0 (chuỗi 4 tầng type an toàn); E2E đường deploy cần session EVO thắng gate + train thắng CV — chưa có dữ liệu (trung thực, same-gap như R34); đơn giản hoá được nhờ cùng 1 chuỗi với origin 'evo-deploy' đã E2E-verify R34.
+
+### BUG2-279 · D·P3 — JSDoc alerts.ts stale "6 rule" sau khi engine chạy 11 (thế hệ 2 R34 không cập nhật header)
+- **Hiện tượng (auditor R1-03):** header dòng 6 + JSDoc runAlertChecks (dòng ~815) nói "6 rule"; engine thực chạy 11 check; danh sách pure helpers thiếu 5 hàm thế hệ 2.
+- **Tác động:** người đọc sau hiểu sai phạm vi rule engine (đặc biệt khi thêm rule mới hoặc soi alert thiếu).
+- **Fix:** cả 2 JSDoc cập nhật "11 rule" + liệt kê 5 pure helper thế hệ 2 + nguồn test r99/r122.
+- **Kiểm chứng:** đọc lại diff — khớp code (11 check trong runAlertChecks).
+
+### BUG2-280 · D·P3 — header evo/observe.ts stale "proposal.apply CỐ TÌNH KHÔNG phát… client components" (sai kiến trúc sau R34)
+- **Hiện tượng (auditor R1-04):** comment viết thời 31-e; R34 đã phát proposal.apply server-side tại train route — file được sửa trong cùng commit mà comment cũ giữ nguyên.
+- **Tác động:** người đọc sau hiểu sai kiến trúc (đường phát sự kiện nằm đâu).
+- **Fix:** header mô tả đúng: module giữ thuần cho search.*; H4 phát server-side tại train route.
+- **Kiểm chứng:** đọc lại — khớp call-site thật.
+
+### BUG2-281 · C·P3 — dọn map throttle là SOFT-CAP (chỉ xoá khóa >7 ngày) — 513 khóa trẻ đều được giữ → map lớn vô hạn, khác mô tả "dọn map >512 khóa"
+- **Hiện tượng (auditor R1-05):** `ledger.ts` cũ: `if (size > 512) { xoá khóa ts > 7 ngày }` — nếu 513+ khóa đều phát trong 7 ngày qua thì 0 khóa bị xoá, map tiếp tục lớn (mỗi emit lại quét vô ích). Cardinality thực thấp (model.failover provider:model:errTag) nên tác động bộ nhớ nhỏ — nhưng hành vi khác mô tả + không có test pin.
+- **Fix:** 2 bước: (1) TTL 7 ngày như cũ; (2) vẫn vượt `OBS_THROTTLE_MAP_MAX=512` → evict CŨ NHẤT theo ts xuống đúng trần (hard cap). Trade-off ghi rõ: >512 khóa cùng active trong cửa sổ → evicted key phát lại lần sau (dư event, không mất tín hiệu — ưu tiên nuốt-ít-hơn-mất).
+- **Kiểm chứng:** r122-B3 mới (520 khóa → khóa ĐẦU evicted phát lại được, khóa MỚI NHẤT vẫn nuốt) pass.
+
+### BUG2-282 · C·P3 — train-gate-repeat đếm exception-path (payload thiếu field `trained`) thành "gate chặn" — thông điệp alert sai chế độ lỗi
+- **Hiện tượng (auditor R1-06):** rule 10 skip điều kiện `p.trained === true` → sự kiện brain.train end theo đường catch (observeBrainTrain exception-path — payload chỉ có phase/error) có `trained: undefined` → KHÔNG skip → đếm vào blockedCount. Spec §C.2: "trained=false ≥3".
+- **Tác động:** train crash-loop 3 lần (vd DB lỗi) phát alert "gate lặp — xử lý dữ liệu thay vì đốt compute" — chẩn đoán sai hướng (crash cần xem lỗi, không phải xử lý dữ liệu).
+- **Fix:** skip `p.trained !== false` — chỉ đếm gate-block thật; exception-path vẫn hiện timeline qua brain.train end (quan sát không mất).
+- **Kiểm chứng:** r122-E6 mới (3 event exception-path → 0 alert gate) pass; boot tick E2E sau restart phát đúng 3 alert train-gate với số liệu chỉ-gate (calibration_v3 5, surrogate 9, policy 8 — khớp đếm tay từ event thật).
+
+### BUG2-283 · H/D·P3 — sweep EvalRun mồ côi đóng sổ IM LẶNG (vỡ bất biến H1 "1 start + 1 end/run") + doc D1.5 overclaim
+- **Hiện tượng (auditor R1-07):** `sweepStaleEvalRuns` updateMany đánh failed không phát eval.run end → start mồ côi treo trong timeline; GIAO_THUC v1.6 D1.5 khai "EvalRun treo đều bị phát hiện trong 24h" nhưng sweep chỉ chạy trong tick (cờ obs_impact + auto_eval_kb) — tắt cờ là không ai quét; không có rule alert riêng cho EvalRun treo (asymmetric vs evo-stuck).
+- **Tác động:** trợ lý vận hành thấy start không có end → phải đoán; doc hứa hơn cơ chế thật.
+- **Fix:** (1) sweep find TRƯỚC (id + startedAt) → updateMany → phát `eval.run` end origin 'sweep' + swept:true + staleMinutes cho từng run (fail-open, export cho test); (2) D1.5 hiệu đính trung thực: nêu rõ điều kiện cờ + không có rule alert riêng EvalRun.
+- **Kiểm chứng:** r122-E9 mới (seed run running 3h → sweep → failed + event end origin sweep) pass.
+
+### BUG2-284 · C·P3 — runner early-return "no cases matched" không phát eval.run end — start mồ côi trên đường race hiếm
+- **Hiện tượng (auditor R1-08):** `runner.ts` nhánh cases.length===0 (case bị deactivate giữa route-create và runner-select) update failed + return, không emit end dù start đã phát.
+- **Tác động:** hiếm nhưng vỡ bất biến H1 đúng chỗ khó soi (run "không có gì" treo start).
+- **Fix:** phát eval.run end failed (error 'No active eval cases matched the filter', durationMs) trước return — mirror format end failed của catch path.
+- **Kiểm chứng:** r122-E8 mới (runEval với category không tồn tại → EvalRun failed + event end) pass.
+
+### BUG2-285 · G·P4 — cụm vệ sinh thế hệ 2 (3 mục fix + 2 mục auditor BÁC sau chấm chéo)
+- **09.1 fix:** eval-starvation `take: 3` nhưng pure chỉ dùng 2 → `take: 2` (bỏ dead fetch).
+- **09.3 fix:** evo-budget-burn mượn `ALERT_TRAIN_GATE_WINDOW_MS` làm cửa sổ → tách `ALERT_EVO_BUDGET_WINDOW_MS = 24h` riêng (ai tinh chỉnh train-gate vô tình đổi budget-burn).
+- **09.5 fix (doc):** blueprint Ghi chú H7 nói throttle key `${kind}:${throttleKey}` trong ledger — impl caller tự đặt khóa duy nhất (llm.ts `model.failover:{provider}:{model}:{errTag}`) → hiệu đính note 0.3 cho khớp impl (chức năng tương đương).
+- **09.2 BÁC (sai-kỳ-vọng auditor):** báo "provider-degraded query không orderBy → latestError là lỗi cũ nhất" — code CÓ `orderBy: { ts: 'desc' }` (alerts.ts:1012) → latestError đúng là event mới nhất; thêm r122-E7 pin hành vi đúng (3 event lỗi ts tăng dần → alert latestError = lỗi MỚI nhất) để auditor tương lai không nghi lại.
+- **09.4 BÁC (sai-kỳ-vọng auditor):** báo comment impact.ts:156 cụt "mất [m" — comment thật đầy đủ "[minDay, changeDay)" (auditor đọc bị cắt dòng).
+- **09.6 ghi nhận KHÔNG fix:** pass 2 quét lại payload impact.estimate mỗi tick khi có pending — precedent pass 1, bảng nhỏ trong thực tế, cap 50K; ghi nhận để bàn khi corpus lớn.
+
+### BUG2-286 · C5·P3 — test-gap: r122 chưa pin tầng emitter + biên throttle cốt lõi
+- **Hiện tượng (auditor R1-10):** r122 16 test không vacuous nhưng thiếu: (e) throttle hết cửa sổ phát lại; (f) dọn map >512; (g) exception-path không đếm rule 10; (b) H4 3 nhánh + whitelist; (c) H5; (d) H7 emitter khóa throttle.
+- **Fix (7 test mới r122 16→23):** B2 (hết cửa sổ phát lại — windowMs 60ms + sleep 90ms) · B3 (map hard-cap evict) · E6 (exception-path) · E7 (latestError mới nhất) · E8 (runner no-cases end) · E9 (sweep end origin sweep) · H2 (pass 2 chỉ neo evo-deploy).
+- **Còn hở (trung thực):** H4-emit/H5/H7-emitter ở tầng route/llm — test trực tiếp cần train-thắng-gate/LLM-fail thật (nặng); đã E2E-live ở R34 (eval.run/kb.consult/model.failover thật) + đợt này (eval.run start+end sau fix); H4 dương bản chờ dữ liệu đủ (Qdrant re-ingest — pending user).
+
+### BUG2-287 · C·P2 — (coordinator) r122 E2 fail khi chạy CHUNG full suite — test viết với giả định DB chỉ chứa dữ liệu mình seed (comment "DB test là BẢN COPY" hiểu sai ngữ cảnh gate)
+- **Hiện tượng (coordinator R1 — full-suite gate sau deploy):** quality-gate `--stage=tests` = 1 process bun test + 1 DB preload-copy cho 91 file; r77 (chạy ngay trước r122) seed EvalRun completed với startedAt = Date.now() lúc file đó chạy — MỚI hơn các mốc "20-30s TRƯỚC" mà E2 seed cho dương bản → cặp "2 run gần nhất" (orderBy startedAt desc) là của r77 (có answered) → alert không bao giờ phát → fail. R34 ghi "r122 16/16" vì chỉ chạy THEO NHÓM — chưa từng chạy chung full suite.
+- **Tác động:** gate full-suite đỏ từ commit 5563fc8 (không ai chạy để biết); vi phạm nguyên tắc test xác định được (C5) của chính repo.
+- **Fix:** E2 seed timestamp TƯƠNG LAI GẦN (+100s/+90s âm bản, +200s/+190s dương bản) — tự cô lập tuyệt đối theo trục thời gian, không đụng dữ liệu file khác, không đổi hành vi rule; comment mới giải thích đúng ngữ cảnh (các file test khác seed EvalRun gần đây hơn).
+- **Kiểm chứng:** r122+r89 chung 1 DB 38/38; full suite 1985/0 fail ×2 lần chạy liên tiếp.
+
+### BUG2-288 · C·P2 — (coordinator, NGOÀI scope OBS-V3 — stale pin từ R25) r89-E pin default `ui_brain_edit`='off' trong khi R25 (commit 496b676, user directive "editor hiện lại") đã đổi default 'on' → fail cả khi chạy riêng từ R25
+- **Hiện tượng (coordinator R1 — full-suite gate):** r89 ×2 fail; root-cause qua git blame: R25 đổi spec default 'off'→'on' (commit 496b676) mà không cập nhật pin r89-E; fail từ 2026-10-16 nhưng mọi đợt sau (R26-R34) chạy test theo NHÓM không gồm r89 → lọt qua 9 ngày. Lỗi lần chạy "r89 riêng" đầu tiên của coordinator còn dùng SAI tên file (r89-tuning-ui-flags.test.ts không tồn tại — bun test báo "filter không khớp" nhưng exit code khiến tưởng pass) — ghi lại làm dữ liệu chống-tự-tin.
+- **Tác động:** gate full-suite đỏ; ngược lại xác nhận code đúng ý user R25 (chỉ test stale).
+- **Fix (hạ tầng gate — được phép kèm vì là điều kiện tiên quyết để vòng fixbug này nghiệm thu "gate PASS"):** r89-E pin đúng R25: default ui_brain_edit 'on' (giữ ui_hitech 'off' + ui_synapse_fx 'on'); test thứ 2 đổi chiều set 'off' → reset → 'on' (default) + comment PIN UPDATE R25 đầy đủ.
+- **Kiểm chứng:** r89 riêng 15/15 (13 pass + 2 sửa pass); full suite 1985/0 fail.
+
+> **Sai-kỳ-vọng phía người rà (FB-OBSV3 R1 — dữ liệu chống tự tin):** (1) auditor R1-09.2 "provider-degraded thiếu orderBy" — bác (code có orderBy desc); (2) auditor R1-09.4 "comment cụt" — bác (đọc bị cắt dòng); (3) coordinator "r89 fail do pollution từ r81" — NHẦM: r89 fail cả khi chạy riêng (lần "riêng" đầu dùng sai tên file nên không chạy gì); r81 chỉ tái hiện sai lệch khi ghép cặp do các file đó có dependency riêng khi thiếu context full-suite; (4) 9 sai-kỳ-vọng auditor tự bác (ghi trong biên bản fixbug.md §6).

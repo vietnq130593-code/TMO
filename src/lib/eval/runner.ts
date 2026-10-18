@@ -207,6 +207,26 @@ export async function runEval(opts: RunEvalOptions): Promise<void> {
           completedAt: new Date(),
         },
       })
+      // FB-OBSV3-R1-08 (R35 fixbug): start đã phát ở route/auto-eval — phát
+      // end failed để timeline không treo start mồ côi (bất biến H1
+      // "1 start + 1 end/run"; đường tới nhánh này hiếm — race khi case bị
+      // deactivate giữa create và select — nhưng phải kín mọi đường).
+      try {
+        observeEvent({
+          actor: 'system:eval',
+          kind: 'eval.run',
+          table: 'EvalRun',
+          rowKey: runId,
+          summary: `Eval run LỖI — không còn case active khớp filter (0 case)`,
+          payload: {
+            phase: 'end',
+            status: 'failed',
+            runId,
+            error: 'No active eval cases matched the filter',
+            durationMs: Date.now() - evalT0,
+          },
+        })
+      } catch { /* fail-open — quan sát không được làm hỏng eval */ }
       console.warn(`[EvalRunner] Run ${runId}: no active cases matched (limit=${caseLimit}, categories=${categories?.join(',') ?? 'all'})`)
       return
     }

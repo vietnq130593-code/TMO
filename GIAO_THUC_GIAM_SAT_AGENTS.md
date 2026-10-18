@@ -85,7 +85,7 @@ WHERE timestamp > :windowStart GROUP BY agentRole, toolName, success;
 | D1.2 | 0 job kẹt quá hạn | 3 | Truy vấn job kẹt trả về 0 hàng |
 | D1.3 | 100% run thất bại có root-cause ghi nhận | 3 | Mỗi run failed/incomplete trong kỳ chấm có phân tích nguyên nhân trong worklog hoặc issue |
 | D1.4 | Run đốt > 500k token được cảnh báo & post-mortem | 3 | Có alert + bản ghi phân tích (vd: run 973k token vòng 18) |
-| D1.5 | 0 session EVO/eval kẹt mồ côi > 24h (v1.6 — OBS-P6) | 3 | BrainSearchRun 'running' stale + EvalRun 'running' treo đều bị phát hiện (alert evo-stuck / sweep) trong 24h — không session nào chết im lặng |
+| D1.5 | 0 session EVO/eval kẹt mồ côi > 24h (v1.6 — OBS-P6; R35 hiệu đính trung thực FB-OBSV3-R1-07) | 3 | EVO: rule `evo-stuck` 5' + sweep GET 60s (H4b phát sự kiện) + backstop `job-stale` 30'. EvalRun: sweep >2h đóng sổ failed kèm sự kiện `eval.run` end origin `sweep` (R35) — sweep chạy trong tick quan sát nên cần cờ `obs_impact` + `auto_eval_kb` ON (tắt cờ = không ai quét); KHÔNG có rule alert riêng cho EvalRun treo như evo-stuck của EVO |
 
 **Ngưỡng xử lý:** D1 < 8/15 → rà toàn bộ jobs ngay trong phiên làm việc (v1.6: 12 → 15 điểm do D1.5).
 

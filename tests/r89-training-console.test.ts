@@ -265,26 +265,32 @@ describe('r89 · E chuỗi hiệu lực cờ UI — ui_brain_edit / ui_synapse_f
   beforeAll(wipeUx2State)
   afterAll(wipeUx2State)
 
-  test("mặc định: ui_brain_edit + ui_hitech = 'off' (fail-open trình bày) — CÒN ui_synapse_fx = 'on' (BRAIN-LIVE)", async () => {
+  test("mặc định: ui_brain_edit = 'on' (PIN UPDATE R25 — user chỉ thị 'editor hiện lại') + ui_hitech = 'off' — CÒN ui_synapse_fx = 'on' (BRAIN-LIVE)", async () => {
     await wipeUx2State()
     // BRAIN-LIVE (chỉ thị user 2026-10-12): tab BRAIN module Smolab là
-    // "đài quan sát não" — hiệu ứng synapse mặc định BẬT (nội dung chính,
-    // không phải trang trí); editor/theme vẫn mặc định TẮT. Reduced-motion
-    // vẫn tắt animation ở tầng isAnimated (r90-G pin — cờ này không đụng).
-    expect(getTuningEnum('ui_brain_edit')).toBe('off')
+    // "đài quan sát não" — hiệu ứng synapse mặc định BẬT. R25 (commit 496b676,
+    // user report (a) "editor kiến trúc não hiện lại"): default ui_brain_edit
+    // 'off' → 'on' — editor là nội dung chính của Brain Studio. Theme hi-tech
+    // vẫn mặc định TẮT. Reduced-motion vẫn tắt animation ở tầng isAnimated
+    // (r90-G pin — cờ này không đụng). Trước R35 pin test này còn 'off' —
+    // stale từ R25, fail full-suite từ đó nhưng các đợt chạy test theo nhóm
+    // không gồm r89 nên không ai thấy (FB-OBSV3-R1-12).
+    expect(getTuningEnum('ui_brain_edit')).toBe('on')
     expect(getTuningEnum('ui_hitech')).toBe('off')
     expect(getTuningEnum('ui_synapse_fx')).toBe('on')
   })
 
-  test("setTuningValue('ui_brain_edit','on') → 'on'; resetTuningValue → 'off' — dọn finally", async () => {
+  test("setTuningValue('ui_brain_edit','off') → 'off'; resetTuningValue → 'on' (default R25) — dọn finally", async () => {
     try {
-      await setTuningValue('ui_brain_edit', 'on')
-      expect(getTuningEnum('ui_brain_edit')).toBe('on')
+      await setTuningValue('ui_brain_edit', 'off')
+      expect(getTuningEnum('ui_brain_edit')).toBe('off')
       // STORE ghi DB — sống qua refresh (không phải cache đẹt)
       await refreshTuningSnapshot()
-      expect(getTuningEnum('ui_brain_edit')).toBe('on')
-      await resetTuningValue('ui_brain_edit')
       expect(getTuningEnum('ui_brain_edit')).toBe('off')
+      // reset xoá store → rơi về DEFAULT — 'on' từ R25 (đổi chiều test cho
+      // khớp default mới; trước R35 pin reset → 'off' nên fail cả 2 test)
+      await resetTuningValue('ui_brain_edit')
+      expect(getTuningEnum('ui_brain_edit')).toBe('on')
     } finally {
       await resetTuningValue('ui_brain_edit').catch(() => {})
       await refreshTuningSnapshot()

@@ -128,7 +128,7 @@ export interface EvolveTabProps {
    * tính ra số lớp + nơ-ron tối ưu thì có triển khai luôn không"). Sau train
    * xong, Đài quan sát não (SECTION 2) hiển thị kiến trúc mới (bản active).
    */
-  onDeployNow?: (hidden: Array<{ units: number; activation: string }>) => void
+  onDeployNow?: (hidden: Array<{ units: number; activation: string }>, searchRunId?: string | null) => void
   /**
    * R26 — signals thức tỉnh của não đang chọn SECTION 1 (/api/brain). Chỉ
    * dùng cho Brain-D: hiển thị tiến độ thật của chuỗi D2→D3→D4 trong thông
@@ -493,7 +493,7 @@ export function EvolveTab({
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => onDeployNow(suggestion.hidden)}
+                    onClick={() => onDeployNow(suggestion.hidden, run?.id ?? null)}
                     className="inline-flex min-h-[44px] md:min-h-[32px] items-center gap-1.5 rounded-md border border-emerald-500/50 bg-emerald-500/15 px-3 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/25"
                     title="Ghi kiến trúc tính sẵn vào não đích + huấn luyện + áp dụng active NGAY (R7) — kiến trúc mới hiển thị tại Đài quan sát não (phần 2)"
                   >
@@ -744,7 +744,9 @@ export function EvolveTab({
                         toast.error('Không đọc được spec ứng viên', { description: 'Spec không có head.hidden hợp lệ — không triển khai được.' })
                         return
                       }
-                      onDeployNow(h)
+                      // FB-OBSV3-R1-02: thread runId session EVO hiện tại để
+                      // proposal.apply neo được kim tuyến session sinh ra kiến trúc
+                      onDeployNow(h, run?.id ?? null)
                     }}
                     title={(applyBestDisabledReason ?? 'Lưu nháp → huấn luyện → áp dụng active NGAY (R7) — kiến trúc mới hiển thị tại Đài quan sát não (phần 2)')}
                     className="inline-flex min-h-[44px] md:min-h-[32px] items-center gap-1.5 rounded-md border border-emerald-500/50 bg-emerald-500/15 px-3 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/25 disabled:cursor-not-allowed disabled:opacity-50"

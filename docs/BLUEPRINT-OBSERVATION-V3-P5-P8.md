@@ -1,6 +1,18 @@
 # BLUEPRINT GIAO THỨC QUAN SÁT V3 P5 → P8 — "MỞ RỘNG THEO 4 NÃO + NAS/EVO + CHUỖI HỌC"
 
-> **Phiên bản:** 0.2 — 2026-10-18 (Task R34-OBSV3-DEPLOY). **Hiệu đính sau
+> **Phiên bản:** 0.3 — 2026-10-18 (R35 FIXBUG FB-OBSV3 — rà soát sau triển khai
+> theo giao thức fixbug). Hiệu đính đợt này: (a) H4 về đúng spec §C.1
+> `result.active && useDraft` — trước R35 code phát cho MỌI train active kể cả
+> retrain thường không nháp (ô nhiễm neo impact P7); (b) pass 2 OBS-P7 CHỈ
+> neo `origin:'evo-deploy'` (deploy editor-draft hiện timeline nhưng không
+> thành neo); (c) H4 thêm `searchRunId` (id BrainSearchRun) vào rowKey +
+> payload — kim tuyến "session EVO nào sinh ra kiến trúc đang ACTIVE"
+> (FB-OBSV3-R1-02); (d) throttle map hard-cap 512 (trước chỉ soft-cap); (e)
+> train-gate-repeat chỉ đếm `trained===false` (exception-path không đếm);
+> (f) sweep EvalRun + runner no-cases phát `eval.run` end (bất biến H1 kín
+> mọi đường); (g) hằng cửa sổ evo-budget-burn tách riêng.
+>
+> **0.2 — 2026-10-18 (Task R34-OBSV3-DEPLOY). Hiệu đính sau
 > review-đối-chiếu-code-thật (user chỉ thị: "review lại và vá nếu có vấn đề")**:
 > (1) GAP-V3-3 + hook H3 **HỦY** — não A calibration_v3 CÓ phát `brain.train`
 > (`calibration-v3.ts:347/355/376` — observeBrainTrain start/end đầy đủ như não
@@ -179,17 +191,19 @@ hash (RO-2 không lưu full context).
 | H4b | `search.session` end khi sweep (GAP-V3-8 thật) | evolve.ts:862 — sweep đánh failed kèm emit builder mới `buildEvoSessionSwept` (evo/observe.ts) — mọi lượt GET sweep từ giờ hiển thị trong timeline | phase end, status failed, swept:true, reason heartbeat stale | 
 | H8 | đăng ký `chat.fastpath` vào OBS_KINDS (group 'run') | kinds.ts 1 dòng (+5 kinds mới H1/H2/H5/H6/H7 → OBS_KINDS 19 → 25; pin r99-C1 cập nhật precedent R5) | — |
 
-Ghi chú H4 (0.2): đường deploy LÊN ACTIVE duy nhất là train (R7) — spec-draft
-PUT chỉ lưu nháp. Nên hook tại train route khi `result.active && useDraft`;
-client chỉ THÊM trường `origin` (tùy chọn, whitelist 'evo-deploy') qua chuỗi
-deployEvoArchitecture → saveDraft → trainBrain — observation vẫn 100% server-
-side. runId BrainSearchRun đặt vào `rowKey` + payload (tiền lệ 31-e: không đè
-evt.runId vì FK là kim tuyến AgentRunRecord).
+Ghi chú H4 (0.3 — R35 fixbug): hook tại train route, phát KHI `result.active
+&& useDraft` (code R34 từng phát cho mọi `result.active` — đã vá về đúng
+spec); client THÊM trường `origin` (whitelist 'evo-deploy') + `searchRunId`
+(id BrainSearchRun) qua chuỗi deployEvoArchitecture → saveDraft → trainBrain
+— observation vẫn 100% server-side. `searchRunId` đặt vào `rowKey`
+(`brain#v{version}@{runId}`) + payload (tiền lệ 31-e: không đè evt.runId vì
+FK là kim tuyến AgentRunRecord). Pass 2 OBS-P7 chỉ neo origin 'evo-deploy'.
 
-Ghi chú H7 (0.2): llm.ts là module nền — import ledger qua dynamic import()
-tại call-site (tiền lệ reward.ts/agent-run-tracker, chống chu trình tĩnh).
-Throttle `observeEventThrottled` thêm vào ledger.ts (in-memory theo
-`${kind}:${throttleKey}`, mặc định 10') — test được ở r122.
+Ghi chú H7 (0.3 — R35 hiệu đính cho khớp impl): llm.ts là module nền — import
+ledger qua dynamic import() tại call-site (tiền lệ reward.ts/agent-run-
+tracker, chống chu trình tĩnh). Throttle `observeEventThrottled` thêm vào
+ledger.ts — in-memory theo khóa DO CALLER ĐẶT (đủ duy nhất; tiền lệ llm.ts
+đặt `model.failover:{provider}:{model}:{errTag}`), mặc định 10' — test ở r122.
 
 ### C.2 OBS-P6 — Alert rules thế hệ 2 (5 rule, precedent dedupe + markAlerted)
 

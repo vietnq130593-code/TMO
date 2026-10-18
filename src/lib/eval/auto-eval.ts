@@ -45,15 +45,50 @@ function autoEvalState(): { running: boolean } {
  * failed để (a) UI không hiện "đang chạy" mãi mãi, (b) cooldown bên dưới
  * KHÔNG bị một đợt chết chặn xưởng nhãn 12h. 2h > worst-case thật (8 case ×
  * 4 call × kimi ~2min ≈ 64') — không giết đợt sống.
+ *
+ * FB-OBSV3-R1-07 (R35 fixbug): find TRƯỚC để biết run nào bị đóng → phát
+ * sự kiện `eval.run` end (origin 'sweep', swept:true) cho từng run — giữ
+ * bất biến H1 "1 start + 1 end/run" (trước R35 sweep đóng sổ im lặng →
+ * start mồ côi treo lơ lửng trong timeline). Export cho test r122 pin trực
+ * tiếp. Fail-open tuyệt đối.
  */
-async function sweepStaleEvalRuns(now: number): Promise<number> {
+export async function sweepStaleEvalRuns(now: number): Promise<number> {
   try {
-    const res = await db.evalRun.updateMany({
+    const stale = await db.evalRun.findMany({
       where: { status: 'running', startedAt: { lt: new Date(now - 2 * 60 * 60_000) } },
+      select: { id: true, startedAt: true },
+      take: 50,
+    })
+    if (stale.length === 0) return 0
+    const res = await db.evalRun.updateMany({
+      where: { id: { in: stale.map(r => r.id) } },
       data: { status: 'failed', errorMessage: 'crashed — app restart giữa đợt eval (R4 auto-cleanup)' },
     })
     if (res.count > 0) {
       console.warn(`[AutoEval] Dọn ${res.count} EvalRun mồ côi (running >2h — bị giết giữa chừng bởi restart) → failed`)
+      try {
+        const { observeEvent } = await import('@/lib/observation/ledger')
+        for (const r of stale) {
+          observeEvent({
+            actor: 'system:eval',
+            kind: 'eval.run',
+            table: 'EvalRun',
+            rowKey: r.id,
+            summary:
+              `Eval run ${r.id.slice(0, 8)} bị SWEEP đóng sổ — running >2h` +
+              ` (${Math.max(1, Math.round((now - r.startedAt.getTime()) / 60_000))} phút — app restart?) → failed`,
+            payload: {
+              phase: 'end',
+              status: 'failed',
+              runId: r.id,
+              swept: true,
+              origin: 'sweep',
+              staleMinutes: Math.max(1, Math.round((now - r.startedAt.getTime()) / 60_000)),
+              error: 'crashed — app restart giữa đợt eval',
+            },
+          })
+        }
+      } catch { /* fail-open — sự kiện quan sát không được làm hỏng sweep */ }
     }
     return res.count
   } catch {

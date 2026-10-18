@@ -161,6 +161,14 @@ export async function flushObservationQueue(): Promise<void> {
  * 3 sample trong 1h vì các lần cách nhau >10' đếm là các lần THẬT). */
 export const OBS_THROTTLE_WINDOW_MS = 10 * 60_000
 
+/** Trần số khóa throttle in-memory (FB-OBSV3-R1-05 — R35 fixbug: HARD CAP —
+ * trước R35 chỉ xoá khóa >7 ngày nên 513 khóa trẻ đều bị giữ → map lớn vô
+ * hạn; giờ vượt trần thì evict CŨ NHẤT theo ts xuống đúng trần). */
+export const OBS_THROTTLE_MAP_MAX = 512
+
+/** Thời gian sống khóa throttle — quá 7 ngày kể từ lần phát cuối là rác. */
+export const OBS_THROTTLE_KEY_TTL_MS = 7 * 24 * 3600_000
+
 /**
  * observeEvent + throttle in-memory theo khóa — cho call-site tần suất lỗi
  * lặp cao (tiền lệ: model.failover khi provider chết, mọi call đều fail).
@@ -180,10 +188,23 @@ export function observeEventThrottled(
     const last = g.__tmoObsThrottle.get(throttleKey)
     if (typeof last === 'number' && now - last < windowMs) return // trong cửa sổ — nuốt
     g.__tmoObsThrottle.set(throttleKey, now)
-    // Map lớn dần theo số khóa lỗi — dọn 1 lần/tuần tương đương (rẻ, không cron)
-    if (g.__tmoObsThrottle.size > 512) {
+    // Dọn map khi vượt trần — 2 BƯỚC (FB-OBSV3-R1-05):
+    //   (1) xoá khóa chết: quá TTL 7 ngày không phát lại;
+    //   (2) vẫn vượt trần (nhiều khóa đang hoạt động) → evict CŨ NHẤT theo ts
+    //       xuống đúng OBS_THROTTLE_MAP_MAX — bộ nhớ BOUNDED như mô tả.
+    //     Trade-off chấp nhận: nếu >512 khóa CÙNG active trong cửa sổ 10',
+    //     khóa bị evict phát lại lần sau → chỉ DƯ sự kiện, không MẤT tín hiệu
+    //     (ưu tiên nuốt-ít-hơn-mất — đúng tinh thần fail-open của throttle).
+    if (g.__tmoObsThrottle.size > OBS_THROTTLE_MAP_MAX) {
       for (const [k, ts] of g.__tmoObsThrottle) {
-        if (now - ts > 7 * 24 * 3600_000) g.__tmoObsThrottle.delete(k)
+        if (now - ts > OBS_THROTTLE_KEY_TTL_MS) g.__tmoObsThrottle.delete(k)
+      }
+      if (g.__tmoObsThrottle.size > OBS_THROTTLE_MAP_MAX) {
+        const excess = g.__tmoObsThrottle.size - OBS_THROTTLE_MAP_MAX
+        const oldest = [...g.__tmoObsThrottle.entries()]
+          .sort((a, b) => a[1] - b[1])
+          .slice(0, excess)
+        for (const [k] of oldest) g.__tmoObsThrottle.delete(k)
       }
     }
     observeEvent(evt)

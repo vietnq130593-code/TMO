@@ -156,6 +156,46 @@ describe('r122 · B — observeEventThrottled (throttle in-memory theo khóa)', 
     // hằng số cửa sổ mặc định 10 phút (H7 — chống spam khi model chết)
     expect(OBS_THROTTLE_WINDOW_MS).toBe(10 * 60_000)
   })
+
+  test('B2 hết cửa sổ → PHÁT LẠI (hành vi cốt lõi của throttle — FB-OBSV3-R1-10e)', async () => {
+    resetObservationThrottle()
+    const kind = 'r122.throttle.expire'
+    const mkEvt = (n: number) => ({ actor: 'system:r122', kind, summary: `r122 expire ${n}`, payload: { n } })
+    const count = async () => db.observationEvent.count({ where: { kind } })
+    observeEventThrottled('r122:exp', mkEvt(1), { windowMs: 60 })
+    await flushObservationQueue()
+    expect(await count()).toBe(1) // trong cửa sổ — ghi
+    await new Promise(r => setTimeout(r, 90)) // vượt cửa sổ 60ms
+    observeEventThrottled('r122:exp', mkEvt(2), { windowMs: 60 })
+    await flushObservationQueue()
+    expect(await count()).toBe(2) // HẾT cửa sổ — phát lại (nuốt vĩnh viễn là lỗi)
+  })
+
+  test('B3 map vượt 512 khóa → evict CŨ NHẤT (hard cap — FB-OBSV3-R1-05/10f)', async () => {
+    resetObservationThrottle()
+    const kind = 'r122.throttle.cap'
+    const mkEvt = (tag: string) => ({ actor: 'system:r122', kind, summary: `r122 cap ${tag}`, payload: { tag } })
+    const count = async (tag: string) => db.observationEvent.count({ where: { kind, summary: `r122 cap ${tag}` } })
+    // khóa ĐẦU — ts nhỏ nhất, sẽ bị evict khi map vượt trần
+    observeEventThrottled('r122:cap:0', mkEvt('first'), { windowMs: 60_000 })
+    await flushObservationQueue()
+    expect(await count('first')).toBe(1)
+    // 520 khóa khác (đều TRẺ — không khóa nào qua TTL 7 ngày) → vượt trần
+    // 512 → trước R35 soft-cap KHÔNG xoá gì (map lớn vô hạn); R35 evict cũ nhất
+    for (let i = 1; i <= 520; i++) {
+      observeEventThrottled(`r122:cap:${i}`, mkEvt(`k${i}`), { windowMs: 60_000 })
+      if (i % 100 === 0) await flushObservationQueue() // không tràn queue 512
+    }
+    await flushObservationQueue()
+    // khóa ĐẦU đã bị evict khỏi map → PHÁT LẠI (chứng minh hard cap hoạt động)
+    observeEventThrottled('r122:cap:0', mkEvt('first-again'), { windowMs: 60_000 })
+    await flushObservationQueue()
+    expect(await count('first-again')).toBe(1) // được phát — evicted thật
+    // khóa MỚI NHẤT vẫn còn trong map + trong cửa sổ → NUỐT
+    observeEventThrottled('r122:cap:520', mkEvt('k520-again'), { windowMs: 60_000 })
+    await flushObservationQueue()
+    expect(await count('k520-again')).toBe(0)
+  })
 })
 
 // ==================== C. Pure 5 rule thế hệ 2 (OBS-P6) ====================
@@ -274,10 +314,10 @@ describe('r122 · E — runAlertChecks thế hệ 2 (DB cô lập)', () => {
 
   test('E2 eval-starvation — có answered (âm bản) rồi 2 run refusal (dương bản)', async () => {
     resetAlertDedupState()
-    // DỌN alert eval-starvation có sẵn trong bản copy: E1 đã chạy runAlertChecks
-    // trên dữ liệu THẬT (R33 36/36 + auto-eval 8/8 — đều 100% refusal) → 1 alert
-    // đã phát → dedup 1h sẽ chặn đột dương bản của E2. DB test là BẢN COPY —
-    // xoá an toàn (pattern r99: cô lập theo rule).
+    // DỌN alert eval-starvation có sẵn trong bản copy: E1 hoặc các FILE TEST
+    // KHÁC chạy trước (cùng DB preload-copy — vd r76/r77/r85 seed EvalRun)
+    // đã có thể phát alert này → dedup 1h sẽ chặn đột dương bản của E2.
+    // Xoá an toàn (pattern r99: cô lập theo rule).
     for (const row of await db.observationEvent.findMany({
       where: { kind: 'obs.alert' }, select: { id: true, payloadJson: true },
     })) {
@@ -287,17 +327,25 @@ describe('r122 · E — runAlertChecks thế hệ 2 (DB cô lập)', () => {
       } catch { /* payload rác — bỏ qua */ }
     }
     await flushObservationQueue()
+    // FB-OBSV3-R1-11 (R35 fixbug): seed với timestamp TƯƠNG LAI GẦN (+phút)
+    // để TỰ CÔ LẬP tuyệt đối theo thời gian — full suite chạy chung 1 DB
+    // (preload copy) và các file trước (r76/r77/r85) seed EvalRun với
+    // startedAt = Date.now() lúc file đó chạy, MỚI hơn mọi mốc "quá khứ"
+    // mà E2 seed trước R35 → cặp "2 run gần nhất" là của file khác (có
+    // answered) → dương bản không bao giờ phát → fail khi chạy chung (R34
+    // chỉ chạy test theo nhóm nên không phát hiện). Timestamp tương lai vài
+    // phút không đổi hành vi rule (chỉ so sánh thứ tự + điều kiện refusal).
     // ÂM BẢN: run mới nhất CÓ answered → cặp gần nhất không thể cùng 100% refusal
     await db.evalRun.create({
       data: {
         status: 'completed', caseCount: 10, refusalCount: 3, answeredCount: 7,
-        startedAt: new Date(Date.now() - 90_000), completedAt: new Date(Date.now() - 60_000),
+        startedAt: new Date(Date.now() + 100_000), completedAt: new Date(Date.now() + 95_000),
       },
     })
     await db.evalRun.create({
       data: {
         status: 'completed', caseCount: 10, refusalCount: 10, answeredCount: 0,
-        startedAt: new Date(Date.now() - 150_000), completedAt: new Date(Date.now() - 120_000),
+        startedAt: new Date(Date.now() + 90_000), completedAt: new Date(Date.now() + 85_000),
       },
     })
     let marker = new Date()
@@ -308,13 +356,13 @@ describe('r122 · E — runAlertChecks thế hệ 2 (DB cô lập)', () => {
     await db.evalRun.create({
       data: {
         status: 'completed', caseCount: 12, refusalCount: 12, answeredCount: 0,
-        startedAt: new Date(Date.now() - 30_000), completedAt: new Date(),
+        startedAt: new Date(Date.now() + 200_000), completedAt: new Date(Date.now() + 195_000),
       },
     })
     await db.evalRun.create({
       data: {
         status: 'completed', caseCount: 9, refusalCount: 9, answeredCount: 0,
-        startedAt: new Date(Date.now() - 20_000), completedAt: new Date(),
+        startedAt: new Date(Date.now() + 190_000), completedAt: new Date(Date.now() + 185_000),
       },
     })
     marker = new Date()
@@ -387,6 +435,93 @@ describe('r122 · E — runAlertChecks thế hệ 2 (DB cô lập)', () => {
     expect(alerts[0].targetId).toBe('brain_search_run:r122evo_burn')
     expect(alerts[0].nAbandoned).toBe(5)
     expect(alerts[0].candidatesMax).toBe(8)
+  })
+
+  test("E6 train-gate-repeat KHÔNG đếm exception-path (payload thiếu trained) — FB-OBSV3-R1-06", async () => {
+    resetAlertDedupState()
+    await flushObservationQueue()
+    // 3 sự kiện end theo đường CATCH (observeBrainTrain exception-path —
+    // payload KHÔNG có field trained) = crash-loop, KHÔNG phải gate chặn —
+    // trước R35 bị đếm nhầm thành "gate lặp" với thông điệp xử lý SAI chế độ lỗi
+    const mk = () => JSON.stringify({ phase: 'end', brain: 'r122_exc_brain', error: 'DB down r122' })
+    await seedEvent({ kind: 'brain.train', payloadJson: mk() })
+    await seedEvent({ kind: 'brain.train', payloadJson: mk() })
+    await seedEvent({ kind: 'brain.train', payloadJson: mk() })
+    const marker = new Date()
+    await runAlertChecks()
+    expect((await alertPayloads(marker)).filter(
+      p => p.rule === 'train-gate-repeat' && p.targetId === 'brain:r122_exc_brain',
+    )).toHaveLength(0) // 3 lần CRASH vẫn không phát alert GATE
+  })
+
+  test('E7 provider-degraded latestError = event MỚI NHẤT (pin orderBy desc — chấm chéo FB-OBSV3-R1-09.2)', async () => {
+    resetAlertDedupState()
+    await flushObservationQueue()
+    await seedEvent({
+      kind: 'model.failover',
+      payloadJson: JSON.stringify({ provider: 'r122prov2', model: 'r122-model-latest', error: 'lỗi CŨ nhất r122' }),
+      ts: new Date(Date.now() - 30 * MIN),
+    })
+    await seedEvent({
+      kind: 'model.failover',
+      payloadJson: JSON.stringify({ provider: 'r122prov2', model: 'r122-model-latest', error: 'lỗi giữa r122' }),
+      ts: new Date(Date.now() - 20 * MIN),
+    })
+    await seedEvent({
+      kind: 'model.failover',
+      payloadJson: JSON.stringify({ provider: 'r122prov2', model: 'r122-model-latest', error: 'lỗi MỚI nhất r122' }),
+      ts: new Date(Date.now() - 10 * MIN),
+    })
+    const marker = new Date()
+    await runAlertChecks()
+    const alerts = (await alertPayloads(marker)).filter(
+      p => p.rule === 'provider-degraded' && p.targetId === 'provider:r122prov2:r122-model-latest',
+    )
+    expect(alerts).toHaveLength(1)
+    expect(alerts[0].latestError).toBe('lỗi MỚI nhất r122') // không phải lỗi cũ nhất
+  })
+
+  test("E8 runEval 0 case khớp filter → EvalRun failed + eval.run end (không treo start mồ côi) — FB-OBSV3-R1-08", async () => {
+    const { runEval } = await import('@/lib/eval/runner')
+    const run = await db.evalRun.create({ data: { status: 'running', caseCount: 0 } })
+    const marker = new Date()
+    await runEval({ runId: run.id, caseLimit: 1, categories: ['r122-khong-ton-tai'] })
+    await flushObservationQueue()
+    const row = await db.evalRun.findUnique({ where: { id: run.id } })
+    expect(row?.status).toBe('failed')
+    expect(row?.errorMessage).toContain('No active eval cases')
+    const evt = await db.observationEvent.findFirst({
+      where: { kind: 'eval.run', rowKey: run.id, ts: { gte: marker } },
+    })
+    expect(evt).not.toBeNull()
+    const p = JSON.parse(evt!.payloadJson) as { phase?: string; status?: string; runId?: string }
+    expect(p.phase).toBe('end')
+    expect(p.status).toBe('failed')
+    expect(p.runId).toBe(run.id)
+  })
+
+  test("E9 sweepStaleEvalRuns đóng sổ + phát eval.run end origin 'sweep' — FB-OBSV3-R1-07", async () => {
+    const { sweepStaleEvalRuns } = await import('@/lib/eval/auto-eval')
+    const run = await db.evalRun.create({
+      data: { status: 'running', caseCount: 4, startedAt: new Date(Date.now() - 3 * 60 * 60_000) },
+    })
+    const marker = new Date()
+    const n = await sweepStaleEvalRuns(Date.now())
+    expect(n).toBeGreaterThanOrEqual(1) // có thể đóng thêm run thật mồ côi trong bản copy
+    await flushObservationQueue()
+    const row = await db.evalRun.findUnique({ where: { id: run.id } })
+    expect(row?.status).toBe('failed')
+    const evt = await db.observationEvent.findFirst({
+      where: { kind: 'eval.run', rowKey: run.id, ts: { gte: marker } },
+    })
+    expect(evt).not.toBeNull()
+    expect(evt!.summary).toContain('SWEEP')
+    const p = JSON.parse(evt!.payloadJson) as { phase?: string; swept?: boolean; origin?: string; runId?: string; staleMinutes?: number }
+    expect(p.phase).toBe('end')
+    expect(p.swept).toBe(true)
+    expect(p.origin).toBe('sweep')
+    expect(p.runId).toBe(run.id)
+    expect(typeof p.staleMinutes).toBe('number')
   })
 })
 
@@ -507,5 +642,52 @@ describe('r122 · H — computeProposalApplyImpactEstimates (neo EVO-deploy)', (
       where: { kind: 'impact.estimate', payloadJson: { contains: `"evoDeploySeq":${seq}` } },
     })
     expect(count).toBe(1)
+  })
+
+  test("H2 pass 2 CHỈ neo origin 'evo-deploy' — editor-draft hiện timeline nhưng KHÔNG chấm (FB-OBSV3-R1-01)", async () => {
+    const changedAt = new Date(Date.now() - 26 * 3600_000)
+    const beforeDay = new Date(changedAt.getTime() - 24 * 3600_000).toISOString().slice(0, 10)
+    const afterDay = new Date(changedAt.getTime() + 24 * 3600_000).toISOString().slice(0, 10)
+    // KPI riêng của test — không dính KPI của H1
+    await db.kpiSnapshot.create({ data: { date: beforeDay, kpi: 'r122_kpi_editor', value: 0.3, sampleSize: 40 } })
+    await db.kpiSnapshot.create({ data: { date: afterDay, kpi: 'r122_kpi_editor', value: 0.6, sampleSize: 40 } })
+
+    // 2 deploy cùng đủ tuổi + cùng có snapshot 2 bên — chỉ khác origin
+    const seqEditor = await nextSeq()
+    await db.observationEvent.create({
+      data: {
+        seq: seqEditor, actor: 'user', kind: 'proposal.apply',
+        summary: 'r122 ÁP DỤNG (editor) — KHÔNG được chấm impact',
+        payloadJson: JSON.stringify({
+          brain: 'surrogate', version: 4, active: true, improved: true,
+          origin: 'editor', archSummary: '8·relu → 4·relu',
+        }),
+        ts: changedAt,
+      },
+    })
+    const seqEvo = await nextSeq()
+    await db.observationEvent.create({
+      data: {
+        seq: seqEvo, actor: 'user', kind: 'proposal.apply',
+        summary: 'r122 ÁP DỤNG (evo-deploy) — ĐƯỢC chấm impact',
+        payloadJson: JSON.stringify({
+          brain: 'calibration_v3', version: 11, active: true, improved: true,
+          origin: 'evo-deploy', archSummary: '12·tanh → 6·tanh', searchRunId: 'r122_search_run',
+        }),
+        ts: changedAt,
+      },
+    })
+
+    await computeProposalApplyImpactEstimates()
+    await flushObservationQueue()
+    // editor-draft: KHÔNG thành neo impact (trước R35 bị chấm — ô nhiễm ngữ
+    // cảnh "triển khai EVO có tốt hơn không")
+    expect(await db.observationEvent.count({
+      where: { kind: 'impact.estimate', payloadJson: { contains: `"evoDeploySeq":${seqEditor}` } },
+    })).toBe(0)
+    // evo-deploy: chấm đúng 1 lần
+    expect(await db.observationEvent.count({
+      where: { kind: 'impact.estimate', payloadJson: { contains: `"evoDeploySeq":${seqEvo}` } },
+    })).toBe(1)
   })
 })

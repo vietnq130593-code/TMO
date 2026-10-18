@@ -460,13 +460,21 @@ export function BrainTabContent() {
   // bạch) + server tự bật cờ runtime tương ứng → model VẬN HÀNH thật trong
   // chuỗi runtime. Định nghĩa TRƯỚC saveDraft vì saveDraft gọi nó (auto-apply).
   const [trainingBrains, setTrainingBrains] = useState<Set<string>>(new Set())
-  const trainBrain = useCallback(async (key: BrainKey, useDraft: boolean, force = true, origin?: 'evo-deploy') => {
+  const trainBrain = useCallback(async (key: BrainKey, useDraft: boolean, force = true, origin?: 'evo-deploy', searchRunId?: string | null) => {
     setTrainingBrains(prev => new Set(prev).add(key))
     try {
       const res = await fetch('/api/brain/train', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brain: key, useDraft: useDraft || undefined, force: force || undefined, ...(origin ? { origin } : {}) }),
+        body: JSON.stringify({
+          brain: key,
+          useDraft: useDraft || undefined,
+          force: force || undefined,
+          ...(origin ? { origin } : {}),
+          // FB-OBSV3-R1-02 (R35 fixbug): kim tuyến session EVO sinh ra kiến trúc
+          // — server ghi vào rowKey + payload proposal.apply (Ghi chú H4 0.2)
+          ...(searchRunId ? { searchRunId } : {}),
+        }),
       })
       const json = (await res.json().catch(() => ({}))) as {
         error?: string; version?: number; active?: boolean; improved?: boolean; sampleSize?: number
@@ -538,7 +546,7 @@ export function BrainTabContent() {
   /// trúc/hyper mới trở thành bản ACTIVE vận hành thật (kèm bật cờ runtime,
   /// server lo). Nếu thiếu dữ liệu train → toast nói rõ cần thêm mẫu (đó là
   /// giới hạn DỮ LIỆU, không phải chế độ nháp nữa).
-  const saveDraft = useCallback(async (key: BrainKey, specOverride?: BrainDraftSpec, origin?: 'evo-deploy') => {
+  const saveDraft = useCallback(async (key: BrainKey, specOverride?: BrainDraftSpec, origin?: 'evo-deploy', searchRunId?: string | null) => {
     const spec = specOverride ?? draftsByBrain[key] ?? defaultDraftFor(key)
     const inputDim = brainData?.brains.find(b => b.key === key)?.inputDim ?? null
     const v = validateBrainDraft({ ...spec, brain: key }, inputDim)
@@ -578,7 +586,7 @@ export function BrainTabContent() {
       toast.info('Đã lưu cấu hình — đang huấn luyện & áp dụng ngay…', {
         description: 'Hiệu chỉnh sẽ lên runtime THẬT (bản active + cờ bật) ngay khi train xong.',
       })
-      await trainBrain(key, true, true, origin)
+      await trainBrain(key, true, true, origin, searchRunId)
     } catch (err) {
       setSaveErrors([err instanceof Error ? err.message : String(err)])
     } finally {
@@ -625,7 +633,7 @@ export function BrainTabContent() {
   /// refreshNonce (effect trainOutcome) làm BrainStage refetch weights —
   /// Đài quan sát não SECTION 2 hiển thị kiến trúc active mới (khi bật editor
   /// thì draft mới cũng hiện NGAY trong đài trước cả khi train xong).
-  const deployEvoArchitecture = useCallback((hidden: Array<{ units: number; activation: string }>) => {
+  const deployEvoArchitecture = useCallback((hidden: Array<{ units: number; activation: string }>, searchRunId?: string | null) => {
     if (!BRAIN_TRAINABLE_KEYS.includes(selectedBrainKey)) {
       toast.error('Não đích chưa vào search space', {
         description: 'Brain-D chưa vào search space (D4 §8.4) — chọn não A/B/C ở phần 1.',
@@ -656,8 +664,10 @@ export function BrainTabContent() {
       description: 'Lưu nháp → huấn luyện → áp dụng active — Đài quan sát não (phần 2) hiển thị kiến trúc mới.',
     })
     // OBS-V3 H4 (R34): origin 'evo-deploy' — server gắn nhãn nguồn EVO vào sự
-    // kiện proposal.apply (timeline + neo impact tracker P7)
-    void saveDraft(selectedBrainKey, v.normalized, 'evo-deploy') // PUT + auto-train force (R7)
+    // kiện proposal.apply (timeline + neo impact tracker P7). R35 fixbug
+    // FB-OBSV3-R1-02: thread thêm searchRunId (session EVO sinh ra kiến trúc)
+    // → rowKey + payload sự kiện (kim tuyến search.session ↔ proposal.apply).
+    void saveDraft(selectedBrainKey, v.normalized, 'evo-deploy', searchRunId) // PUT + auto-train force (R7)
   }, [selectedBrainKey, draftsByBrain, dirtyBrains, brainData, onDraftChange, saveDraft])
 
   // ==================== TUNING ACTIONS (copy panel cũ) ====================
