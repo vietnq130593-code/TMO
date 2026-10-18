@@ -35,7 +35,13 @@
  */
 
 import type { GoalLoopJob } from '@prisma/client'
-import { db } from '@/lib/db'
+// R36-ACT (§0b kích hoạt giao thức quan sát 2026-10-18): withSqliteRetry cho
+// mọi ghi terminal-status của job — bằng chứng 6 run Omega failed cùng họ
+// "Socket timeout" tại completed-marking (2 hôm nay 07:32/08:45 + 4 hôm 17
+// 12:26-12:30, tok=0) khi bùng nổ ghi đè nhau >15s busy_timeout; transient
+// lock PHẢI retry (Task 33 doctrine) thay vì để throw → catch → markFailed.
+// firstErrLine cho log FAILED (message Prisma bắt đầu \n → "FAILED:" trống).
+import { db, withSqliteRetry, firstErrLine } from '@/lib/db'
 // R12 (P-NEW-2 lượt 5): user-chat priority flag — job durable chạy thay user
 import { markUserChatRunActive, markUserChatRunDone } from '@/lib/execution/user-run-priority'
 // ROUND-28 W1 — TYPE-ONLY import (erased lúc build): giá trị runGoalDrivenLoop
@@ -820,14 +826,20 @@ class GoalLoopWorker {
         const cp = cpPending
         cpPending = null
         try {
-          await db.goalLoopJob.update({
-            where: { id: job.id },
-            data: {
-              checkpoint: JSON.stringify(cp),
-              cyclesDone: cp.counters.cyclesDone,
-              heartbeatAt: new Date(),
-            },
-          })
+          // R36-ACT: checkpoint write cũng dính họ Socket timeout (log "ghi
+          // checkpoint lỗi" 2 job failed hôm 18/10) — retry transient, fail-open
+          // giữ nguyên (lỗi KHÔNG transient vẫn ném cho catch ngoài reset throttle).
+          await withSqliteRetry(
+            () => db.goalLoopJob.update({
+              where: { id: job.id },
+              data: {
+                checkpoint: JSON.stringify(cp),
+                cyclesDone: cp.counters.cyclesDone,
+                heartbeatAt: new Date(),
+              },
+            }),
+            { label: `goal-loop checkpoint job ${job.id}` },
+          )
           meta.lastCheckpointWrite = Date.now()
           meta.lastWrittenCyclesDone = cp.counters.cyclesDone
         } catch (err) {
@@ -972,19 +984,24 @@ class GoalLoopWorker {
           )
           return
         }
-        const requeued = await db.goalLoopJob.updateMany({
-          where: { id: job.id, status: 'running' },
-          data: {
-            status: 'queued',
-            error: null,
-            workerPid: null,
-            // Đẩy về CUỐI hàng đợi FIFO (claimQueued orderBy createdAt asc):
-            // follower đang đói mutex được claim tick sau; job này xếp lại chờ
-            // session rảnh. KHÔNG đụng attempts (preempt là pause có chủ đích,
-            // không phải crash) — checkpoint/cyclesDone giữ nguyên (bước 8).
-            createdAt: new Date(),
-          },
-        })
+        // R36-ACT: transient lock ở preempt-requeue từng ném → catch → markFailed
+        // (job pause bị tính thành chết) — retry theo họ lỗi tạm thời.
+        const requeued = await withSqliteRetry(
+          () => db.goalLoopJob.updateMany({
+            where: { id: job.id, status: 'running' },
+            data: {
+              status: 'queued',
+              error: null,
+              workerPid: null,
+              // Đẩy về CUỐI hàng đợi FIFO (claimQueued orderBy createdAt asc):
+              // follower đang đói mutex được claim tick sau; job này xếp lại chờ
+              // session rảnh. KHÔNG đụng attempts (preempt là pause có chủ đích,
+              // không phải crash) — checkpoint/cyclesDone giữ nguyên (bước 8).
+              createdAt: new Date(),
+            },
+          }),
+          { label: `goal-loop preempt-requeue job ${job.id}` },
+        )
         if (requeued.count === 1) {
           console.log(
             `[GoalLoopWorker] job ${job.id} PREEMPT-PAUSE → requeue giữ checkpoint (chu kỳ ${result.goalLoop?.cycles ?? job.cyclesDone}, ${result.iterations} vòng đã chạy, preempt ${preemptCount}/${GOAL_LOOP_MUTEX_MAX_PREEMPTS}) — nhường mutex session ${job.sessionId} cho follower đang chờ; tick sau claim lại + RESUME từ checkpoint khi rảnh`
@@ -1010,12 +1027,15 @@ class GoalLoopWorker {
       }
       const cancelled = meta.cancelRequested || result.goalLoop?.stopReason === 'cancelled'
       if (cancelled) {
-        await db.goalLoopJob
-          .updateMany({
+        // R36-ACT: retry transient rồi mới .catch — hỏng ghi cancel để job kẹt
+        // 'running' sẽ bị orphan-sweep requeue (chạy lại tác vụ user đã dừng).
+        await withSqliteRetry(
+          () => db.goalLoopJob.updateMany({
             where: { id: job.id, status: 'running' },
             data: { status: 'cancelled', stopReason: 'cancelled', completedAt: new Date(), heartbeatAt: new Date() },
-          })
-          .catch(() => {})
+          }),
+          { label: `goal-loop mark-cancelled job ${job.id}` },
+        ).catch(() => {})
         console.log(
           `[GoalLoopWorker] job ${job.id} CANCELLED — nút Dừng qua DB flag (chu kỳ ${result.goalLoop?.cycles ?? job.cyclesDone}, ${result.iterations} vòng đã chạy)`
         )
@@ -1044,16 +1064,24 @@ class GoalLoopWorker {
         }
         return
       }
-      const completed = await db.goalLoopJob.updateMany({
-        where: { id: job.id, status: 'running' },
-        data: {
-          status: 'completed',
-          result: JSON.stringify(result),
-          stopReason: result.goalLoop?.stopReason ?? null,
-          completedAt: new Date(),
-          heartbeatAt: new Date(),
-        },
-      })
+      // R36-ACT (fix gốc rễ 6 run Omega failed): completed-marking dính
+      // "Socket timeout (the database failed to respond…)" khi DB bận >15s
+      // (bằng chứng 07:32:41 + 08:45:04 — job chạy xong việc, đánh dấu hoàn
+      // thành lại ném timeout → catch 1107 đổi thành FAILED, toàn bộ kết quả
+      // của agent bị đích danh thành lỗi). Retry transient 3 lần (Task 33).
+      const completed = await withSqliteRetry(
+        () => db.goalLoopJob.updateMany({
+          where: { id: job.id, status: 'running' },
+          data: {
+            status: 'completed',
+            result: JSON.stringify(result),
+            stopReason: result.goalLoop?.stopReason ?? null,
+            completedAt: new Date(),
+            heartbeatAt: new Date(),
+          },
+        }),
+        { label: `goal-loop mark-completed job ${job.id}` },
+      )
       if (completed.count === 0) {
         console.warn(
           `[GoalLoopWorker] job ${job.id}: KHÔNG mark completed được — status đã bị đổi giữa chừng (để nguyên trạng thái hiện tại)`
@@ -1127,19 +1155,25 @@ class GoalLoopWorker {
    * phép che lỗi gốc đã log.
    */
   private async markFailed(jobId: string, error: string, crashContext?: { sessionId: string; runId: string | null }): Promise<void> {
-    console.error(`[GoalLoopWorker] job ${jobId} FAILED: ${error.slice(0, 300)}`)
+    // R36-ACT: message Prisma bắt đầu bằng \n — log trước đây in "FAILED: "
+    // trống (chẩn đoán khó); firstErrLine lấy dòng đầu thực (tiền lệ Task 33).
+    console.error(`[GoalLoopWorker] job ${jobId} FAILED: ${firstErrLine(error).slice(0, 300)}`)
     emitAgentEvent('job_terminal', {
       jobId,
       sessionId: crashContext?.sessionId,
       runId: crashContext?.runId,
       data: { status: 'failed', error: error.slice(0, 300) },
     })
-    await db.goalLoopJob
-      .updateMany({
+    // R36-ACT: chính lúc DB kẹt (nguyên nhân khiến job vào đây) thì mark-failed
+    // cũng dễ fail — nếu không ghi được, job treo 'running' tới orphan-sweep.
+    // Retry transient rồi .catch — fail-open giữ nguyên.
+    await withSqliteRetry(
+      () => db.goalLoopJob.updateMany({
         where: { id: jobId, status: 'running' },
         data: { status: 'failed', error: error.slice(0, 2000), completedAt: new Date(), heartbeatAt: new Date() },
-      })
-      .catch(() => {})
+      }),
+      { label: `goal-loop mark-failed job ${jobId}` },
+    ).catch(() => {})
     // REVIEW 14-g H2 — crash honest-close CI-2 (mirror route catch L1230+)
     // P-E (2026-10-06): crash cũng là gián đoạn — snapshot việc dở TRƯỚC khi
     // close (in_progress→failed, pending→archived) để run kế hồi quy tiếp.
