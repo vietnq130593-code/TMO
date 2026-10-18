@@ -359,16 +359,26 @@ function getRotatedModels(provider: string, models: string[]): string[] {
  *  R19 (2026-10-15 — bỏ model fallback): lõi NIM fail → callLLMSlot trả lỗi,
  *  document sẽ retry sau (KHÔNG còn chuỗi fallback Zen cũ).
  *
+ *  R38 (2026-10-18 D0 re-ingestion): TRIỂN KHAI đường thoát env nói trên —
+ *  list đọc process.env.EXTRACTION_MODEL lúc module load (buộc restart mới
+ *  nạp, tiền lệ HMR worker singleton ROUND-28 W1b). Lý do: glm-5.3-flash
+ *  chuyển sang sóng hang/timeout 196s (probe 10:53 >120s treo, extraction
+ *  001 trả content rỗng 80/80 finish=none — R36 alert provider-degraded
+ *  cùng họ), trong khi nemotron-550b probe 1.75s OK (R32 MEGATRON live
+ *  12 vòng — nghịch sóng với R25). Hai model thay phiên khỏe/bệnh trong
+ *  ngày — env cho phép xoay lõi extraction theo sóng KHÔNG cần sửa code.
+ *  Đổi về glm: bỏ dòng EXTRACTION_MODEL trong .env + restart.
+ *
  *  nvidia/nemotron-3-ultra-550b-a55b: 550B MoE (55B active) — còn Listed
- *    nhưng 503 "Service temporarily overloaded" liên tục (probe R25).
+ *    (503 sóng ngắn R25 sáng 2026-10-18, R32/R38 probe: sống).
  *  openai/gpt-oss-120b (lõi fallback cũ) → ĐÃ LOẠI (HTTP 410 GONE — EOL
  *    2026-09-03).
  *
  *  Đã bỏ cũ: llama-3.1-nemotron-ultra-253b-v1, nemotron-4-340b-instruct (404),
  *  meta/llama-3.3-70b-instruct (chất lượng kém hơn 550b), gpt-oss-120b (410).
  */
-const NVIDIA_EXTRACTION_MODELS = [
-  'z-ai/glm-5.3-flash',
+const NVIDIA_EXTRACTION_MODELS: string[] = [
+  process.env.EXTRACTION_MODEL?.trim() || 'z-ai/glm-5.3-flash',
 ]
 
 /** NVIDIA NIM AGENT/CHAT models (R25 2026-10-18 — catalog NIM sống thật,

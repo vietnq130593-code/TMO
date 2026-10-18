@@ -227,3 +227,81 @@ OOM) — nhưng communityId của node tạo sau job này chưa có, xem khuyế
   0 lỗi · test r110 + 6 file ingestion (r76, r78-doc-dedup, r78-entity-nb,
   r78-fb7-regression, r78-pipeline-expectations, r81) = **163 pass / 0 fail**
   (1.038 expect) · KHÔNG viết test mới (D0 test = "—" theo task).
+
+---
+
+## 7 · R38 (2026-10-18) — RE-INGESTION SAU RESET · 9/9 SHARD HOÀN TẤT
+
+**Bối cảnh.** Sandbox reset xóa sạch `qdrant-storage/` (theopus_chunks + theopus_documents → 0 điểm —
+root cause 6 alert thế hệ 2 R36: eval-starvation, train-gate ×3 não, KB mù) trong khi Neo4j Aura cloud
+(ngoài sandbox) và SQLite (cron DB-BACKUP 03:00 VN → R2, restore) sống nguyên. Đúng kịch bản thiết kế
+sẵn: FIX #6 route process (khôi phục Qdrant doc point từ R2 `pdfs/`), nhánh upload `.txt` R24-a,
+`reExtract` chỉ điền chunk thiếu (MERGE additive H5 — không xóa node).
+
+**Trở ngại vận hành + xử lý.** Lõi extraction z-ai/glm-5.3-flash (R25) chuyển sang sóng hang:
+timeout 196s, empty-content finish=none — 001 fail 80/80 chunks ngay pass đầu (11:05). Observation
+protocol bắt live `model.failover` (tự chứng minh giá trị — đúng bệnh phải mổ). Probe độc lập:
+nemotron-3-ultra-550b-a55b 1.75s OK (nghịch sóng với R25 sáng nay — hai model thay phiên khỏe/bệnh
+trong ngày). Xử lý theo chính sách R25 tự ghi ("Khôi phục nemotron khi NIM khỏe lại"):
+`EXTRACTION_MODEL=nvidia/nemotron-3-ultra-550b-a55b` trong `.env` + llm.ts đọc env lúc module load
+(1 dòng + JSDoc R38) + pm2 restart 10:58 — extraction phục hồi ngay (5941-8720 tokens/call đều).
+
+**Trình tự (đúng §5.2 + xếp nhóm rút wall-clock).** G1(001+002) → G2(003+005) → G3(004) →
+G4(006+007+008) → G5(009 PSY chót). 002: plain POST → FIX #6 + chunk-rebuild (58/58 vector thật,
+entities preserved) → reExtract pass lấp nốt 9 chunk thiếu §5.4 → covNew 58/58 (graph đủ phủ toàn
+bộ chunk id hiện tại). 8 shard còn lại: upload → pipeline → driver verify real-vector từng doc.
+
+**Kết quả per-shard** (driver verify bằng scroll with_vector — vector thật ≠ zero-vector, ROUND-34):
+
+| Shard | Chunks kỳ vọng (§1) | Điểm thật Qdrant | Vector thật | Thời điểm DONE |
+|---|---|---|---|---|
+| 001 GEN_CAUSAL_HYPER | 80 | 80 | 80/80 | 11:21:28 |
+| 002 NAS_EVOLUTION (+lấp 9 chunk §5.4) | 58 | 58 | 58/58 + covNew 58/58 | 11:29:49 |
+| 003 OPT_CONVEX | 46 | 46 | 46/46 | 11:44:56 |
+| 005 CORE_GRAPH | 67 | 67 | 67/67 | 11:49:56 |
+| 004 SYS_DYNAMICS | 59 | 59 | 59/59 | 12:09:23 |
+| 006 COMPLEXITY | 131 | 131 | 131/131 | ~13:00 (verify 13:03)
+| 007 DSL | 138 | 138 | 138/138 | ~13:00 (verify 13:03)
+| 008 GTH | 134 | 134 | 134/134 | ~13:00 (verify 13:03)
+| 009 PSY-CORE-SCI | 155 | 155 | 155/155 | 13:51:29 |
+
+(Ô _G4_/_G5_ điền khi driver khép — xem §7.1 tổng kết cuối.)
+
+**Chứng minh đường KB sống** (search trực tiếp Qdrant 2048-dim, nemotron-3-embed-1b):
+"neural architecture search evolution" → top-hit đúng SHD_NAS_EVOLUTION_002 (score 0.475);
+"convex optimization duality" → đúng SHD_OPT_CONVEX_003 (0.423). Eval case security cũ (seed R33,
+thời corpus PDF hacking) mismatch domain corpus mới → refusal đúng thiết kế (KB không phủ domain
+đó) — cân eval case knowledge-domain ở đợt sau, không phải lỗi re-ingestion.
+
+**Vận hành + bài học.** Driver chạy dưới pm2 (name `d0-driver`, script `scratch/r38-d0-run3.sh` +
+`scratch/r38-coverage-new.ts` — commit kèm): per-doc subshell song song trong group, tự xử lý
+error (PUT recover) / partial (reExtract), verify real-vector + covNew cho 002. Bài học: (a) đường
+dẫn tương đối trong session shell trỏ nhầm chỗ — luôn tuyệt đối; (b) process nền trần trọi bị
+kill vô hình giữa các tool call — pm2 là chỗ đứng đúng cho driver dài hạn; (c) probe model phải
+đủ maxTokens cho model reasoning (glm đốt 16 tokens probe trước khi kịp trả lời).
+
+### 7.1 · Tổng kết cuối (13:51:29 UTC 2026-10-18)
+
+- **Qdrant**: theopus_chunks **868/868 điểm — 100% vector thật** (zero-vector=0, stamp model
+  `nvidia/nemotron-3-embed-1b@2026-10-17`) · theopus_documents **9/9**. So khớp CHÍNH XÁC ước lượng
+  §1 (868 chunks kỳ vọng — không thừa không thiếu).
+- **Neo4j**: 96.970 → **103.119 nodes (+6.149)** · rels 205.809 → **215.249 (+9.440)** — toàn bộ qua
+  MERGE additive H5 (re-extract idempotent, không xóa node; occurrence_count tăng).
+- **Cơ sở dữ liệu 002**: 58/58 vector + covNew 58/58 — khoản "9 chunk thiếu" §5.4 đóng cửa vĩnh viễn.
+- **Thời lượng**: 10:29 (khảo sát) → 13:51 (shard chót verify) ≈ 3.5 giờ, trong đó mất ~50 phút
+  cho chẩn đoán + switch lõi extraction (glm hang) — thuần ingestion ~2.5 giờ cho 868 chunks.
+- **Bài học thêm (d)**: deadline driver 45ph/doc với shard lớn (131-155 chunks) là chật — 3 shard G4
+  xong server-side nhưng driver timeout trước (verify thủ công bù; may pm2 restart driver kịp
+  verify lại toàn bộ). Lần sau scale deadline theo kỳ vọng chunks (≥0.5 phút/chunk).
+- **Snapshot R2 ngay sau ingest** (đường khôi phục nhanh cho reset kế tiếp — xem lệnh ở §7.2).
+
+### 7.2 · Vận hành cho reset sau này
+
+```bash
+# 1) Backup Qdrant → R2 (tar ~1-3s cho 868 chunks):
+curl -X POST 'http://localhost:3000/api/storage/snapshot-full?store=qdrant' --max-time 300
+# 2) Backup SQLite (để cron 03:00 VN tự lo, hoặc chủ động):
+curl -X POST 'http://localhost:3000/api/storage/db-backup' --max-time 600
+# 3) Khi sandbox reset: restore từ R2 (giây) thay vì re-ingest (giờ):
+curl -X POST 'http://localhost:3000/api/storage/restore-full?store=qdrant' --max-time 300
+```
