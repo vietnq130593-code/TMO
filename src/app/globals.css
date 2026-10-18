@@ -696,6 +696,82 @@
   }
 }
 
+/* ==================== R33 — ĐÀI QUAN SÁT NÃO "DARK HACKER" (typology diagram) ====================
+   Chỉ thị user 2026-10-18: "đồng dạng typology diagram phong cách dark hacker,
+   có chuyển động lan truyền tiến/ngược giữa các nơ-ron trong các lớp; hạt tín
+   hiệu màu tương ứng xác định cơ chế tiến (xanh, trái→phải) hay ngược (vàng,
+   phải→trái) đang hoạt động". Topology layer (input→hidden→output) + hạt canvas
+   + nét đứt bs-flow GIỮ NGUYÊN (đó chính là chuyển động lan truyền) — R33 chỉ
+   thay LỚP TRÌNH BÀY: nền đen terminal + lưới phosphor mờ + scanline CRT +
+   vành thở emerald (thay amber — phosphor terminal). Thuần trình bày: không
+   đụng dữ liệu/geometry/60fps loop. Chỉ animate bs-caret (steps) — giảm tải
+   prefers-reduced-motion. */
+
+/* Nền sân khấu: đen gần tuyệt đối + 2 tầng lưới phosphor (nhẹ 24px, đậm
+   96px) — grid hacker blueprint, không chấm liệu (pointer-events-none ở
+   overlay riêng). */
+.bs-hacker {
+  background-color: #02040a;
+  background-image:
+    linear-gradient(rgba(16, 185, 129, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(16, 185, 129, 0.055) 1px, transparent 1px),
+    linear-gradient(rgba(16, 185, 129, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(16, 185, 129, 0.03) 1px, transparent 1px);
+  background-size: 96px 96px, 96px 96px, 24px 24px, 24px 24px;
+}
+
+/* Màn CRT: scanline ngang 3px + vignette radial làm tối dần rìa — ĐÈ LÊN
+   SVG + canvas hạt (z-5), nằm DƯỚI nút zoom (z-10). Tĩnh, không animation. */
+.bs-crt {
+  background:
+    repeating-linear-gradient(
+      0deg,
+      rgba(0, 0, 0, 0.24) 0px,
+      rgba(0, 0, 0, 0.24) 1px,
+      transparent 1px,
+      transparent 3px
+    ),
+    radial-gradient(ellipse at 50% 42%, transparent 60%, rgba(0, 0, 0, 0.5) 100%);
+}
+
+/* Vành thở dark-hacker: ACTIVE = emerald phất (phosphor sống), DORMANT =
+   emerald rất yếu tĩnh — cùng nhịp 4s ease-in-out của bs-glow-active cũ. */
+@keyframes bs-hack-breathe {
+  0%, 100% {
+    box-shadow: 0 0 6px 1px rgba(16, 185, 129, 0.22), inset 0 0 24px rgba(16, 185, 129, 0.05);
+  }
+  50% {
+    box-shadow: 0 0 16px 2px rgba(16, 185, 129, 0.5), inset 0 0 32px rgba(16, 185, 129, 0.09);
+  }
+}
+.bs-hack-glow-active {
+  animation: bs-hack-breathe 4s ease-in-out infinite;
+}
+.bs-hack-glow-dormant {
+  box-shadow: 0 0 5px 1px rgba(16, 185, 129, 0.25);
+}
+
+/* Con trỏ terminal nhấp nháy (dòng trạng thái TOPOLOGY::) — steps(1) rẻ,
+   tắt cùng nhóm reduced-motion. */
+@keyframes bs-caret-blink {
+  0%, 55% { opacity: 1; }
+  56%, 100% { opacity: 0; }
+}
+.bs-caret {
+  animation: bs-caret-blink 1.1s steps(1) infinite;
+}
+
+/* R33 reduced-motion: vành thở + con trỏ tắt tĩnh (scanline/grid là background
+   tĩnh nên không cần giảm) */
+@media (prefers-reduced-motion: reduce) {
+  .bs-hack-glow-active {
+    animation: none;
+  }
+  .bs-caret {
+    animation: none;
+  }
+}
+
 /* ==================== BRAIN-UX §9.6 (UX-5) — THEME HI-TECH "MÀN HÌNH KÍNH VIỀN SÁNG" ====================
    Cờ data-hitech="on" trên <html> (nút HiTechToggle dưới cùng sidebar —
    localStorage 'tmo-hitech' + sync tuning-store ui_hitech để audit).

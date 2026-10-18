@@ -77,6 +77,27 @@
  *    (λ = 1 − min(n/200, WilsonLB), bắt đầu 100% heuristic);
  *  - mobile <NEURAL_DESKTOP_BREAKPOINT: 3 cụm đầu ra XẾP DỌC (§8.5.4) —
  *    band compact KnowledgeGhostBand thay SVG 6 cột ngang (cuộn native).
+ *
+ * R33 — DARK HACKER TOPOLOGY (chỉ thị user 2026-10-18): "đồng dạng typology
+ * diagram phong cách dark hacker, có chuyển động thể hiện lan truyền tiến và
+ * lan truyền ngược giữa các nơ-ron trong các lớp; khi não vận hành, tín hiệu
+ * từ đầu vào đi qua các lớp tới lớp đầu ra cuối cùng có hạt tín hiệu màu
+ * tương ứng chuyển động để xác định cơ chế tiến/ngược đang hoạt động".
+ * Topology layer (input→hidden→output) + hạt canvas 60fps + nét đứt bs-flow
+ * (tiến) / bs-flow-bwd (ngược) GIỮ NGUYÊN — đó chính là "chuyển động lan
+ * truyền" theo dữ liệu THẬT (nguyên tắc Task 26: tuyệt đối không tượng
+ * trưng — hạt chỉ chạy trên cạnh có tín hiệu thật). R33 chỉ thay LỚP TRÌNH
+ * BÀY (thuần, không đụng dữ liệu/geometry):
+ *  - Nền đen terminal #02040a + lưới phosphor 2 tầng 24/96px (.bs-hacker);
+ *  - Scanline CRT + vignette đè lên SVG/canvas (.bs-crt — tĩnh z-5, dưới
+ *    nút zoom z-10);
+ *  - HUD 4 góc terminal + dòng trạng thái mono "▣ TOPOLOGY::key ▸ ONLINE/
+ *    STANDBY" + con trỏ nhấp nháy (.bs-caret);
+ *  - Vành thở emerald (.bs-hack-glow-*) thay amber (phosphor terminal) —
+ *    ACTIVE thở 4s, DORMANT tĩnh yếu;
+ *  - Nhãn cột/ghost band → phosphor mono (emerald); toolbar/zoom/inspector
+ *    đồng bộ đen + mono. Nơ-ron tím + cạnh tiến emerald/ngược vàng GIỮ
+ *    NGUYÊN (chỉ thị Task 26 vẫn là diện mạo "đồng dạng").
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -276,6 +297,11 @@ const SIGNAL_GATE_RATIO = 0.005
 /** Nơ-ron nguồn phải thật sự phát: |a| hoặc |δ| ≤ ngưỡng này = không tín hiệu. */
 const SOURCE_EPS = 1e-9
 
+/** R33 dark-hacker — stack font mono terminal cho nhãn cột SVG (fontFamily
+ *  inline) + chip đọc số; toolbar/zoom dùng Tailwind font-mono kế thừa. */
+const MONO_STACK =
+  'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace'
+
 /**
  * Sprite radial pre-render (64×64 offscreen): 1 lần tạo, vẽ hàng nghìn lần
  * drawImage — KHÔNG shadowBlur mỗi hạt (hiệu năng B4). lõi sáng → màu → trong
@@ -447,10 +473,10 @@ function KnowledgeGhostBand({
           )}
         </circle>
       ))}
-      <text x={trunkX} y={H - 3} textAnchor="middle" fontSize={6.5} className="fill-stone-500" style={{ fontFamily: 'inherit' }}>
+      <text x={trunkX} y={H - 3} textAnchor="middle" fontSize={6.5} className="fill-emerald-500/65" style={{ fontFamily: MONO_STACK }}>
         {trunkUnits} tanh
       </text>
-      <text x={clusterX} y={H - 3} textAnchor="middle" fontSize={6.5} style={{ fill: accent, fontFamily: 'inherit' }}>
+      <text x={clusterX} y={H - 3} textAnchor="middle" fontSize={6.5} style={{ fill: accent, fontFamily: MONO_STACK }}>
         {clusterUnits} · {activation}
       </text>
     </svg>
@@ -1434,18 +1460,18 @@ export function BrainStage({
           <text
             x={x} y={yBase - 10} textAnchor="middle"
             fontSize={8} className="cursor-pointer fill-amber-400 underline decoration-dotted"
-            style={{ fontFamily: 'inherit' }}
+            style={{ fontFamily: MONO_STACK, letterSpacing: '0.04em' }}
             role="button"
             onClick={ev => { ev.stopPropagation(); onEditLayer?.(ci - 1) }}
           >
             {c.label} ✎
           </text>
         ) : (
-          <text x={x} y={yBase - 10} textAnchor="middle" fontSize={8} className="fill-stone-300" style={{ fontFamily: 'inherit' }}>
+          <text x={x} y={yBase - 10} textAnchor="middle" fontSize={8} className="fill-emerald-200/85" style={{ fontFamily: MONO_STACK, letterSpacing: '0.04em' }}>
             {c.label}
           </text>
         )}
-        <text x={x} y={yBase} textAnchor="middle" fontSize={7} className="fill-stone-500" style={{ fontFamily: 'inherit' }}>
+        <text x={x} y={yBase} textAnchor="middle" fontSize={7} className="fill-emerald-500/65" style={{ fontFamily: MONO_STACK, letterSpacing: '0.03em' }}>
           {c.activation}
         </text>
         {c.locked && (
@@ -1490,7 +1516,7 @@ export function BrainStage({
           <text
             x={lineX - 4} y={cy} fontSize={8.5} textAnchor="middle" fill={accent}
             transform={`rotate(-90 ${lineX - 4} ${cy})`}
-            style={{ fontFamily: 'inherit' }}
+            style={{ fontFamily: MONO_STACK }}
           >
             {g.label}
           </text>
@@ -1499,7 +1525,8 @@ export function BrainStage({
     })
   }, [layout.headGroups, layout.colX, layout.neurons])
 
-  const lifecycleCls = brain.lifecycle === 'active' ? 'bs-glow-active' : 'bs-glow-dormant'
+  // R33: vành thở emerald dark-hacker thay amber (phosphor terminal)
+  const lifecycleCls = brain.lifecycle === 'active' ? 'bs-hack-glow-active' : 'bs-hack-glow-dormant'
   const ariaLayers = columns.map(c => `${c.label} ${c.activation}`).join(' → ')
   // R24-b — aria nhóm đầu ra cho ghost knowledge (§8.5.4 a11y: mô tả 3 cụm)
   const ariaGroups = layout.headGroups.length > 0
@@ -1523,7 +1550,7 @@ export function BrainStage({
       aria-label={`Sân khấu não ${brain.title}`}
     >
       {/* Thanh công cụ sân khấu */}
-      <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
+      <div className="mb-1.5 flex flex-wrap items-center gap-1.5 font-mono">
         {brain.key === 'surrogate' && weights && (
           <div className="flex overflow-hidden rounded-md border border-stone-700/70" role="tablist" aria-label="Chọn đầu ra surrogate">
             {(['success', 'tokens', 'durationMs'] as const).map(h => (
@@ -1620,8 +1647,18 @@ export function BrainStage({
         ref={stageBoxRef}
         onPointerDown={onStagePointerDown}
         onDoubleClick={() => { setView(null) }}
-        className={`relative overflow-hidden rounded-xl border ${fxOn ? 'border-stone-700/60' : 'border-slate-800/80'} bg-slate-950/60 ${fxOn ? lifecycleCls : ''} ${tall ? 'flex h-[440px] items-center justify-center md:h-[520px] xl:h-[600px]' : ''} ${zoomed ? (panning ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
+        className={`relative overflow-hidden rounded-xl border bs-hacker ${fxOn ? 'border-emerald-900/70' : 'border-emerald-950/80'} ${fxOn ? lifecycleCls : ''} ${tall ? 'flex h-[440px] items-center justify-center md:h-[520px] xl:h-[600px]' : ''} ${zoomed ? (panning ? 'cursor-grabbing' : 'cursor-grab') : ''}`}
       >
+        {/* R33 DARK HACKER HUD — 4 góc terminal + dòng trạng thái mono (z-4:
+            trên SVG/canvas auto, DƯỚI scanline CRT z-5 và nút zoom z-10; thuần
+            trình bày pointer-events-none; lifecycle đã có ở chip/aria chính) */}
+        <span aria-hidden className="pointer-events-none absolute left-1 top-1 z-[4] h-3 w-3 border-l-2 border-t-2 border-emerald-400/45" />
+        <span aria-hidden className="pointer-events-none absolute right-1 top-1 z-[4] h-3 w-3 border-r-2 border-t-2 border-emerald-400/45" />
+        <span aria-hidden className="pointer-events-none absolute bottom-1 left-1 z-[4] h-3 w-3 border-b-2 border-l-2 border-emerald-400/45" />
+        <span aria-hidden className="pointer-events-none absolute bottom-1 right-1 z-[4] h-3 w-3 border-b-2 border-r-2 border-emerald-400/45" />
+        <div aria-hidden className="pointer-events-none absolute left-2.5 top-1.5 z-[4] font-mono text-[9px] leading-none tracking-wide text-emerald-400/75">
+          ▣ TOPOLOGY::{brain.key} · {brain.lifecycle === 'active' ? 'ONLINE' : 'STANDBY'}<span className="bs-caret">▌</span>
+        </div>
         {/* ── R24-b §8.5.4 — GHOST XẾP DỌC MOBILE (<1024px): thay SVG 6 cột
             ngang (quá chật trên ~375px) bằng 4 band dọc cuộn được: trunk
             chung + 3 cụm đầu ra (mỗi cụm 1 panel accent + legend tên unit).
@@ -1650,7 +1687,7 @@ export function BrainStage({
               return (
                 <div
                   key={gid}
-                  className="rounded-lg border bg-slate-950/50 p-1.5"
+                  className="rounded-lg border bg-black/40 p-1.5"
                   style={{ borderColor: `${accent}55` }}
                 >
                   <p className="mb-0.5 text-[9px] font-semibold" style={{ color: accent }} title={HEAD_GROUP_TOOLTIP[gid]}>
@@ -1735,11 +1772,15 @@ export function BrainStage({
           <canvas ref={canvasRef} aria-hidden="true" className="pointer-events-none absolute inset-0 h-full w-full" />
         )}
 
+        {/* R33 — màn CRT scanline + vignette: ĐÈ lên SVG + canvas hạt (z-5),
+            DƯỚI nút zoom (z-10); tĩnh thuần trình bày, áp cả ghost xếp dọc */}
+        <div aria-hidden className="bs-crt pointer-events-none absolute inset-0 z-[5]" />
+
         {/* Nút zoom/pan overlay (BRAIN-LIVE) — touch target 44px mobile
             (R24-b: ẩn trong ghost xếp dọc mobile — không zoom, cuộn native) */}
         {!ghostStacked && (
         <div
-          className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 rounded-md border border-stone-700/70 bg-slate-950/80 p-0.5"
+          className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 rounded-md border border-emerald-900/70 bg-black/75 p-0.5 font-mono"
           role="group"
           aria-label="Thu phóng sân khấu não"
           onPointerDown={ev => ev.stopPropagation()}
@@ -1750,11 +1791,11 @@ export function BrainStage({
             onClick={() => { zoomBy(1 / ZOOM_STEP) }}
             aria-label="Thu nhỏ sân khấu"
             title="Thu nhỏ (bước 1.25×, tối thiểu 0.5×)"
-            className="min-h-[44px] md:min-h-[28px] min-w-7 px-1 text-[12px] leading-none text-stone-300 hover:text-amber-300"
+            className="min-h-[44px] md:min-h-[28px] min-w-7 px-1 text-[12px] leading-none text-emerald-200/90 hover:text-emerald-300"
           >
             −
           </button>
-          <span className="min-w-[3.4em] text-center text-[9.5px] tabular-nums text-stone-400" title="Mức thu phóng hiện tại (đúp chuột để vừa khung)">
+          <span className="min-w-[3.4em] text-center text-[9.5px] tabular-nums text-emerald-300/70" title="Mức thu phóng hiện tại (đúp chuột để vừa khung)">
             {zoomPct}%
           </span>
           <button
@@ -1762,7 +1803,7 @@ export function BrainStage({
             onClick={() => { zoomBy(ZOOM_STEP) }}
             aria-label="Phóng to sân khấu"
             title="Phóng to (bước 1.25×, tối đa 12×)"
-            className="min-h-[44px] md:min-h-[28px] min-w-7 px-1 text-[12px] leading-none text-stone-300 hover:text-amber-300"
+            className="min-h-[44px] md:min-h-[28px] min-w-7 px-1 text-[12px] leading-none text-emerald-200/90 hover:text-emerald-300"
           >
             +
           </button>
@@ -1770,7 +1811,7 @@ export function BrainStage({
             type="button"
             onClick={fit}
             title="Vừa khung (hoặc đúp chuột vào sân khấu)"
-            className="min-h-[44px] md:min-h-[28px] px-1.5 text-[9.5px] text-stone-300 hover:text-amber-300"
+            className="min-h-[44px] md:min-h-[28px] px-1.5 text-[9.5px] text-emerald-200/90 hover:text-emerald-300"
           >
             ⤢ Vừa
           </button>
@@ -1788,14 +1829,14 @@ export function BrainStage({
 
       {/* Task 26 B4 — chú thích 1 dòng dưới đài (chỉ thị user: quan sát chính xác) */}
       {fxOn && (
-        <p className="mt-0.5 text-[10px] leading-relaxed text-stone-500">
+        <p className="mt-0.5 font-mono text-[10px] leading-relaxed text-stone-500">
           <span className="text-emerald-400">●</span> tiến (xanh) — tín hiệu thật |a×w| · <span className="text-yellow-400">●</span> ngược (vàng) — gradient thật |δ×a| mẫu gần nhất · cạnh chỉ sáng khi có tín hiệu ≥0.5% max cặp lớp
         </p>
       )}
 
       {/* Inspector nơ-ron/cạnh */}
       {fxOn && inspector && inspect && (
-        <div className="mt-1.5 rounded-lg border border-stone-700/60 bg-slate-950/80 p-2 text-[10.5px] text-stone-300" role="status">
+        <div className="mt-1.5 rounded-lg border border-emerald-900/60 bg-black/70 p-2 font-mono text-[10.5px] text-stone-300" role="status">
           {inspect.kind === 'neuron' ? (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
               <span className="font-semibold text-amber-400">
@@ -1834,7 +1875,7 @@ export function BrainStage({
               )}
               {editorOn && !columns[inspect.col]?.locked && (
                 <button
-                  className="min-h-[44px] md:min-h-[28px] rounded border border-stone-700 px-1.5 text-[9.5px] text-stone-300 hover:text-amber-300"
+                  className="min-h-[44px] md:min-h-[28px] rounded border border-stone-700 px-1.5 text-[9.5px] text-emerald-200/90 hover:text-emerald-300"
                   onClick={() => onEditLayer?.(inspect.col - 1)}
                 >
                   Sửa 2 lớp hai đầu
