@@ -28,6 +28,35 @@ import { maybeSyncZenFreeModels } from './lib/free-models-sync'
 // warm-up bên dưới await nó trước khi prefetch /api/agents.
 import { ensureDbReady } from './lib/db-setup'
 
+// ============================================================================
+// R40 (2026-10-18) — SPAWN CWD GUARD, ROOT Ở MODULE SCOPE.
+// Root-cause bug user report local Windows (E:\APP\TMO-main): một bản vá local
+// CHƯA COMMIT từng chèn helper guardedCwd() vào file này tham chiếu hằng số
+// ROOT — nhưng ROOT chỉ được khai báo là biến CỤC BỘC bên trong buildServices
+// → ReferenceError "ROOT is not defined" ngay module evaluation → NGHIÊM TRỌNG:
+// CHÍNH instrumentation hook chết → toàn bộ mini-services + scheduler nền
+// (goal-loop, self-direction, ALISTA, backup...) không bao giờ start, server
+// Next vẫn chạy nhưng app "chay rỗng". Bản này triển khai ĐÚNG ý đồ bản vá đó
+// một cách an toàn:
+//   - ROOT nâng lên module scope (resolve một lần từ process.cwd() — cùng giá
+//     trị với const ROOT cục bộ cũ trong buildServices).
+//   - guardedCwd(rel): resolve đường dẫn spawn từ ROOT — THUẦN resolve,
+//     KHÔNG throw (throw ở buildServices chính là cái chết instrumentation
+//     như bản vá local — triết lý header file: "degrades gracefully").
+//   - Skip-guard trong buildServices: service thiếu thư mục spawn → skip với
+//     log rõ ràng thay vì retry-storm ENOENT 5 lần/service trong
+//     service-manager (xem filter spawnable bên dưới).
+// ============================================================================
+const ROOT = resolve(process.cwd())
+
+/**
+ * Resolve đường dẫn spawn mini-service từ ROOT project (module scope — R40).
+ * An toàn tuyệt đối: chỉ tính toán đường dẫn, không throw, không IO.
+ */
+function guardedCwd(rel: string): string {
+  return resolve(ROOT, rel)
+}
+
 // FIX 2026-08-28: đảm bảo TMO_API_TOKEN tồn tại TRƯỚC KHI spawn mini-services.
 // opencode-server validate X-TMO-API-Token trên MỌI request (kể cả /health) —
 // thiếu token → 503 + health check fail → kill/restart loop. Token được resolve
@@ -250,12 +279,11 @@ if (!globalForHttpWatchdog.__tmoHttpWatchdogStarted) {
   }
 }
 
-function buildServices(resolveFn: (...paths: string[]) => string) {
-  const ROOT = resolveFn(process.cwd())
+function buildServices(): ServiceConfig[] {
   const services: ServiceConfig[] = [
     {
       name: 'openclaw-gateway',
-      cwd: resolve(ROOT, 'mini-services/openclaw-gateway'),
+      cwd: guardedCwd('mini-services/openclaw-gateway'),
       command: 'bun',
       args: ['index.ts'],
       env: {
@@ -272,7 +300,7 @@ function buildServices(resolveFn: (...paths: string[]) => string) {
     },
     {
       name: 'opencode-server',
-      cwd: resolve(ROOT, 'mini-services/opencode-server'),
+      cwd: guardedCwd('mini-services/opencode-server'),
       command: 'bun',
       args: ['index.ts'],
       // FIX 2026-09-15 (multi-instance — clone-first workflow): health check
@@ -285,7 +313,7 @@ function buildServices(resolveFn: (...paths: string[]) => string) {
     },
     {
       name: 'gateway-bridge',
-      cwd: resolve(ROOT, 'mini-services/gateway-bridge'),
+      cwd: guardedCwd('mini-services/gateway-bridge'),
       command: 'bun',
       args: ['index.ts'],
       healthUrl: `http://127.0.0.1:${process.env.GATEWAY_BRIDGE_PORT || '18791'}/health`,
@@ -301,7 +329,7 @@ function buildServices(resolveFn: (...paths: string[]) => string) {
     // since it has no upstream dependency.
     {
       name: 'cron-scheduler',
-      cwd: resolve(ROOT, 'mini-services/cron-scheduler'),
+      cwd: guardedCwd('mini-services/cron-scheduler'),
       command: 'bun',
       args: ['index.ts'],
       env: {
@@ -318,6 +346,29 @@ function buildServices(resolveFn: (...paths: string[]) => string) {
     },
   ]
 
+  // R40 SKIP-GUARD: service nào thiếu thư mục spawn (pull/ZIP thiếu
+  // mini-services, bản deploy lệch cây thư mục) → skip graceful với log rõ
+  // ràng THAY VÌ retry-storm ENOENT 5 lần/service trong service-manager.
+  // Fail-open: try/catch quanh statSync — buildServices KHÔNG BAO GIỜ throw
+  // (throw ở đây = giết instrumentation hook = đúng cái chết của bản vá
+  // local "ROOT is not defined" mà R40 đang chữa).
+  const spawnable = services.filter(s => {
+    try {
+      return statSync(s.cwd).isDirectory()
+    } catch {
+      return false
+    }
+  })
+  if (spawnable.length < services.length) {
+    const skippedNames = services
+      .filter(s => !spawnable.includes(s))
+      .map(s => s.name)
+      .join(', ')
+    console.warn(
+      `[instrumentation] Skip mini-service (thư mục spawn không tồn tại): ${skippedNames} — app vẫn chạy bình thường, các tính năng không phụ thuộc service này không bị ảnh hưởng`
+    )
+  }
+
   // ON-DEMAND GATEWAY (user request 2026-09-07): KHÔNG spawn openclaw-gateway
   // + gateway-bridge lúc boot — gateway chỉ chiếm RAM (~340MB idle, có thể lên
   // GB khi có session) mà các luồng chính (agents có provider/model, Code
@@ -326,9 +377,9 @@ function buildServices(resolveFn: (...paths: string[]) => string) {
   // ensureGatewayRunning() và tự tắt sau idle. Tắt chế độ: OPENCLAW_ON_DEMAND=false
   if (isOnDemandEnabled()) {
     console.log('[instrumentation] OpenClaw gateway: ON-DEMAND mode — không spawn lúc boot; lazy-start khi tính năng cần (OPENCLAW_ON_DEMAND=false để luôn-start như cũ)')
-    return services.filter(s => s.name !== 'openclaw-gateway' && s.name !== 'gateway-bridge')
+    return spawnable.filter(s => s.name !== 'openclaw-gateway' && s.name !== 'gateway-bridge')
   }
-  return services
+  return spawnable
 }
 
 console.log('[instrumentation] Starting mini-services (non-blocking)...')
@@ -343,7 +394,7 @@ void ensureDbReady().then((r) => {
 
 // Fire-and-forget: do NOT await. Keeps the Next.js UI available instantly
 // while the services come up asynchronously.
-startAllServices(buildServices(resolve))
+startAllServices(buildServices())
   .then(() => {
     console.log('[instrumentation] All mini-services started successfully')
   })
