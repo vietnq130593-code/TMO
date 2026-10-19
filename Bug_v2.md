@@ -1729,3 +1729,82 @@
 - **Kiểm chứng:** r89 riêng 15/15 (13 pass + 2 sửa pass); full suite 1985/0 fail.
 
 > **Sai-kỳ-vọng phía người rà (FB-OBSV3 R1 — dữ liệu chống tự tin):** (1) auditor R1-09.2 "provider-degraded thiếu orderBy" — bác (code có orderBy desc); (2) auditor R1-09.4 "comment cụt" — bác (đọc bị cắt dòng); (3) coordinator "r89 fail do pollution từ r81" — NHẦM: r89 fail cả khi chạy riêng (lần "riêng" đầu dùng sai tên file nên không chạy gì); r81 chỉ tái hiện sai lệch khi ghép cặp do các file đó có dependency riêng khi thiếu context full-suite; (4) 9 sai-kỳ-vọng auditor tự bác (ghi trong biên bản fixbug.md §6).
+
+---
+
+## ĐỢT FB-EE — FIXBUG BLUEPRINT EXECUTION-EFFICIENCY W1+W2 (scope: commit triển khai 3641f90, 16 file +895/−53) — 2026-10-19
+
+> Nguồn vòng rà: auditor A (S1+S2) + auditor B (S3+S8) chạy song song độc lập + main tự audit S4-S7 (auditor C chết vì max-turns sau outage 429 MCP); mọi nghi vấn được main chấm chéo C2 bằng code trực tiếp + live-test trước khi fix. Chi tiết biên bản: fixbug.md mục 6.
+
+### BUG2-289 · E·P2 — delegationArtifacts tracker là DEAD-CODE: subRunId bị DROP tại tầng tool result mọi đường dispatch → S8 fallback deterministic KHÔNG BAO GIỜ có artifact refs — FB-EE-B-R1-01
+- **Hiện tượng:** tracker goal-loop (processToolResult :4735/:4740) chỉ đọc `robj.subRunId` / `robj.results[].subRunId`, nhưng KHÔNG đường GHI nào đặt key này vào tool result: `delegate_task` (tool-executor :3895-3916 build result thủ công không copy), `dispatch_agent` (runDispatchTask return :868-880 + result builder :4085), `dispatch_agents_parallel` (fanout results.push :1016), `escalate_problem` autoApplied (:4000) — dù `SubAgentOutcome.subRunId` đã có sẵn (subagent-delegate :336/:1939). grep `subRunId` toàn src: chỉ có bên ĐỌC (goal-loop) + bên SINH (subagent-delegate) — 0 nơi ĐẶT vào tool result.
+- **Tác động consumer:** (a) `artifactBlock` vào prompt LLM tổng kết (:2280) không bao giờ render; (b) `buildDeterministicFinalReport` mục "BÁO CÁO DELEGATION LƯU TRỮ" (:2467) không bao giờ render — đúng kịch bản S8 (LLM chết 3 attempt → fallback 0-LLM), người dùng nhận báo cáo thiếu thành phần "nơi lấy đầy đủ (artifact refs)" trong danh sách tối thiểu S8; (c) `buildDelegationOutcomeThought` dòng 📌 :1405/:1419 luôn rỗng. KPI §6 "truy hồi 1 bước" mất ở tầng final report.
+- **Fix:** lộ subRunId đủ 5 điểm GHI — tool-executor: `delegate_task` result + `dispatch_agent` result + `escalate` autoApplied copy `subRunId`; omega-orchestrator: type `DispatchResult` + field `subRunId?: string`, `runDispatchTask` return pass-through `outcome.subRunId`, fanout `results.push` + `subRunId: r.subRunId` (+ 2 inline type thêm field cho tsc).
+- **Kiểm chứng:** r103 nhóm C (consumer-side: buildDelegationOutcomeThought render 📌 khi result có subRunId, không bịa khi thiếu; parallel subRef từng item) + nhóm F (producer-side source-scan 6 cặp chuỗi — precedent r95-H, chặn regression bỏ key). Gate full-suite 2009/0 fail. Live delegation end-to-end chờ run thật kế tiếp (cơ chế đã phủ đủ đường).
+
+### BUG2-290 · G·P3 — scripts/backfill-agent-entities.ts KHÔNG được commit (.gitignore `/scripts/*` không re-include) — script nghiệm thu S1.2 mất theo reset box — FB-EE-A-R1-01
+- **Hiện tượng:** .gitignore :82 `/scripts/*` + không dòng `!` cho backfill → file untracked+ignored; commit 3641f90 không chứa script dù commit message + blueprint S1.2 + worklog Task 42 tuyên bố là deliverable W1 (đã CHẠY thật: 6/6 entity write-through, KPI §6 hàng 1 đạt).
+- **Tác động:** box đã reset 3 lần (RESTORE dựa 100% git) — reset tiếp theo mất sạch script → không tái chạy backfill entity agent lịch sử (documentId=null synced=false), không tái nghiệm thu S1 trên dữ liệu thật.
+- **Fix:** .gitignore thêm `!/scripts/backfill-agent-entities.ts` + comment giải thích (idempotent — MERGE node id deterministic global__<name>__<type>).
+- **Kiểm chứng:** `git status` giờ thấy script untracked (được track ở commit đợt này); script còn nguyên trên đĩa 2.824 bytes.
+
+### BUG2-291 · E·P3 — UI timeline smolab KHÔNG render event `final_report` (type union thiếu) — báo cáo cuối sub-agent VÔ HÌNH ở live panel — FB-EE-A-R1-02
+- **Hiện tượng:** `AgentRunEventData.type` union (:229) thiếu `'final_report'`; render switch live panel (:613-665) `return null` với type lạ — event trace mới (S2.2, cap 32K, ghi trước run_end) không hiển thị; chỉ summary-bar sau reload có fallback 1 dòng `• {e.text}`.
+- **Tác động:** mục tiêu S2.2 "mọi panel/UI đọc được" chỉ đạt một phần — người dùng theo dõi live không thấy báo cáo FULL của sub-agent khi nó hoàn thành.
+- **Fix:** union + `'final_report'` + case render riêng (icon 📋 "Báo cáo cuối (nguyên vẹn)", border amber phân biệt thought-violet/tool-cyan/run_end, line-clamp-6).
+- **Kiểm chứng:** tsc 0 lỗi (union mở rộng không phá case cũ); eslint sạch; render case nằm TRƯỚC `return null` theo đúng chuỗi if-kiểu hiện có.
+
+### BUG2-292 · G·P3 — S2 artifact store FAIL ÂM THẦM: archiveContext fire-and-forget + `.catch(() => {})` + KHÔNG log khi archived=false — FB-EE-A-R1-03
+- **Hiện tượng:** subagent-delegate :2102-2127: `void import(...).then(archiveContext…).then(r => { if (r.archived) console.log(...) })` — chỉ log THÀNH CÔNG; catch rỗng; `archived=false` không một dòng log nào.
+- **Tác động:** SQLite busy/locked (contention đã quan sát R41-OBSV1) hoặc race process-exit (box có lịch sử OOM crash-loop) → artifact "single source of truth" S2 mất âm thầm — parent cầm dòng 📌 ref trỏ hư, vi phạm bất biến blueprint §3.2 "tồn tại nguyên vẹn ở ≥1 nơi có địa chỉ".
+- **Fix:** nhánh `archived=false` log warn kèm đường fallback (trace agent-runs/<runId>.jsonl); catch log warn lỗi thật (vẫn fail-open — KHÔNG phá delegation).
+- **Kiểm chứng:** code inspection r103 vòng R2 + eslint; hành vi fail-open giữ nguyên (catch vẫn nuốt, chỉ thêm observability).
+
+### BUG2-293 · C·P3 — REASONING_MODELS matching 1 CHIỀU theo full prefixed id — model-string ngắn làm S3.1 tắt ÂM THẦM — FB-EE-B-R1-02
+- **Hiện tượng:** llm.ts entries có prefix đầy đủ (`'z-ai/glm-5.3-flash'`, `'deepseek-ai/deepseek-v4.1-flash'`), `isReasoningModel` = `model.includes(entry)` → config nào dùng short name (`'glm-5.3-flash'`) match = false → `verdictBudget` trả base → evaluator 2000 (thay vì 8000) cho reasoning model, không log không lỗi.
+- **Tác động:** hôm nay sống may mắn (AgentProfile toàn full NIM id + space-bunny-free khớp substring 'space-bunny') — nhưng latent: bất kỳ nguồn model config nào dùng tên ngắn là S3.1 vô hiệu cho call đó.
+- **Fix:** đảo entries sang FAMILY KHÔNG PREFIX (`'glm-5.3-flash'`, `'glm-5.3'`, `'deepseek-v4.1-flash'`, `'space-bunny'`) — matching 2 chiều: full id `.includes(family)` = true, short name tự match; comment giải thích + ghi nguồn lỗi.
+- **Kiểm chứng:** r103 nhóm A — 4 short name = true, 3 full id = true (hành vi cũ giữ), nemotron/null/'' = false.
+
+### BUG2-294 · C·P3 — final-report ladder [agent, agent, ladder]: attempt 2 fail-fast hoang phí khi breaker đang mở — FB-EE-B-R1-03
+- **Hiện tượng:** generateFinalReport attemptModels = [agent, agent, ladder] — khi attempt 1 fail vì circuit breaker mở (fail-fast trong ms, breaker 600s), attempt 2 CÙNG model sau backoff 12s gần như chắc chắn fail-fast nữa; chỉ attempt 3 (model khác) có ý nghĩa thực. Evaluator ladder thì đổi model NGAY attempt 2.
+- **Tác động:** trong kịch bản P3 (breaker mở — đúng run bằng chứng) mất thêm 12s chờ + 1 call fail-fast; tổng 3 attempt chỉ có 2 model thật sự khác nhau.
+- **Fix:** attemptModels = [agent, ladder, agent] — mỗi backoff đều có cơ hội model khác; attempt 3 quay về agent model (30s sau, breaker có thể đã half-recover). Vẫn 2 model trong biên spec "xoay 2-3 model".
+- **Kiểm chứng:** tsc/eslint; logic xoay được review trong vòng R2 (r103 nhóm D phủ fallback path sử dụng ladder này — buildDeterministicFinalReport).
+
+### BUG2-295 · C·P4 — verdictBudget 2 edge: reasoningTokens=0 tắt S3.1 ngầm (0 ?? base*4 → max(0,base) = base); NaN base rò NaN xuống LLM call — FB-EE-B-R1-04
+- **Hiện tượng:** `Math.floor(reasoningTokens ?? baseTokens * 4)` — 0 KHÔNG nullish → reasoning model nhận base khi caller truyền 0; `!Number.isFinite(baseTokens) || baseTokens <= 0` return `baseTokens` NGUYÊN giá trị (NaN → NaN).
+- **Tác động:** hiện 0 caller truyền 0 (cả 3 call-site truyền 4000 hoặc bỏ qua) — thuần latent; NaN rò xuống maxTokens của LLM call nếu caller tính sai.
+- **Fix:** guard rõ ràng: NaN → 0; base <= 0 → giữ nguyên (rác vào rác ra có kiểm soát); reasoningTokens chỉ được dùng khi finite && > 0.
+- **Kiểm chứng:** r103 nhóm B — override 0 → 4400 (4× base, không còn = base); NaN → 0; 2000 reasoning → 8000; 1100+override 4000 → 4000; thường → base.
+
+### BUG2-296 · G·P4 — comment stale: "(space-bunny-free là brain mặc định TASK 37)" trong khi resolveOmegaBrain đọc DB (hiện nemotron-550b) — FB-EE-B-R1-05
+- **Hiện tượng:** omega-orchestrator :253-256 comment khối S3.1 nói brain mặc định là space-bunny-free; DB hiện Omega = nvidia/nemotron-3-ultra-550b-a55b (auditor B verify sqlite).
+- **Tác động:** doc nói một đằng runtime một nẻo — hành vi vẫn đúng cho cả 2 (verdictBudget xử được cả hai) nhưng gây hiểu nhầm khi đọc code.
+- **Fix:** comment mô tả đúng (brain model đọc từ DB qua resolveOmegaBrain; matching theo family nên sống cho cả hai giá trị).
+- **Kiểm chứng:** code inspection vòng R2; không đổi hành vi.
+
+### BUG2-297 · E·P4 — buildDeterministicFinalReport đánh số section NHẢY khi todoSection rỗng: hardcode '4'/'5'/'6'/'7' → dãy 1,2,3,4,6,7 — FB-EE-B-R1-06
+- **Hiện tượng:** artifact block tự đánh `${todoSection ? '5' : '4'}` nhưng "6. THÔNG ĐIỆP CUỐI" và "7. CÒN THIẾU" hardcode — run không có todo (query rỗng hoặc runId null) → numbering 1,2,3,4(artifact),6,7.
+- **Tác động:** cosmetic — nội dung S8 nguyên vẹn nhưng dãy số thiếu 5 làm báo cáo trông lỗi format.
+- **Fix:** counter `nextSection()` tăng theo từng section THỰC SỰ render — mọi out.push đánh số động, tuần tự tuyệt đối.
+- **Kiểm chứng:** r103 nhóm D — run không todo + 2 delegationArtifacts (dup subRunId) → chứa "5. THÔNG ĐIỆP CUỐI" (bản cũ "6."), KHÔNG chứa "6. THÔNG ĐIỆP"; regex `/^(\d+)\. /gm` extract dãy strictly 1..N không nhảy không trùng.
+
+### BUG2-298 · F·P4 — LIKE layer LocalEntity KHÔNG escape wildcard: query chứa '%'/'_' match TOÀN BỘ bảng — FB-EE-A-R1-04
+- **Hiện tượng:** Prisma `contains` → SQLite LIKE không escape — live-test 19/10 trên DB thật: `contains '%'` match 6/6 entity (không tên nào chứa '%' thật), `contains '_'` match 6/6 tương tự.
+- **Tác động:** query agent chứa wildcard (hiếm) cho kết quả match-mọi — sai ngữ nghĩa "tìm theo tên entity"; KHÔNG phải SQL injection (bind-parameter).
+- **Fix:** hàm mới `sanitizeLikeQuery` export (strip %/_/\ + collapse whitespace + trim) + LIKE layer chỉ chạy khi kết quả còn nội dung (query '%' → '' → skip). LƯU Ý vòng rà bắt lỗi fix-of-fix: bản fix đầu chỉ replace wildcard bằng space — query '%' thành ' ' vẫn match mọi tên có space (6/6) — bản cuối trim + guard rỗng mới đúng.
+- **Kiểm chứng:** live sau fix (DB thật): '%' → 0 hits (trước 6/6), '_' → 0, tên đầy đủ → 1 hit (KPI §6 hàng 1 giữ nguyên), '50%_done' → '50 done' hợp lệ. r103 nhóm G — 8 expect unit + source-scan guard.
+
+### BUG2-299 · E·P4 — compression survivor dedupe theo CHUỖI NGUYÊN VĂN thay vì runId — biến thể dòng cùng sub-run chiếm nhiều slot cap 10 — FB-EE-A-R1-05
+- **Hiện tượng:** context-compression dedupe `key = line.trim()` — dòng tool-result `📌 Báo cáo đầy đủ: context_recall({runId:'X'})` ≠ dòng thought `📌 … — 1 bước, nguyên vẹn…` ≠ dòng parallel `· 📌 context_recall(…)` dù CÙNG runId X → 3 slot cho 1 sub-run.
+- **Tác động:** sau vài delegation, cap 10 bị biến thể trùng chiếm chỗ → artifact ref của sub-run KHÁC có thể bị đẩy khỏi digest (starvation) — giảm độ phủ bất biến S2.4.
+- **Fix:** tách hàm thuần `collectArtifactRefs` (export — test trực tiếp được) dedupe THEO RUNID trích từ regex; compressConversation dùng lại hàm này (không lặp logic).
+- **Kiểm chứng:** r103 nhóm E — 2 biến thể cùng runId + 1 khác → 2 refs (bản trước 3); messages thường/rỗng → []; 12 runId → cap 10.
+
+### GHI NHẬN FB-EE (KHÔNG fix — hành vi đúng thiết kế)
+- **A-R1-06 · F·P4 — query theo PREFIX CHUNG ("TMO Execution Process Research") chỉ thấy 5/6 entity:** 6 entity cùng prefix + LIKE layer `take: topK` (5) + orderBy createdAt desc → entity cũ nhất rơi ngoài cửa sổ. KPI §6 hàng 1 quy định query theo TÊN ĐẦY ĐỦ (verify 1-call đạt) — query prefix chung là kỳ vọng ngoài spec; tăng take sẽ phá "cap riêng topK" của S1.3. Ghi nhận để không kỳ vọng sai.
+- **B-R1-07 — giải tỏa (sai kỳ vọng auditor):** nghi vấn "fallback query Todo select priority/status có thể Prisma throw" — schema verify: `priority` TỒN TẠI (schema :1019 String @default("medium")), status String với giá trị đúng comment (pending|in_progress|blocked|completed|failed|cancelled|archived) — query hợp lệ 100%, try/catch fail-open có sẵn.
+
+> **Sai-kỳ-vọng phía người rà (FB-EE R1 — dữ liệu chống tự tin):** (1) auditor A nghi "survivor double-append qua nén liên tiếp do prefix bullet tích luỹ" — TỰ BÁC bằng regex match từ 📌 (dòng bullet `- 📌…` vẫn match sạch, dedupe hoạt động); (2) auditor A nghi "spec score 0.4 không hiện thực" — ghi nhận đúng là UserKBResult shape không có trường score, vị trí append đạt đúng ý ordering; (3) main tự bắt lỗi fix-of-fix trong chính vòng R1: bản đầu sanitizeLikeQuery replace % → space vẫn match mọi tên có space — vá ngay trong vòng + unit test chặn.
+

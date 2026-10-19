@@ -3905,6 +3905,10 @@ async function executeToolImpl(
             // FIX 2026-09-14 #2 — verdict của trọng tài delegation ĐỘC LẬP:
             // parent đọc evaluation.pass/gaps thay vì chỉ tin report tự chấm.
             evaluation: outcome.evaluation ?? null,
+            // FB-EE-B-R1-01 (fixbug EE vòng R1) — lộ subRunId: địa chỉ truy hồi
+            // artifact 1 bước (context_recall) cho parent + tracker
+            // delegationArtifacts (goal-loop) + fallback deterministic (S8).
+            subRunId: outcome.subRunId,
             error: outcome.error,
             hint: outcome.success
               ? undefined
@@ -3999,6 +4003,8 @@ async function executeToolImpl(
                 report: dispatched.report?.slice(0, 2500) ?? '',
                 evaluation: dispatched.evaluation ?? null,
                 tokensUsed: dispatched.tokensUsed ?? 0,
+                // FB-EE-B-R1-01 — lộ subRunId cho tracker (S8 artifact refs)
+                subRunId: dispatched.subRunId,
               }
               if (typeof dispatched.tokensUsed === 'number' && dispatched.tokensUsed > 0) {
                 out.tokensUsed = (consult.tokensUsed || 0) + dispatched.tokensUsed
@@ -4090,6 +4096,8 @@ async function executeToolImpl(
             endedBy: dispatched.endedBy,
             // FIX 2026-09-14 #2 — verdict trọng tài delegation độc lập
             evaluation: dispatched.evaluation ?? null,
+            // FB-EE-B-R1-01 — lộ subRunId (runDispatchTask giờ pass-through)
+            subRunId: dispatched.subRunId,
             error: dispatched.error,
             hint: dispatched.success
               ? undefined

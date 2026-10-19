@@ -489,3 +489,17 @@
 - **Phát hiện lũy kế qua giao thức: 129 + 12 = 141** (FB-OBSV3: BUG2-277 H·P2 · BUG2-278/282/283/284 P3 · BUG2-279/280/281 P3 · BUG2-285 P4 · BUG2-286 P3 test-gap · BUG2-287/288 C·P2 coordinator).
 - Gate kiểm thử: full suite **1985 pass / 0 fail** (baseline mới — 1978 + 7 test mới; 3 fail cửa trước đã hết), eslint 0 · tsc 0 · check:imports PASS.
 - Doctrine nhắc lại: mốc commit + dual-push NGAY sau ghi sổ (đợt này cũng vậy).
+
+### ĐỢT FB-EE — scope triển khai BLUEPRINT-EXECUTION-EFFICIENCY-P1-P8 W1+W2 (commit 3641f90, 16 file +895/−53 — S1-S8) — 2026-10-19 — KHÉP KẾT SAU 2 VÒNG
+
+| Vòng | Phát hiện mới | Xác minh |
+|---|---|---|
+| R1 | **11** (1 E·P2 + 5 P3 + 5 P4) — auditor A (S1+S2) + auditor B (S3+S8) chạy song song độc lập, main tự audit S4-S7 (auditor C chết vì max-turns sau outage 429 MCP — môi trường, không phải lỗi hệ TMO); mọi nghi vấn chấm chéo C2 bằng code trực tiếp + live-test DB thật (LIKE wildcard '%' match 6/6 tái hiện trước khi fix) | Fix toàn bộ 11 + regression r103 (14 test mới: matching 2 chiều · verdictBudget guard · subRunId render + source-scan 5 điểm GHI · numbering tuần tự · survivor dedupe theo runId · sanitizeLikeQuery) → gate full-suite **2009/0 fail** (66.217 expect) + tsc 0 + eslint 0 + check:imports PASS; live sau fix: '%' → 0 hits (trước 6/6), query tên đầy đủ vẫn 1 hit (KPI §6 hàng 1 giữ nguyên) |
+| R2 | **0** — rà lại TOÀN BỘ scope kể cả phần vừa fix: review full diff (+258/−69), quét stale trace (break_like_empty / merged<topK / z-ai prefix trong REASONING_MODELS = 0 sót), S4.2 batching + evaluator rule 19 verify chi tiết, pm2 restart nạp code mới (cold-compile self-exit 1 lần như PLAYBOOK — bình thường), health healthy, browser smoke 0 page error + 0 console error + UI render đủ module | — |
+
+- Phát hiện: FB-EE-A-R1-01..07 + FB-EE-B-R1-01..07 → **BUG2-289..299** (11 fix) + 1 ghi nhận không-fix (A-R1-06 prefix query 5/6 — hành vi đúng thiết kế take topK) + 1 giải tỏa (B-R1-07 Todo schema priority/status hợp lệ 100% — sai kỳ vọng auditor).
+- Đáng chú ý nhất: **BUG2-289 (E·P2)** — tracker `delegationArtifacts` là dead-code vì `subRunId` bị DROP tại 5 điểm GHI tool result → S8 fallback deterministic không bao giờ có artifact refs ("nơi lấy đầy đủ" đúng kịch bản LLM chết). Fix: lộ subRunId đủ 5 đường (delegate_task / dispatch_agent / escalate autoApplied / runDispatchTask / fanout + type DispatchResult).
+- **Lỗi fix-of-fix bắt trong chính vòng R1** (dữ liệu chống tự tin): bản đầu sanitizeLikeQuery thay wildcard bằng space — query '%' thành ' ' vẫn match mọi tên có space (6/6 như cũ); vá ngay bằng trim + guard rỗng + unit test chặn.
+- Sai kì vọng phía người rà: 3 (auditor A tự bác survivor double-append + spec score 0.4; B-R1-07 giải tỏa qua schema) — lần 18.
+- Sự cố môi trường phiên này: 3 subagent audit song song (~370K tokens) → MCP server 429 → tool layer chết 2 lần (~40 phút + ~25 phút) + preview panel hiện ResourceExhausted container concurrency (xác nhận app vô can: pm2 2/2 + HTTP 200 0.07s + health healthy ngay tại thời điểm lỗi). Bài học vận hành cho chính giao thức fixbug: auditor độc lập CHẠY TUẦN TỰ, không song song 3 (đã ghi PLAYBOOK).
+- Nghiệm thu: không việc hoãn nào trong scope. W3 (P8 nền: 8a transaction retry · 8b NIM utility backup · 8c Qdrant re-ingest 868 chunk · 8d chính sách model evaluator dài hạn) ngoài scope đợt này theo thiết kế blueprint §5 — chờ user quyết.

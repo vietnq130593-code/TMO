@@ -452,10 +452,16 @@ export function eolNimModelMessage(model: string): string | undefined {
  * -free/-latest của cùng họ model).
  */
 const REASONING_MODELS: readonly string[] = [
-  'z-ai/glm-5.3-flash',   // reasoning + content về kèm reasoning_content (R25 probe)
-  'z-ai/glm-5.3',         // siêu model reasoning (R25)
-  'deepseek-ai/deepseek-v4.1-flash', // reasoning chậm ~135s (R25)
-  'space-bunny',          // Zen reasoning model (effort low vẫn cần headroom — TASK 55)
+  // FB-EE-B-R1-02 (fixbug EE vòng R1): dùng FAMILY KHÔNG PREFIX để matching
+  // 2 chiều — 'z-ai/glm-5.3-flash'.includes('glm-5.3-flash') = true (full id)
+  // và 'glm-5.3-flash'.includes('glm-5.3-flash') = true (short name). Bản
+  // trước dùng entry có prefix ('z-ai/glm-5.3-flash') → model-string ngắn từ
+  // config nào đó sẽ match = false → verdictBudget ÂM THẦM trả base (S3.1 tắt
+  // ngầm cho call đó). Family ngắn match đủ cả 2 dạng + biến thể -free/-latest.
+  'glm-5.3-flash',        // reasoning + content về kèm reasoning_content (R25 probe)
+  'glm-5.3',              // siêu model reasoning (R25) — cũng match glm-5.3-flash (bao hàm, cùng reasoning)
+  'deepseek-v4.1-flash',  // reasoning chậm ~135s (R25)
+  'space-bunny',          // Zen reasoning model (effort low vẫn cần headroom — TASK 55; match cả space-bunny-free)
 ]
 
 /** S3.1 — model có phải reasoning (đốt max_tokens cho suy luận) không? */
@@ -474,10 +480,17 @@ export function isReasoningModel(model: string | null | undefined): boolean {
  * 1.100 → 4.000 theo blueprint S3.1).
  */
 export function verdictBudget(model: string | null | undefined, baseTokens: number, reasoningTokens?: number): number {
-  if (!Number.isFinite(baseTokens) || baseTokens <= 0) return baseTokens
-  return isReasoningModel(model)
-    ? Math.max(Math.floor(reasoningTokens ?? baseTokens * 4), Math.floor(baseTokens))
-    : Math.floor(baseTokens)
+  // FB-EE-B-R1-04 (fixbug EE vòng R1): guard đầu vào — NaN → 0 (không truyền
+  // NaN xuống LLM call); reasoningTokens <= 0 bị bỏ (0 là "không ghi đè",
+  // KHÔNG phải "budget 0" — bản trước 0 ?? base*4 = Math.max(0, base) = base
+  // làm S3.1 tắt âm thầm khi caller truyền 0).
+  if (!Number.isFinite(baseTokens)) return 0
+  if (baseTokens <= 0) return Math.floor(baseTokens)
+  if (!isReasoningModel(model)) return Math.floor(baseTokens)
+  const reasoning = Number.isFinite(reasoningTokens) && (reasoningTokens as number) > 0
+    ? (reasoningTokens as number)
+    : baseTokens * 4
+  return Math.max(Math.floor(reasoning), Math.floor(baseTokens))
 }
 
 /**

@@ -2111,9 +2111,20 @@ async function runSubAgentForProfileInner(params: {
             .then(r => {
               if (r.archived) {
                 console.log(`[SubAgent] S2 artifact: báo cáo FULL của ${profile.name} (${artifactContent.length} chars) → TaskContextArchive runId=${artifactRunId.slice(0, 22)}… (truy hồi: context_recall)${r.embedded ? ' + embed Qdrant' : ''}`)
+              } else {
+                // FB-EE-A-R1-03 (fixbug EE vòng R1): KHÔNG im lặng khi artifact
+                // không lưu được — single source of truth S2 mà mất âm thầm thì
+                // parent cầm 📌 ref trỏ hư (vi phạm bất biến "tồn tại nguyên vẹn
+                // ở ≥1 nơi có địa chỉ"). Trace JSONL vẫn còn bản gần đầy đủ.
+                console.warn(`[SubAgent] S2 artifact KHÔNG lưu được (archived=false) — ${profile.name} runId=${artifactRunId.slice(0, 22)}… — fallback truy hồi: trace agent-runs/${artifactRunId}.jsonl`)
               }
             })
-            .catch(() => { /* fail-open — artifact không được phá delegation */ })
+            .catch(archiveErr => {
+              // FB-EE-A-R1-03 — catch có log (bản trước () => {} âm thầm):
+              // SQLite busy/locked (contention R41-OBSV1) hoặc lỗi khác không
+              // được phá delegation — nhưng PHẢI lộ để vận hành biết.
+              console.warn(`[SubAgent] S2 artifact store FAIL (fail-open — delegation vẫn trả kết quả; truy hồi qua trace agent-runs/${delegationRunId ?? '?'}.jsonl):`, archiveErr instanceof Error ? archiveErr.message : String(archiveErr))
+            })
         }
       } catch { /* fail-open */ }
     }

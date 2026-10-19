@@ -226,7 +226,7 @@ export interface RunTodoData {
 export interface AgentRunEventData {
   id: string
   ts: number
-  type: 'run_start' | 'thought' | 'tool' | 'todo_update' | 'run_end'
+  type: 'run_start' | 'thought' | 'tool' | 'todo_update' | 'run_end' | 'final_report'
   text?: string
   iteration?: number
   tool?: string
@@ -645,6 +645,20 @@ export function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: RunTod
                     <div key={e.id} className={`flex items-center gap-1.5 px-2 py-1 text-[12px] ${e.cancelled ? 'text-orange-400' : e.success ? 'text-emerald-400' : 'text-red-400'}`}>
                       {e.cancelled ? <Square className="h-3 w-3" /> : e.success ? <CheckCircle2 className="h-3 w-3" /> : <XCircle className="h-3 w-3" />}
                       {e.cancelled ? 'Đã dừng' : e.success ? 'Done' : 'Lỗi'}{e.text ? ` — ${e.text}` : ''}
+                    </div>
+                  )
+                }
+                {/* FB-EE-A-R1-02 (fixbug EE vòng R1): event final_report (S2.2 — báo cáo
+                    FULL 32K của sub-agent, lưu nguyên vẹn trước run_end) trước đây
+                    rơi return null → VÔ HÌNH ở live panel dù DB có đủ. */}
+                if (e.type === 'final_report') {
+                  return (
+                    <div key={e.id} className="px-2 py-1.5 rounded bg-slate-900/50 border-l-2 border-amber-500/60">
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <span className="text-[11px] text-amber-300">📋 Báo cáo cuối (nguyên vẹn)</span>
+                        <span className="text-[10px] text-stone-500 ml-auto">{new Date(e.ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                      </div>
+                      <p className="text-[12px] leading-5 text-stone-300 whitespace-pre-wrap line-clamp-6">{e.text}</p>
                     </div>
                   )
                 }

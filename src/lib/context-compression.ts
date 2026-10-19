@@ -525,6 +525,35 @@ export function truncateToolOutputObject(value: unknown, maxChars: number): unkn
 // ==================== ROLLING COMPRESSION (tầng 2) ====================
 
 /**
+ * FB-EE-A-R1-05 (fixbug EE vòng R1) — S2.4 ARTIFACT-REF SURVIVOR, tách hàm
+ * thuần để test trực tiếp. Trích mọi dòng "📌 … context_recall({runId:'…'})"
+ * khỏi danh sách message, dedupe THEO RUNID (biến thể dòng cùng 1 sub-run —
+ * tool-result vs thought vs parallel — chỉ chiếm 1 slot; bản trước dedupe
+ * theo chuỗi nguyên văn nên các biến thể trùng chiếm nhiều slot cap 10).
+ * Cap 10 refs (đủ mọi delegation thực tế của 1 run).
+ */
+export function collectArtifactRefs(messages: Array<{ role: string; content: string }>): string[] {
+  const ARTIFACT_REF_RE = /📌[^\n]*context_recall\(\{runId:'[^']{4,120}'\}\)[^\n]*/g
+  const RUNID_EXTRACT_RE = /context_recall\(\{runId:'([^']{4,120})'\}\)/
+  const refSeen = new Set<string>()
+  const artifactRefs: string[] = []
+  for (const m of messages) {
+    const matches = m.content.match(ARTIFACT_REF_RE)
+    if (!matches) continue
+    for (const line of matches) {
+      const runIdMatch = RUNID_EXTRACT_RE.exec(line)
+      const key = runIdMatch ? runIdMatch[1] : line.trim()
+      if (refSeen.has(key)) continue
+      refSeen.add(key)
+      artifactRefs.push(line.trim())
+      if (artifactRefs.length >= 10) break
+    }
+    if (artifactRefs.length >= 10) break
+  }
+  return artifactRefs
+}
+
+/**
  * ROLLING CONTEXT COMPRESSION — nén segment cũ của messages thành 1 digest
  * message (bản tổng quát của compressHistory goal-loop, dùng chung cho cả
  * goal-loop và code-team workflow-engine).
@@ -691,21 +720,7 @@ export async function compressConversation(params: {
   // hồi nguyên vẹn không được mất (P2 tier 3: delegate report 9.000 chars bị
   // 4 lần nén tiêu hoá thành digest sau 1-2 chu kỳ). Trích deterministic mọi
   // dòng tham chiếu từ segment bị nén, append cuối digest (dedupe, cap 10).
-  const ARTIFACT_REF_RE = /📌[^\n]*context_recall\(\{runId:'[^']{4,120}'\}\)[^\n]*/g
-  const refSeen = new Set<string>()
-  const artifactRefs: string[] = []
-  for (const m of compressible) {
-    const matches = m.content.match(ARTIFACT_REF_RE)
-    if (!matches) continue
-    for (const line of matches) {
-      const key = line.trim()
-      if (refSeen.has(key)) continue
-      refSeen.add(key)
-      artifactRefs.push(line.trim())
-      if (artifactRefs.length >= 10) break
-    }
-    if (artifactRefs.length >= 10) break
-  }
+  const artifactRefs = collectArtifactRefs(compressible)
   if (artifactRefs.length > 0) {
     const refBlock = `\n\n📎 BÁO CÁO DELEGATION LƯU TRỮ (nguyên vẹn — truy hồi 1 bước, không bị nén):\n${artifactRefs.map(l => `- ${l}`).join('\n')}`
     digest = digest + refBlock

@@ -685,6 +685,8 @@ interface EvidenceEntry {
   text: string // preview ~200 chars
 }
 
+export type { EvidenceEntry }
+
 export interface EvalVerdict {
   complete: boolean
   confidence: number
@@ -2314,16 +2316,19 @@ QUY TẮC: KHÔNG gọi tool. KHÔNG bắt đầu công việc mới. Chỉ tổ
   // ━━━ EXECUTION-EFFICIENCY S3.3 — LADDER ĐA MODEL (thay pattern "cùng model
   // chết 3 lần") ━━━ P3 bằng chứng: final report fail 3× với CÙNG model đang
   // chết (breaker mở 600s) → 3 fail là tất yếu → BUG-024 fallback generic mất
-  // toàn bộ nội dung nghiên cứu. Ladder: attempt 1+2 = model agent (backoff
-  // transient như cũ); attempt 3 = model KHÁC (nemotron-550b — chính sách R39
-  // cho đường chấm điểm/tổng kết; deepseek-v4.1-flash nếu agent đã là nemotron).
+  // toàn bộ nội dung nghiên cứu. Ladder: xoay model sau MỖI backoff —
+  // [agent, ladder, agent] (FB-EE-B-R1-03 fixbug EE vòng R1: bản trước
+  // [agent, agent, ladder] — attempt 2 cùng model khi breaker đang mở chỉ là
+  // fail-fast + 12s chờ hoang phí; mỗi backoff giờ có cơ hội model khác).
+  // Model ladder = nemotron-550b (chính sách R39 cho đường chấm điểm/tổng
+  // kết; deepseek-v4.1-flash nếu agent đã là nemotron).
   const FINAL_REPORT_RETRY_BACKOFF_MS = [12_000, 30_000]
   const FINAL_REPORT_MAX_ATTEMPTS = FINAL_REPORT_RETRY_BACKOFF_MS.length + 1
   const ladderModel = agentModel === NEMOTRON_550B_NIM_ID ? DEEPSEEK_V41_FLASH_NIM_ID : NEMOTRON_550B_NIM_ID
   const attemptModels: Array<{ provider: string; model: string }> = [
     { provider: agentProvider, model: agentModel },
-    { provider: agentProvider, model: agentModel },
     { provider: 'nvidia', model: ladderModel },
+    { provider: agentProvider, model: agentModel },
   ]
   let finalReportLastErr = 'unknown'
   for (let attempt = 1; attempt <= FINAL_REPORT_MAX_ATTEMPTS; attempt++) {
@@ -2383,7 +2388,7 @@ QUY TẮC: KHÔNG gọi tool. KHÔNG bắt đầu công việc mới. Chỉ tổ
  * kèm lý do + nơi lấy đầy đủ (artifact refs) + next action đề xuất. Mọi thứ
  * đều có sẵn server-side (checkpoint/result/DB) — chỉ cần format.
  */
-async function buildDeterministicFinalReport(params: {
+export async function buildDeterministicFinalReport(params: {
   goal: string
   lastContent: string
   evidence: EvidenceEntry[]
@@ -2408,12 +2413,17 @@ async function buildDeterministicFinalReport(params: {
 
   const complete = stopReason === 'complete'
   const out: string[] = []
+  // FB-EE-B-R1-06 (fixbug EE vòng R1): đánh số section TỰ ĐỘNG — bản trước
+  // hardcode '4'/'5'/'6'/'7' nên khi todoSection rỗng (run không có todo)
+  // dãy số nhảy (…, 4, 6, 7). Counter tăng theo từng section THỰC SỰ render.
+  let sectionNo = 0
+  const nextSection = () => `${++sectionNo}`
 
   // Header — trung thực về chế độ fallback
   out.push(`BÁO CÁO CUỐI — ${complete ? 'MỤC TIÊU HOÀN THÀNH' : 'CHƯA HOÀN THÀNH'} (chế độ tổng hợp tự động: mọi lần sinh báo cáo bằng LLM đều lỗi — ${lastError.slice(0, 160)}). Nội dung dưới đây dựng 100% từ dữ liệu ghi nhận server-side của run, không bỏ sót bằng chứng.`)
 
   // 1. Tóm tắt 1 dòng (dùng cùng builder task_summary — CI-3 B4)
-  out.push(`1. TÓM TẮT\n${distillTaskSummary({
+  out.push(`${nextSection()}. TÓM TẮT\n${distillTaskSummary({
     goal, finalContent: lastContent, stopReason, complete,
     verdictMissing: lastVerdict?.missing, rootCause: lastVerdict?.rootCause,
     cycles: cyclesAttempted, toolCalls: totalToolCalls ?? evidence.filter(e => e.kind === 'tool').length,
@@ -2421,13 +2431,13 @@ async function buildDeterministicFinalReport(params: {
   })}`)
 
   // 2. Mục tiêu gốc
-  out.push(`2. MỤC TIÊU GỐC\n${goal.slice(0, 800)}`)
+  out.push(`${nextSection()}. MỤC TIÊU GỐC\n${goal.slice(0, 800)}`)
 
   // 3. Việc đã làm — evidence log (đếm + tối đa 12 dòng gần nhất)
   const toolEvidence = evidence.filter(e => e.kind === 'tool')
   const okCount = toolEvidence.filter(e => e.success !== false).length
   const recent = toolEvidence.slice(-12).map(e => `- [${e.success === false ? '✗' : '✓'}] ${e.tool}: ${(e.text ?? '').slice(0, 140)}`)
-  out.push(`3. VIỆC ĐÃ LÀM (nhật ký bằng chứng tool — ${toolEvidence.length} calls, ${okCount} thành công)\n${recent.length > 0 ? recent.join('\n') : '- (không có tool call nào được ghi)'}`)
+  out.push(`${nextSection()}. VIỆC ĐÃ LÀM (nhật ký bằng chứng tool — ${toolEvidence.length} calls, ${okCount} thành công)\n${recent.length > 0 ? recent.join('\n') : '- (không có tool call nào được ghi)'}`)
 
   // 4. Danh sách todo (DB — đóng/mở kèm trạng thái)
   let todoSection = ''
@@ -2446,28 +2456,28 @@ async function buildDeterministicFinalReport(params: {
         const closed = byStatus(['completed'])
         const other = todos.filter(t => !open.includes(t) && !closed.includes(t))
         const fmt = (t: { content: string; status: string; priority: string }) => `- [${t.status}] ${t.content.slice(0, 160)}`
-        todoSection = `4. DANH SÁCH TODO (${todos.length} mục — ${closed.length} completed, ${open.length} mở)\n${closed.length > 0 ? `Đã xong:\n${closed.slice(0, 10).map(fmt).join('\n')}\n` : ''}${open.length > 0 ? `Còn mở (chưa làm xong — lý do: run dừng vì ${stopReason}):\n${open.slice(0, 10).map(fmt).join('\n')}` : ''}${other.length > 0 ? `\nKhác (failed/cancelled/archived):\n${other.slice(0, 6).map(fmt).join('\n')}` : ''}`
+        todoSection = `${nextSection()}. DANH SÁCH TODO (${todos.length} mục — ${closed.length} completed, ${open.length} mở)\n${closed.length > 0 ? `Đã xong:\n${closed.slice(0, 10).map(fmt).join('\n')}\n` : ''}${open.length > 0 ? `Còn mở (chưa làm xong — lý do: run dừng vì ${stopReason}):\n${open.slice(0, 10).map(fmt).join('\n')}` : ''}${other.length > 0 ? `\nKhác (failed/cancelled/archived):\n${other.slice(0, 6).map(fmt).join('\n')}` : ''}`
       }
     }
   } catch { /* fail-open — không có todo section thay vì chết cả fallback */ }
   if (todoSection) out.push(todoSection)
 
-  // 5. Artifact refs — nơi lấy báo cáo delegation đầy đủ (S2)
+  // Artifact refs — nơi lấy báo cáo delegation đầy đủ (S2)
   if (delegationArtifacts && delegationArtifacts.length > 0) {
     const uniq = new Map<string, { agent: string; subRunId: string }>()
     for (const a of delegationArtifacts) uniq.set(a.subRunId, a)
-    out.push(`${todoSection ? '5' : '4'}. BÁO CÁO DELEGATION LƯU TRỮ NGUYÊN VẸN (truy hồi 1 bước — dùng context_recall hoặc hỏi lại agent với runId)\n${[...uniq.values()].slice(-8).map(a => `- [${a.agent}] context_recall({runId:'${a.subRunId}'})`).join('\n')}`)
+    out.push(`${nextSection()}. BÁO CÁO DELEGATION LƯU TRỮ NGUYÊN VẸN (truy hồi 1 bước — dùng context_recall hoặc hỏi lại agent với runId)\n${[...uniq.values()].slice(-8).map(a => `- [${a.agent}] context_recall({runId:'${a.subRunId}'})`).join('\n')}`)
   }
 
-  // 6. Thông điệp cuối của agent (thought cuối — nguyên văn trích đoạn)
+  // Thông điệp cuối của agent (thought cuối — nguyên văn trích đoạn)
   if (lastContent && lastContent.trim()) {
-    out.push(`6. THÔNG ĐIỆP CUỐI CỦA AGENT (nguyên văn — có thể đang dở giữa chừng)\n${lastContent.slice(0, 1500)}`)
+    out.push(`${nextSection()}. THÔNG ĐIỆP CUỐI CỦA AGENT (nguyên văn — có thể đang dở giữa chừng)\n${lastContent.slice(0, 1500)}`)
   }
 
-  // 7. Còn thiếu theo trọng tài
+  // Còn thiếu theo trọng tài
   if (!complete && lastVerdict) {
     const missing = lastVerdict.missing?.length ? lastVerdict.missing.map(m => `- ${m}`).join('\n') : ''
-    out.push(`7. CÒN THIẾU (theo trọng tài chu kỳ cuối)\n${missing || '- (trọng tài không liệt kê cụ thể)'}${lastVerdict.rootCause ? `\nVấn đề gốc: ${lastVerdict.rootCause}` : ''}`)
+    out.push(`${nextSection()}. CÒN THIẾU (theo trọng tài chu kỳ cuối)\n${missing || '- (trọng tài không liệt kê cụ thể)'}${lastVerdict.rootCause ? `\nVấn đề gốc: ${lastVerdict.rootCause}` : ''}`)
   }
 
   // 8. Nợ kỹ thuật + hồi quy (nếu có)

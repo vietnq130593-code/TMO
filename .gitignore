@@ -318,3 +318,9 @@ scratch/r24*.png
 # Track để fresh clone tái chạy được phép nghiệm thu (idempotent cả hai).
 !/scripts/refresh-communities.ts
 !/scripts/seed-eval-knowledge.ts
+# NGOẠI LỆ (FB-EE-A-R1-01 — fixbug EE vòng R1): backfill S1.2 — write-through
+# Neo4j cho entity agent lịch sử (documentId=null, synced=false) + verify
+# knowledge_search tìm thấy. Idempotent (MERGE node id deterministic). Box đã
+# reset 3 lần — script mất theo reset thì không tái chạy backfill/nghiệm thu
+# S1 trên dữ liệu thật được (kèm 6 entity run bằng chứng run_1792386145100_1).
+!/scripts/backfill-agent-entities.ts

@@ -630,6 +630,19 @@ async function semanticEntitySearch(
   }
 }
 
+/**
+ * FB-EE-A-R1-04 (fixbug EE vòng R1) — strip wildcard LIKE ('%', '_', '\') khỏi
+ * query trước khi đưa vào Prisma `contains` (SQLite LIKE KHÔNG escape —
+ * live-test 19/10: contains '%' match 6/6 entity dù không tên nào chứa '%';
+ * contains '_' match 6/6 tương tự). Tên/mô tả entity không dùng wildcard một
+ * cách hữu ích → mất khả năng tìm literal '%' là chấp nhận được. Trả về chuỗi
+ * ĐÃ TRIM — rỗng nghĩa là query toàn wildcard ('%'/'_') → caller SKIP LIKE
+ * layer (không chạy match-mọi-tên-có-space).
+ */
+export function sanitizeLikeQuery(query: string): string {
+  return query.replace(/[%_\\]/g, ' ').replace(/\s+/g, ' ').trim()
+}
+
 async function searchEntitiesForUser(agentId: string, query: string, topK: number): Promise<UserKBResult['entities']> {
   try {
     // searchEntities from neo4j.ts — lexical name search (fulltext index with
@@ -684,32 +697,39 @@ async function searchEntitiesForUser(agentId: string, query: string, topK: numbe
     try {
       if (query.trim()) {
         const { db } = await import('@/lib/db')
-        const q = query.trim()
-        // Prisma `contains` → SQLite LIKE '%q%' (case-insensitive ASCII —
-        // đủ cho "tìm theo tên entity" của S1, không cần embedding)
-        const localHits = await db.localEntity.findMany({
-          where: {
-            OR: [
-              { entityName: { contains: q } },
-              { description: { contains: q } },
-            ],
-          },
-          // SELECT tối thiểu — không kéo properties JSON (có thể dài)
-          select: { id: true, entityName: true, entityType: true, description: true, domain: true },
-          take: topK,
-          orderBy: { createdAt: 'desc' },
-        })
-        for (const e of localHits) {
-          const key = e.entityName.toLowerCase()
-          if (!key || seen.has(key)) continue
-          seen.add(key)
-          merged.push({
-            id: e.id,
-            name: e.entityName,
-            type: e.entityType,
-            description: e.description ?? '',
-            domain: e.domain ?? '',
+        // FB-EE-A-R1-04 (fixbug EE vòng R1): Prisma contains → SQLite LIKE
+        // KHÔNG escape wildcard — '%'/'_' trong query hoạt động như wildcard
+        // (live-test: contains '%' match 6/6 entity dù không tên nào chứa '%').
+        // Strip wildcard qua sanitizeLikeQuery + chỉ chạy khi còn nội dung
+        // (query '%' → '' → skip; query '50%' → '50' vẫn tìm hợp lệ).
+        const q = sanitizeLikeQuery(query)
+        if (q) {
+          // Prisma `contains` → SQLite LIKE '%q%' (case-insensitive ASCII —
+          // đủ cho "tìm theo tên entity" của S1, không cần embedding)
+          const localHits = await db.localEntity.findMany({
+            where: {
+              OR: [
+                { entityName: { contains: q } },
+                { description: { contains: q } },
+              ],
+            },
+            // SELECT tối thiểu — không kéo properties JSON (có thể dài)
+            select: { id: true, entityName: true, entityType: true, description: true, domain: true },
+            take: topK,
+            orderBy: { createdAt: 'desc' },
           })
+          for (const e of localHits) {
+            const key = e.entityName.toLowerCase()
+            if (!key || seen.has(key)) continue
+            seen.add(key)
+            merged.push({
+              id: e.id,
+              name: e.entityName,
+              type: e.entityType,
+              description: e.description ?? '',
+              domain: e.domain ?? '',
+            })
+          }
         }
       }
     } catch (localErr) {

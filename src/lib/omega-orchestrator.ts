@@ -251,9 +251,11 @@ Phân tích và đưa ra giải pháp tốt nhất (JSON).`
         agentName: 'Omega (orchestrator consult)',
         temperature: 0.3,
         // EXECUTION-EFFICIENCY S3.1 — budget model-aware: consult là đường CHẤM
-        // ĐIỂM/TƯ VẤN trả JSON; reasoning model (space-bunny-free là brain mặc
-        // định TASK 37) đốt max_tokens cho suy luận → 1.100 cạn → JSON cụt/null
-        // → auto-escalate trả rỗng (P3). Reasoning → 4.000 (S3.1), thường giữ 1.100.
+        // ĐIỂM/TƯ VẤN trả JSON; reasoning model đốt max_tokens cho suy luận →
+        // 1.100 cạn → JSON cụt/null → auto-escalate trả rỗng (P3). Brain model
+        // đọc từ DB qua resolveOmegaBrain (FB-EE-B-R1-05 fix comment: hiện
+        // nemotron-550b — verdictBudget matching theo family nên sống cho cả
+        // hai). Reasoning → 4.000 (S3.1), thường giữ 1.100.
         maxTokens: verdictBudget(brain.model, CONSULT_MAX_TOKENS, 4_000),
         abortCheck,
       }),
@@ -632,6 +634,11 @@ export interface DispatchResult {
   evaluation?: { pass: boolean; confidence: number; gaps: string[]; note: string }
   /** Kết quả điều động lâu dài (mode='long_term') */
   assignment?: { team: string | null; position: string | null }
+  /** FB-EE-B-R1-01 (fixbug EE vòng R1): runId của sub-run (mode='task') — địa chỉ
+   *  truy hồi artifact 1 bước (context_recall). Trước fix: key bị drop tại
+   *  tầng này → tracker delegationArtifacts goal-loop + artifactRef thought
+   *  + fallback deterministic là dead-code (S8 thiếu thành phần artifact refs). */
+  subRunId?: string
   error?: string
 }
 
@@ -838,7 +845,7 @@ async function runDispatchTask(
   sessionId: string | null,
   parentRunId?: string | null,
   onTokens?: (tokens: number) => void,
-): Promise<{ success: boolean; report: string; tokensUsed: number; iterations: number; toolCalls: number; endedBy: string; evaluation?: { pass: boolean; confidence: number; gaps: string[]; note: string }; error?: string }> {
+): Promise<{ success: boolean; report: string; tokensUsed: number; iterations: number; toolCalls: number; endedBy: string; evaluation?: { pass: boolean; confidence: number; gaps: string[]; note: string }; subRunId?: string; error?: string }> {
   const { runSubAgentForProfile } = await import('@/lib/subagent-delegate')
   const outcome = await runSubAgentForProfile({
     profile: {
@@ -868,6 +875,9 @@ async function runDispatchTask(
     toolCalls: outcome.toolCalls,
     endedBy: outcome.endedBy,
     evaluation: outcome.evaluation,
+    // FB-EE-B-R1-01 — pass-through subRunId từ SubAgentOutcome (S2) để
+    // dispatch_agent + auto-apply + fan-out đều lộ địa chỉ truy hồi artifact.
+    subRunId: outcome.subRunId,
     error: outcome.error,
   }
 }
@@ -980,6 +990,7 @@ export async function dispatchAgentsParallel(params: {
     endedBy: string
     error?: string
     evaluation?: { pass: boolean; confidence: number; gaps: string[]; note: string }
+    subRunId?: string // FB-EE-B-R1-01 — lộ địa chỉ truy hồi artifact từng sub-run
   }> = []
   const fileTouch = new Map<string, string[]>() // filePath → [agentName...]
 
@@ -1014,6 +1025,8 @@ export async function dispatchAgentsParallel(params: {
       endedBy: r.endedBy ?? '-',
       error: r.error,
       evaluation: r.evaluation,
+      // FB-EE-B-R1-01 — lộ subRunId từng sub-run cho parent + tracker
+      subRunId: r.subRunId,
     })
     // Heuristic phát hiện xung đột: 2+ sub-agent cùng nhắc 1 đường dẫn file
     // trong report → có thể ghi đè lẫn nhau — cảnh báo cho parent (không throw).
