@@ -153,9 +153,12 @@ export const DATA_REGIONS: DataRegionDef[] = [
     id: 'research_kb',
     store: 'prisma',
     location: 'Prisma ResearchMission/ResearchTask/ResearchWorklog/ResearchKBEntry (kho ALISTA)',
-    purpose: 'Kho nghiên cứu: nhiệm vụ nghiên cứu, kết quả khảo sát, tri thức nghiên cứu tích luỹ của team research (ALISTA)',
-    readPath: 'Tools research của ALISTA (kb-store G3); agent khác nhờ ALISTA điều phối',
-    writePath: 'Tools research (ALISTA ghi kết quả mission/task/worklog)',
+    // EXECUTION-EFFICIENCY S1 — ghi chú chống kết luận sai "research_kb riêng"
+    // (bằng chứng: Omega run_1792386145100_1 tưởng 6 entity của ALISTA nằm trong
+    // "research_kb riêng" nên không tìm — thực tế mọi knowledge_write ghi KB chung)
+    purpose: 'Kho nghiên cứu: nhiệm vụ nghiên cứu, kết quả khảo sát, tri thức nghiên cứu tích luỹ của team research (ALISTA). LƯU Ý: tri thức ghi qua knowledge_write KHÔNG nằm đây — nó ghi vào KB CHUNG (LocalEntity/Neo4j) và tìm lại bằng knowledge_search',
+    readPath: 'Tools research của ALISTA (kb-store G3); agent khác nhờ ALISTA điều phối. KHÔNG dùng để truy hồi entity đã knowledge_write — dùng knowledge_search',
+    writePath: 'Tools research (ALISTA ghi kết quả mission/task/worklog). Agent MUỐN ghi tri thức dùng knowledge_write (KB chung)',
     readWhen: 'Tác vụ cần khảo sát/tổng hợp tài liệu bên ngoài + tri thức nghiên cứu đã có',
     writeWhen: 'Có kết quả nghiên cứu/ khảo sát cần lưu làm nền cho lần sau',
     keywords: ['nghiên cứu', 'khảo sát', 'research', 'alista', 'tổng hợp tài liệu', 'mission nghiên cứu', 'điều tra'],

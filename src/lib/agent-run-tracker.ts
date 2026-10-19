@@ -68,6 +68,11 @@ export type AgentRunEventType =
   | 'tool'
   | 'todo_update'
   | 'run_end'
+  // EXECUTION-EFFICIENCY S2.2 — message CUỐI của sub-agent (báo cáo delegation):
+  // cap riêng 32K (FINAL_REPORT_MAX_CHARS) thay vì 2400 của thought thường —
+  // báo cáo 6 vấn đề của ALISTA (run bằng chứng) từng bị cắt cụt giữa bảng ở
+  // tier trace vì thought cap 2400, không tầng nào lưu trọn vẹn (P2).
+  | 'final_report'
 
 export interface AgentRunEvent {
   id: string
@@ -181,6 +186,14 @@ function evictOldRuns(runs: AgentRun[]): void {
 }
 const THOUGHT_MAX_CHARS = 2400
 const RESULT_PREVIEW_MAX_CHARS = 900
+/**
+ * EXECUTION-EFFICIENCY S2.2 — cap riêng cho event final_report (báo cáo cuối
+ * sub-agent trong trace JSONL). 32K đủ cho mọi báo cáo thực tế (wrap-up
+ * maxTokens 900 → ~3-4K chars; lastContent dài nhất quan sát 2.4K trước cap) —
+ * bất biến S2: "báo cáo cuối của sub-agent phải tồn tại nguyên vẹn ở ít nhất
+ * 1 nơi có địa chỉ truy hồi 1 bước" (trace + TaskContextArchive).
+ */
+const FINAL_REPORT_MAX_CHARS = 32_000
 
 // ==================== ROUND-23 P1 — Durable event trail (JSONL trên đĩa) ====================
 //
@@ -916,6 +929,39 @@ export function recordAgentThought(
       type: 'thought',
       iteration,
       text: truncateText(thought, THOUGHT_MAX_CHARS),
+    })
+  } catch { /* fail-open */ }
+}
+
+/**
+ * EXECUTION-EFFICIENCY S2.2 — ghi BÁO CÁO CUỐI của sub-agent vào trace với cap
+ * riêng 32K (thought thường 2400 — không đủ cho báo cáo delegation, P2 tier 1).
+ *
+ * Khác recordAgentThought: KHÔNG mask/strip tool-call text (báo cáo có thể trích
+ * dẫn lệnh/code nguyên văn — mask sẽ làm hỏng bằng chứng), chỉ dọn provider
+ * garble markers. Gọi NGAY TRƯỚC endAgentRun của delegation (run còn 'running'
+ * thì event mới được ghi — xem flow finishDelegationRun trong subagent-delegate).
+ * Fail-open tuyệt đối như mọi tracker API.
+ */
+export function recordFinalReport(
+  sessionId: string | null | undefined,
+  content: string | null | undefined,
+  runId?: string,
+): void {
+  try {
+    const run = runId
+      ? runsOf(sessionId || '').find(r => r.runId === runId && r.status === 'running') || null
+      : activeRun(sessionId)
+    if (!run || !content) return
+    let text = String(content)
+    try { text = stripProviderGarbleMarkers(text) } catch { /* giữ nguyên */ }
+    text = text.trim()
+    if (!text) return
+    pushEvent(run, {
+      id: nextEventId(),
+      ts: Date.now(),
+      type: 'final_report',
+      text: truncateText(text, FINAL_REPORT_MAX_CHARS),
     })
   } catch { /* fail-open */ }
 }

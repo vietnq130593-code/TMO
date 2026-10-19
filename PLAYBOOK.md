@@ -102,3 +102,22 @@ Tokens: 9.4k sent, 160 received.
   `scripts/reembed-all.ts` (drift check giờ so được).
 - **Đổi dim qua env NVIDIA_EMBED_DIMENSIONS ≠ 2048** giờ lộ ngay health degraded
   (envDim.mismatch) — trước đây chỉ FATAL console.
+
+## EXECUTION-EFFICIENCY S6.3 — Vận hành bộ nhớ khi chạy delegation nặng (blueprint P6)
+
+- **Đóng preview browser (agent-browser chrome) trước khi chạy delegation nặng**
+  — đã từng giải phóng ~500MB ngay lập tức (run bằng chứng 19/10: operator đóng
+  chrome giữa run để thoát OOM crash-loop). Chrome preview là consumer RAM lớn
+  nhất ngoài next-server trên box 4GB.
+- **Watchdog giờ 3 tầng** (S6): TIER-2 SOFT RSS ≥1600MB (log `S6 TIER-2 SOFT` +
+  gc + observation event `mem.soft_tier` — KHÔNG exit) → RSS 1900MB ×2 check
+  20s/lần CHỈ KHI MemAvailable<900MB (avail-aware — không giết boot lạnh lành)
+  → HARD-RSS 2100MB exit ngay (chống reaper sandbox SIGINT ~2.1-2.2GB, giữ từ
+  ROUND-11c). Env: `MEM_WATCHDOG_SOFT_MB` / `MEM_WATCHDOG_MB` /
+  `MEM_WATCHDOG_INTERVAL_MS`.
+- **Sau restart, cold-compile turbopack có thể chạm HARD-RSS 1 lần** (đo 2430MB
+  19/10) → PM2 tự restart, lần sau dev-cache ấm thì ổn — KHÔNG phải lỗi, đừng
+  can thiệp. Chỉ lo nếu restart ≥3 lần liên tiếp.
+- **Job delegation chạy bền qua restart**: durable checkpoint per-iteration +
+  boot recovery requeue (đã có từ trước) — operator KHÔNG cần làm gì khi thấy
+  self-exit có log MemWatchdog.

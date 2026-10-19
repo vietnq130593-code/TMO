@@ -684,6 +684,33 @@ export async function compressConversation(params: {
 
   if (!digest) return null
 
+  // ===== EXECUTION-EFFICIENCY S2.4 — ARTIFACT-REF SURVIVOR =====
+  // Bất biến S2: tham chiếu 1 dòng tới artifact delegation ("📌 Báo cáo đầy đủ:
+  // context_recall({runId:'sub_…'})") phải SỐNG SÓT mọi lần nén —digest (LLM
+  // hay heuristic) có thể nuốt mất tool-result delegation, nhưng ĐỊA CHỈ truy
+  // hồi nguyên vẹn không được mất (P2 tier 3: delegate report 9.000 chars bị
+  // 4 lần nén tiêu hoá thành digest sau 1-2 chu kỳ). Trích deterministic mọi
+  // dòng tham chiếu từ segment bị nén, append cuối digest (dedupe, cap 10).
+  const ARTIFACT_REF_RE = /📌[^\n]*context_recall\(\{runId:'[^']{4,120}'\}\)[^\n]*/g
+  const refSeen = new Set<string>()
+  const artifactRefs: string[] = []
+  for (const m of compressible) {
+    const matches = m.content.match(ARTIFACT_REF_RE)
+    if (!matches) continue
+    for (const line of matches) {
+      const key = line.trim()
+      if (refSeen.has(key)) continue
+      refSeen.add(key)
+      artifactRefs.push(line.trim())
+      if (artifactRefs.length >= 10) break
+    }
+    if (artifactRefs.length >= 10) break
+  }
+  if (artifactRefs.length > 0) {
+    const refBlock = `\n\n📎 BÁO CÁO DELEGATION LƯU TRỮ (nguyên vẹn — truy hồi 1 bước, không bị nén):\n${artifactRefs.map(l => `- ${l}`).join('\n')}`
+    digest = digest + refBlock
+  }
+
   // ===== SUMMARIZER RECEIPT (Task 42) =====
   // Biên lai của lần tóm tắt: hash đầu vào (transcript đã nén) + hash đầu ra
   // (digest) + metadata phạm vi nén — giúp trace/audit được nội dung nào đã

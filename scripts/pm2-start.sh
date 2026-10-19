@@ -104,7 +104,11 @@ find /tmp -maxdepth 1 -type d -name '.*.node-gyp' -mmin +60 -exec rm -rf {} + 2>
 # xuất "JavaScript heap out of memory" → nâng lại 1280; nếu đỉnh vẫn >2.05GB →
 # hạ tiếp 1024. (Sau khi dev-cache ấm trở lại, steady-state ~450-500MB — cap
 # chỉ tác động pha compile.)
-export NODE_OPTIONS="--max-old-space-size=1024"
+export NODE_OPTIONS="--max-old-space-size=1024 --expose-gc"
+# EXECUTION-EFFICIENCY S6-code: --expose-gc cho MemWatchdog TIER-2 SOFT gọi
+# globalThis.gc() chủ động khi RSS ≥1600MB (giảm pressure TRƯỚC hard tiers) —
+# không có flag này tier-2 chỉ log được (bằng chứng restart 19/10: cold-compile
+# spike 2413/2228MB chạm HARD-RSS trong khi gc "chưa expose").
 
 # Khởi động Next.js — exec để PM2 sở hữu trực tiếp process node next
 cd "$(dirname "$0")/.."

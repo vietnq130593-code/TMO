@@ -2028,7 +2028,7 @@ model TaskContextArchive {
   runId     String?
   sessionId String?
   agentName String?
-  /// 'digest' (rolling digest sau nén) | 'raw' (đoạn bị cắt/truncate) | 'task_summary' (B4 — tóm tắt cuối run)
+  /// 'digest' (rolling digest sau nén) | 'raw' (đoạn bị cắt/truncate) | 'task_summary' (B4 — tóm tắt cuối run) | 'delegation_report' (EXECUTION-EFFICIENCY S2 — báo cáo FULL của sub-agent, single source of truth truy hồi 1 bước qua context_recall) | 'regression' (P-E snapshot việc dở)
   kind      String
   content   String
   tags      String?

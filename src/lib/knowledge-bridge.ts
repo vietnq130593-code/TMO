@@ -350,6 +350,72 @@ async function agentGraphQueryImpl(cypher: string, params?: Record<string, unkno
 
 // ==================== KNOWLEDGE WRITE ====================
 
+/**
+ * EXECUTION-EFFICIENCY S1.1 — WRITE-THROUGH 1 entity LocalEntity lên Neo4j.
+ *
+ * Bối cảnh (P1 — run bằng chứng run_1792386145100_1): agent_write ghi
+ * LocalEntity `synced:false` vào "buffer chờ sync" — nhưng đường sync duy nhất
+ * (/api/sync-neo4j) chỉ quét theo documentId trong khi entity của agent có
+ * documentId=null → KHÔNG BAO GIỜ lên graph; còn knowledge_search chỉ đọc
+ * Neo4j/Qdrant → 6 entity ALISTA ghi xong TÌM KHÔNG THẤY (cha kết luận sai
+ * "nằm trong research_kb riêng" và kẹt todo hồi phục bằng chứng 4/6 chu kỳ).
+ *
+ * Write-through: MERGE NGAY trong cùng tool call theo node id deterministic
+ * `global__<name>__<type>` (CÙNG quy ước sync route :556-559 + writeback
+ * ingestion — hội tụ về đúng node sẵn có, không đẻ node trùng). Best-effort:
+ * Neo4j fail → trả false, KHÔNG fail tool (giữ semantics buffer cũ; ghi log
+ * "KB write-through degraded"). Thành công → đánh dấu synced:true +
+ * resolvedEntityId để sync doc-scope không đếm trùng.
+ *
+ * Dùng chung bởi: agentWriteEntity (mọi write mới) + scripts/backfill-agent-
+ * entities.ts (S1.2 — 1 lần cho entity lịch sử).
+ */
+export async function writeThroughEntityToGraph(entity: {
+  id: string
+  entityName: string
+  entityType: string
+  description?: string | null
+  domain?: string | null
+  confidenceScore?: number | null
+  source?: string | null
+}): Promise<{ ok: boolean; graphNodeId?: string; error?: string }> {
+  try {
+    const { upsertEntitiesBatch } = await import('@/lib/neo4j')
+    const { globalEntityId } = await import('@/lib/ingestion/entity-resolver')
+    const name = entity.entityName.trim()
+    const type = (entity.entityType || 'Concept').trim()
+    const now = new Date().toISOString()
+    // Node id deterministic — mirror sync-neo4j route (FIX 19-a) + writeback.
+    const nodeId = globalEntityId(name, type)
+    const upserted = await upsertEntitiesBatch(
+      [{
+        id: nodeId,
+        name,
+        entity_type: type as never, // sanitizeLabel bên trong cho phép mọi label ASCII an toàn
+        domain: entity.domain || 'mixed',
+        description: entity.description || '',
+        confidence: entity.confidenceScore || 0.5,
+        documentId: 'agent',
+        source: entity.source || 'agent',
+        created_at: now,
+        updated_at: now,
+      }],
+      'agent',
+    )
+    if (upserted < 1) return { ok: false, error: 'upsertEntitiesBatch trả 0 node' }
+    // Đánh dấu đã sync (idempotent — re-run không đếm trùng ở sync doc-scope)
+    try {
+      await db.localEntity.update({
+        where: { id: entity.id },
+        data: { synced: true, resolvedEntityId: nodeId },
+      })
+    } catch { /* đánh dấu fail → lần sync sau vẫn nhặt được, không phá write-through */ }
+    return { ok: true, graphNodeId: nodeId }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 export async function agentWriteEntity(data: {
   entityName: string
   entityType: string
@@ -357,7 +423,8 @@ export async function agentWriteEntity(data: {
   domain: string
   properties?: Record<string, unknown>
 }) {
-  // Write to SQLite buffer (LocalEntity) — will be synced to Neo4j later
+  // Write to SQLite buffer (LocalEntity) — SOURCE OF TRUTH luôn ghi trước
+  // (kể cả Neo4j chết, entity vẫn sống trong SQLite + search LIKE layer S1.3)
   const entity = await db.localEntity.create({
     data: {
       entityName: data.entityName,
@@ -369,7 +436,24 @@ export async function agentWriteEntity(data: {
       synced: false,
     },
   })
-  return { id: entity.id, entityName: entity.entityName }
+
+  // EXECUTION-EFFICIENCY S1.1 — write-through Neo4j ngay trong cùng call
+  // (best-effort, fail-open: lỗi graph KHÔNG fail tool — buffer semantics giữ)
+  let syncedToGraph = false
+  let graphNodeId: string | undefined
+  try {
+    const wt = await writeThroughEntityToGraph(entity)
+    if (wt.ok) {
+      syncedToGraph = true
+      graphNodeId = wt.graphNodeId
+    } else {
+      console.warn(`[Knowledge Bridge] KB write-through degraded (entity vẫn an toàn trong SQLite buffer — S1.3 LIKE search vẫn tìm được): ${wt.error ?? 'unknown'}`)
+    }
+  } catch (err) {
+    console.warn('[Knowledge Bridge] KB write-through degraded:', err instanceof Error ? err.message : String(err))
+  }
+
+  return { id: entity.id, entityName: entity.entityName, syncedToGraph, graphNodeId }
 }
 
 export async function agentWriteRelationship(data: {

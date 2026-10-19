@@ -273,9 +273,12 @@ export async function archiveContext(params: {
     return { archived: false }
   }
 
-  // ===== 2. BEST-EFFORT QDRANT (chỉ digest đủ dài; embed hỏng → im lặng) =====
+  // ===== 2. BEST-EFFORT QDRANT (chỉ digest/delegation_report đủ dài; embed hỏng → im lặng) =====
+  // EXECUTION-EFFICIENCY S2.6: mở embed cho kind='delegation_report' (trước đây
+  // chỉ 'digest') — không mở thì báo cáo delegation mất semantic recall, chỉ
+  // tìm được qua SQL LIKE path của recallContext.
   let embedded = false
-  if (kind === 'digest' && content.length >= ARCHIVE_EMBED_MIN_CHARS) {
+  if ((kind === 'digest' || kind === 'delegation_report') && content.length >= ARCHIVE_EMBED_MIN_CHARS) {
     try {
       const collectionOk = await initTaskContextCollection()
       if (collectionOk) {

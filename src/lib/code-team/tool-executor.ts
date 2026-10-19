@@ -5680,10 +5680,17 @@ async function executeKnowledgeWrite(args: Record<string, unknown>): Promise<unk
       relationship = { id: rel.id, type: rel.type }
     }
 
+    // EXECUTION-EFFICIENCY S1 (P1): tool result PHẢI cho agent biết đường truy
+    // hồi — trước đây chỉ "Đã ghi entity" mà knowledge_search không nhìn thấy
+    // buffer → Omega (run bằng chứng) phải đào trace thủ công + kết luận sai
+    // "research_kb riêng". Giờ: chỉ rõ đường tìm lại 1 bước.
+    const graphNote = entity.syncedToGraph
+      ? `đã lên Knowledge Graph (node ${entity.graphNodeId})`
+      : 'chưa lên Knowledge Graph (Neo4j lỗi — vẫn tìm được qua tầng SQLite)'
     return {
-      entity: { id: entity.id, name: entity.entityName },
+      entity: { id: entity.id, name: entity.entityName, syncedToGraph: entity.syncedToGraph },
       relationship,
-      message: `Đã ghi entity "${entityName}" vào KB${relationship ? ` + relationship "${relationshipType}" → ${targetEntityName}` : ''}`,
+      message: `Đã ghi entity "${entityName}" vào KB chung (${graphNote}). TÌM LẠI: knowledge_search theo đúng tên entity (hoặc từ khóa trong mô tả) — hoặc db_query bảng LocalEntity id=${entity.id}. KHÔNG có "research_kb riêng" — mọi knowledge_write đều ghi KB CHUNG của hệ thống.`,
     }
   } catch (err) {
     return { error: `Knowledge write failed: ${err instanceof Error ? err.message : String(err)}` }

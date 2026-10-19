@@ -39,7 +39,7 @@
  */
 
 import { db } from '@/lib/db'
-import { callLLMForAgent } from '@/lib/llm'
+import { callLLMForAgent, verdictBudget } from '@/lib/llm'
 import { findBalancedJson } from '@/lib/code-team/find-balanced-json'
 import {
   PROVIDER_MODELS,
@@ -250,7 +250,11 @@ Phân tích và đưa ra giải pháp tốt nhất (JSON).`
         agentId: brain.id || 'omega-orchestrator',
         agentName: 'Omega (orchestrator consult)',
         temperature: 0.3,
-        maxTokens: CONSULT_MAX_TOKENS,
+        // EXECUTION-EFFICIENCY S3.1 — budget model-aware: consult là đường CHẤM
+        // ĐIỂM/TƯ VẤN trả JSON; reasoning model (space-bunny-free là brain mặc
+        // định TASK 37) đốt max_tokens cho suy luận → 1.100 cạn → JSON cụt/null
+        // → auto-escalate trả rỗng (P3). Reasoning → 4.000 (S3.1), thường giữ 1.100.
+        maxTokens: verdictBudget(brain.model, CONSULT_MAX_TOKENS, 4_000),
         abortCheck,
       }),
       CONSULT_TIMEOUT_MS,

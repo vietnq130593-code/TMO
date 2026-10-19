@@ -43,7 +43,7 @@
  *     sub-agent runs chết vì iteration_limit, 71% bị chấm CHƯA ĐẠT).
  */
 
-import { callLLMForAgent } from '@/lib/llm'
+import { callLLMForAgent, verdictBudget } from '@/lib/llm'
 import { findBalancedJson } from '@/lib/code-team/find-balanced-json'
 
 // Task 20 (2026-09-03): outer timeout của evaluator — phải ≥ worst-case chuỗi
@@ -230,7 +230,9 @@ SUB-AGENT KẾT THÚC BỞI: ${endedBy}
         // IMP-1 (W3): 700 → 1200 — worst-case 5 gaps×200 + note 300 tiếng
         // Việt + JSON syntax ≈ 1400+ chars bị truncate ở 700 → JSON hỏng →
         // null (rơi fail-open W2). 1200 ≈ parity goal-loop evaluator.
-        maxTokens: 1200,
+        // EXECUTION-EFFICIENCY S3.1: model-aware — reasoning model đốt budget
+        // cho suy luận (P3 starvation) → 4× khi model là reasoning (4.800).
+        maxTokens: verdictBudget(model, 1200),
         abortCheck,
       }),
       new Promise<never>((_, reject) =>

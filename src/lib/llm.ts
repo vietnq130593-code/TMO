@@ -443,6 +443,44 @@ export function eolNimModelMessage(model: string): string | undefined {
 }
 
 /**
+ * EXECUTION-EFFICIENCY S3.1 (blueprint P3 — r43 hiệu đính #15: const MỚI, catalog
+ * r73 không có danh sách reasoning) — các model REASONING đốt chung pool
+ * max_tokens cho suy luận trước khi trả JSON verdict. Bằng chứng: evaluator
+ * glm-5.3-flash "reasoning tiêu hết max_tokens" ×2 chu kỳ (R41-OBSV1) — kể cả
+ * sau khi llm.ts R25 tự retry ×2 budget (2.000×2=4.000) vẫn cạn → verdict null
+ * → chu kỳ rác + auto-escalate đắt. Match theo SUBSTRING (chấp nhận cả biến thể
+ * -free/-latest của cùng họ model).
+ */
+const REASONING_MODELS: readonly string[] = [
+  'z-ai/glm-5.3-flash',   // reasoning + content về kèm reasoning_content (R25 probe)
+  'z-ai/glm-5.3',         // siêu model reasoning (R25)
+  'deepseek-ai/deepseek-v4.1-flash', // reasoning chậm ~135s (R25)
+  'space-bunny',          // Zen reasoning model (effort low vẫn cần headroom — TASK 55)
+]
+
+/** S3.1 — model có phải reasoning (đốt max_tokens cho suy luận) không? */
+export function isReasoningModel(model: string | null | undefined): boolean {
+  if (!model) return false
+  const m = model.toLowerCase()
+  return REASONING_MODELS.some(r => m.includes(r.toLowerCase()))
+}
+
+/**
+ * S3.1 — budget model-aware cho các đường CHẤM ĐIỂM/TỔNG KẾT (evaluator chu kỳ,
+ * trọng tài delegation, consult Omega, final report). Reasoning model →
+ * 4× base (vượt hẳn lớp ×2 nội bộ R25 mà quan sát R41-OBSV1 cho thấy vẫn cạn:
+ * 4.000 không đủ → 8.000 cho evaluator); model thường → base (không đổi hành
+ * vi). reasoningTokens cho phép caller ghi đè mức reasoning riêng (vd consult
+ * 1.100 → 4.000 theo blueprint S3.1).
+ */
+export function verdictBudget(model: string | null | undefined, baseTokens: number, reasoningTokens?: number): number {
+  if (!Number.isFinite(baseTokens) || baseTokens <= 0) return baseTokens
+  return isReasoningModel(model)
+    ? Math.max(Math.floor(reasoningTokens ?? baseTokens * 4), Math.floor(baseTokens))
+    : Math.floor(baseTokens)
+}
+
+/**
  * SLOW-NIM-MODEL TIMEOUT RIÊNG (khái quát hóa KIMI_K3_TIMEOUT_MS cũ — user
  * directive 2026-12-01: "kimi-k3 là siêu model nên chậm là bình thường... có
  * chậm vài phút tôi chẳng quan tâm" — áp dụng cho mọi siêu model reasoning).

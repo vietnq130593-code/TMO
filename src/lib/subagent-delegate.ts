@@ -60,11 +60,11 @@ import { executeTool, buildCompactToolSchemasSection, getToolDefinitions } from 
 // ROUND-27 FIX V1 — envelope JSON hợp lệ cho tool message của sub-agent (dùng
 // chung với goal-loop + workflow-engine; context-compression không import lại
 // module này → không circular).
-import { capAssistantContentForTranscript, truncateToolMessageJson } from '@/lib/context-compression'
+import { capAssistantContentForTranscript, truncateToolMessageJson, compressConversation, COMPRESS_THRESHOLD_CHARS } from '@/lib/context-compression'
 import type { LLMTool } from '@/lib/llm'
 import { parseToolCallsFromOutput, detectBrokenToolCallHint, tryParseLooseJson } from '@/lib/tool-calls'
 import { resolveAgent } from '@/lib/code-team/agent-resolver'
-import { isSessionCancelled, registerDelegationRun, endAgentRun, recordAgentThought } from '@/lib/agent-run-tracker'
+import { isSessionCancelled, registerDelegationRun, endAgentRun, recordAgentThought, recordFinalReport } from '@/lib/agent-run-tracker'
 
 // ==================== CONFIG (env override) ====================
 
@@ -121,6 +121,27 @@ const SUBAGENT_WALL_CLOCK_MS = intEnv('SUBAGENT_WALL_CLOCK_MS', 15 * 60_000)
  * giờ khớp vì các call khác xen kẽ làm đổi chữ ký vòng. Mirror ngưỡng 8 của
  * signatureOverrun goal-loop. 0 = tắt. */
 const SUBAGENT_STALL_CALL_REPEATS = intEnv('SUBAGENT_STALL_CALL_REPEATS', 8)
+
+// ━━━ EXECUTION-EFFICIENCY S4 (blueprint P4 — hiệu quả sub-agent loop) ━━━
+// Nguyên tắc §3.3: cap giữ 0 (vô hạn — user directive "dài hạn, khối lớn"),
+// thay bằng compression + batching + soft advisory để agent TỰ tối ưu.
+
+/** S4.1 — nén context giữa chừng trong sub-agent loop (0 = tắt). Trước S4
+ * sub-agent KHÔNG hề nén (grep compressConversation = 0) → mỗi vòng gửi lại
+ * TOÀN BỘ lịch sử tăng dần → chi phí bậc 2 theo vòng (ALISTA-2 run bằng
+ * chứng: 48 vòng × ~34K ≈ 1,63M tokens = 67% run). */
+const SUBAGENT_COMPRESS = intEnv('SUBAGENT_COMPRESS', 1)
+/** S4.1 — keepRecent cho sub-agent (cao hơn goal-loop 8 một nấc — digest
+ * vừa vặn hơn cho ReAct nhanh của sub-agent; artifact-ref survivor S2.4 tự
+ * áp trong compressConversation nên tham chiếu delegation không bao giờ mất). */
+const SUBAGENT_COMPRESS_KEEP_RECENT = intEnv('SUBAGENT_COMPRESS_KEEP_RECENT', 10)
+/** S4.3 — mốc vòng phát soft-budget advisory (advisory-only — KHÔNG phải cap;
+ * anti-goal #1: "giới hạn token tạo bệnh agent không đủ token làm việc"). */
+const SUBAGENT_ADVISORY_AT = new Set([15, 25, 40])
+/** S4.4 — tool chỉ-đọc được miễn read-repeat nudge (mirror READ_REPEAT_TOOLS
+ * goal-loop :416; kết quả nằm sẵn trong transcript — nhắc DÙNG LẠI thay vì đọc
+ * lại; cắt cứng vẫn ở ngưỡng SUBAGENT_STALL_CALL_REPEATS=8 như cũ). */
+const SUBAGENT_READ_REPEAT_TOOLS = new Set(['file_read', 'file_list', 'grep', 'knowledge_search', 'list_custom_tools', 'list_skills', 'read_skill', 'todo_read', 'context_recall'])
 const ALL_SUBAGENT_CAPS_UNLIMITED =
   SUBAGENT_MAX_ITERATIONS === 0 && SUBAGENT_TOKEN_BUDGET === 0 && SUBAGENT_TIMEOUT_MS === 0
 const SUBAGENT_EFFECTIVE_MAX_ITERATIONS = ALL_SUBAGENT_CAPS_UNLIMITED
@@ -305,6 +326,14 @@ export interface SubAgentOutcome {
   position: string
   /** Báo cáo NÉN cho parent — đã làm · bằng chứng · còn thiếu */
   report: string
+  /**
+   * EXECUTION-EFFICIENCY S2.3 — id của sub-run (agent-run-tracker). Parent
+   * dùng làm ĐỊA CHỈ truy hồi 1 bước: context_recall({runId: subRunId}) trả
+   * báo cáo FULL từ TaskContextArchive (kind='delegation_report'). Trước S2,
+   * báo cáo sub-agent không tồn tại trọn vẹn ở bất kỳ đâu (P2 — 6 tầng cắt
+   * xén; tốt nhất 2.400 ký tự cụt) nên cha phải đào trace thủ công.
+   */
+  subRunId?: string
   tokensUsed: number
   iterations: number
   toolCalls: number
@@ -1089,6 +1118,20 @@ async function runSubAgentForProfileInner(params: {
       systemPrompt += buildLanguageProtocol()
     } catch { /* fail-open — protocol ngôn ngữ không được phá delegation */ }
 
+    // ━━ EXECUTION-EFFICIENCY S5.2 — ENV_BRIEFING (environment handbook) ━━
+    // P5: friction môi trường lặp lại qua các run (sqlite3 CLI thiếu 2 run
+    // liên tiếp — 4/4 shell fail "command not found"; web_fetch từ chối URL
+    // tương đối) vì tri thức môi trường sống rải rác trong Lesson/ToolMetric
+    // và chỉ tới được nếu agent chủ động tra. Khối briefing chuẩn ~10 dòng
+    // đưa thẳng vào system prompt — agent biết môi trường NGAY VÒNG ĐẦU.
+    // Cập nhật khi phát hiện quirk mới (1 dòng data-map + 1 dòng ở đây).
+    systemPrompt += `\n\n[ENV BRIEFING — môi trường thật của bạn, dùng đúng NGAY VÒNG ĐẦU, đừng khám phá lại (S5.2)]:
+- Runtime sẵn có: bun, node, python3 (kèm module sqlite3 built-in). sqlite3 CLI đã được cài — nếu gặp "command not found" thì dùng ngay: python3 -c "import sqlite3; ..." (tương đương hoàn toàn).
+- Đọc DB SQLite của hệ thống (file: <CWD>/db/custom.db): mở schema TRƯỚC (PRAGMA table_info('<table>') hoặc cursor.description) rồi mới truy vấn. Gộp nhiều truy vấn vào 1 script (S4.2).
+- web_fetch KHÔNG nhận URL tương đối (/api/...) — chỉ URL tuyệt đối http(s)://. Đọc file local: file_read / grep / shell — KHÔNG web_fetch.
+- Ghi tri thức: knowledge_write ghi vào KB CHUNG của hệ thống — tìm lại bằng knowledge_search theo đúng tên entity (không có "KB riêng").
+- Quirk lặp 2 lần (lệnh fail, tool không tồn tại...) → ĐỔI CÁCH ngay (python3 thay CLI, tool khác) — đừng thử lại y hệt lần 3.`.replace('<CWD>', process.cwd())
+
     const transcript: Array<{ role: 'user' | 'assistant' | 'tool'; content: string }> = [
       { role: 'user', content: buildDelegationPrompt(profile.name, task, context, allowedToolsFinal, parentAgentName, acceptanceCriteria) },
     ]
@@ -1142,6 +1185,11 @@ async function runSubAgentForProfileInner(params: {
     // ngữ (chỉ main loop có). Mirror detector goal-loop: 2 nudge + đếm muộn.
     let subViNudges = 0
     let subViLateCount = 0
+    // S4.1 — số lần nén context đã thực hiện (hiển thị status + log)
+    let subCompressions = 0
+    // S5.3 — đếm lỗi "command not found" theo từng lệnh (auto-hint lần thứ 2)
+    const cmdNotFoundCounts = new Map<string, number>()
+    const cmdNotFoundHinted = new Set<string>()
 
     const loopPromise = (async () => {
       // CI-1 (0 = UNLIMITED): cap = 0 → KHÔNG trần tương ứng (vòng / token /
@@ -1165,6 +1213,40 @@ async function runSubAgentForProfileInner(params: {
         }
 
         iterations++
+
+        // ━━ EXECUTION-EFFICIENCY S4.1 — COMPRESS CONTEXT GIỮA CHỪNG ━━
+        // P4: sub-agent trước S4 không hề nén → mỗi vòng gửi lại TOÀN BỘ lịch
+        // sử tăng dần → chi phí bậc 2 theo vòng (ALISTA-2: 48 vòng × ~34K ≈
+        // 1,63M tokens = 67% run). Goal-loop cha CÓ nén; giờ sub-agent dùng
+        // chung cơ chế (cùng ngưỡng COMPRESS_THRESHOLD_CHARS). Fail-open tuyệt
+        // đối; digest vào Kho Context (archive CI-3 B2 — context_recall đọc lại
+        // được); artifact-ref survivor S2.4 giữ tham chiếu delegation sống sót.
+        if (SUBAGENT_COMPRESS !== 0) {
+          try {
+            const totalChars = transcript.reduce((s, m) => s + m.content.length, 0)
+            if (totalChars >= COMPRESS_THRESHOLD_CHARS) {
+              const comp = await compressConversation({
+                messages: transcript,
+                // Bảo vệ lời giao + schema tool (2 user message đầu) — không nén
+                protectedStartIndex: toolSchemaMsg ? 1 : 0,
+                keepRecent: SUBAGENT_COMPRESS_KEEP_RECENT,
+                llmContext: `subagent-${profile.name}-compression`,
+                onTokens: addTokens,
+                archive: { runId: delegationRunId, sessionId, agentName: profile.name },
+              })
+              if (comp) {
+                subCompressions++
+                console.log(`[SubAgent] S4.1 ${profile.name}: nén context lần ${subCompressions} — tiết kiệm ${comp.savedChars} chars (method=${comp.method})`)
+                if (sessionId && delegationRunId) {
+                  try { recordAgentThought(sessionId, `📦 Nén context lần ${subCompressions} (S4.1) — tiết kiệm ${comp.savedChars} chars; tham chiếu artifact delegation đã được bảo toàn trong digest`, iterations, delegationRunId) } catch { /* fail-open */ }
+                }
+              }
+            }
+          } catch (compErr) {
+            console.warn(`[SubAgent] S4.1 compression fail-open (${profile.name}):`, compErr instanceof Error ? compErr.message : String(compErr))
+          }
+        }
+
         // r69 (BUG-012): xả queue cảnh báo ngân sách vào transcript TRƯỚC khi
         // build prompt vòng này — sub-agent thấy cảnh báo ở đúng lượt kế.
         while (pendingTokenWarnings.length > 0) {
@@ -1180,7 +1262,24 @@ async function runSubAgentForProfileInner(params: {
         // tiến-triển > tiết-kiệm (user directive: token không là ràng buộc).
         // r60.2 — format token dễ đọc (≥1M hiển thị M — mirror fmtTok goal-loop)
         const fmtTok = (t: number) => t >= 1_000_000 ? `${(t / 1_000_000).toFixed(1)}M` : `${Math.round(t / 1000)}k`
-        const subStatusNote = `\n\n📊 TRẠNG THÁI (vòng ${iterations} · ${toolCallCount} tool calls, ${successfulToolCalls} thành công · ~${fmtTok(tokensUsed)} tokens): token KHÔNG giới hạn — nhưng KHÔNG lặp một phép đo đã có kết quả (dùng total/rowCount/số máy từ tool); cùng lỗi 2 lần → đổi cách; xong phần việc → kết luận trung thực phần đã làm + còn thiếu.`
+        const subStatusNote = `\n\n📊 TRẠNG THÁI (vòng ${iterations} · ${toolCallCount} tool calls, ${successfulToolCalls} thành công · ~${fmtTok(tokensUsed)} tokens${subCompressions > 0 ? ` · context đã nén ×${subCompressions}` : ''}): token KHÔNG giới hạn — nhưng KHÔNG lặp một phép đo đã có kết quả (dùng total/rowCount/số máy từ tool); cùng lỗi 2 lần → đổi cách; xong phần việc → kết luận trung thực phần đã làm + còn thiếu.`
+
+        // ━━ EXECUTION-EFFICIENCY S4.3 — SOFT-BUDGET ADVISORY (advisory-only) ━━
+        // Mốc vòng 15/25/40: nhắc agent TỰ tối ưu (gộp truy vấn, parallel
+        // tool_calls, dùng kết quả sẵn có). KHÔNG phải cap — anti-goal #1 của
+        // blueprint: user chỉ rõ "giới hạn token chỉ tạo bệnh agent không đủ
+        // token làm việc"; đây là nhắc 1 lần/mốc, agent tự quyết.
+        if (SUBAGENT_ADVISORY_AT.has(iterations)) {
+          transcript.push({
+            role: 'tool',
+            content: JSON.stringify({
+              tool: 'harness_advisory',
+              success: true,
+              result: `💡 ADVISORY vòng ${iterations} (~${fmtTok(tokensUsed)} tokens — KHÔNG giới hạn, chỉ nhắc HIỆU QUẢ): nếu còn >2 nhóm việc chưa làm → (a) GỘP các truy vấn/đọc file độc lập vào 1 script shell duy nhất, (b) phát NHIỀU tool_call trong cùng một message cho tool độc lập, (c) DÙNG kết quả đã có trong transcript thay vì đo lại. Nhóm việc đã đủ bằng chứng → chuyển nhóm kế hoặc kết luận.`,
+            }),
+          })
+        }
+
         const formatted = transcript
           .map(m => `\n\n[${m.role === 'user' ? 'USER' : m.role === 'assistant' ? 'ASSISTANT' : 'TOOL RESULT'}]: ${m.content}`)
           .join('')
@@ -1422,7 +1521,25 @@ async function runSubAgentForProfileInner(params: {
         // không bao giờ khớp; per-call thì mọi lần gọi đều được tính).
         for (const tc of toolCalls) {
           const cs = `${tc.name}::${stableArgsString(tc.args)}`
-          runCallSigCounts.set(cs, (runCallSigCounts.get(cs) || 0) + 1)
+          const n = (runCallSigCounts.get(cs) || 0) + 1
+          runCallSigCounts.set(cs, n)
+          // ━━ S4.4 — READ-REPEAT NUDGE (mirror goal-loop IMP-2 F4) ━━
+          // Tool chỉ-đọc lặp y hệt args từ lần thứ 3 → kết quả ĐÃ nằm trong
+          // transcript (nén context dễ gây re-read) — nhắc DÙNG LẠI. Advisory:
+          // cắt cứng giữ ở SUBAGENT_STALL_CALL_REPEATS (8) như cũ.
+          if (n === 3 && SUBAGENT_READ_REPEAT_TOOLS.has(tc.name)) {
+            transcript.push({
+              role: 'tool',
+              content: JSON.stringify({
+                tool: 'harness_warning',
+                success: true,
+                result: `📖 ĐỌC LẶP: ${tc.name} với args này bạn đã gọi ${n} lần — kết quả ĐÃ NẰM trong transcript phía trên, DÙNG lại kết quả đó thay vì đọc lại (S4.4).`,
+              }),
+            })
+            if (sessionId && delegationRunId) {
+              try { recordAgentThought(sessionId, `📖 Phát hiện đọc lặp: ${tc.name} × ${n} lần args y hệt — đã nhắc dùng kết quả sẵn trong transcript`, iterations, delegationRunId) } catch { /* fail-open */ }
+            }
+          }
         }
         const roundSig = toolCalls.map(tc => `${tc.name}::${stableArgsString(tc.args)}`).sort().join('|||')
         if (roundSig === lastRoundSig) sameSigStreak++
@@ -1626,6 +1743,37 @@ async function runSubAgentForProfileInner(params: {
           )
           toolResultLog.push(toolEntry)
           transcript.push({ role: 'tool', content: toolEntry })
+
+          // ━━ EXECUTION-EFFICIENCY S5.3 — AUTO-HINT "command not found" ×2 ━━
+          // P5: cùng một lệnh thiếu binary fail lặp lại (bằng chứng: 2 run
+          // liên tiếp 4/4 shell fail "sqlite3: command not found") mà không ai
+          // hint — agent tự mò tiếp đốt vòng. Lần thứ 2 CÙNG lệnh → inject hint
+          // 1 lần (thay thế python3 tương đương / tool khác) — không im lặng.
+          if ((tc.name === 'shell' || tc.name === 'run_bg') && !toolResult.success) {
+            try {
+              const failText = `${preview} ${digest}`.toLowerCase()
+              const nfMatch = /([a-z0-9_.\/-]+): command not found/.exec(failText)
+              if (nfMatch) {
+                const nfCmd = nfMatch[1]
+                const nfCount = (cmdNotFoundCounts.get(nfCmd) || 0) + 1
+                cmdNotFoundCounts.set(nfCmd, nfCount)
+                if (nfCount >= 2 && !cmdNotFoundHinted.has(nfCmd)) {
+                  cmdNotFoundHinted.add(nfCmd)
+                  transcript.push({
+                    role: 'tool',
+                    content: JSON.stringify({
+                      tool: 'harness_warning',
+                      success: true,
+                      result: `🔧 MÔI TRƯỜNG (S5.3): lệnh "${nfCmd}" KHÔNG tồn tại trong sandbox (bạn đã thử ${nfCount} lần — đừng thử lại). Thay thế NGAY: python3 có sẵn kèm module sqlite3 (vd: python3 -c "import sqlite3; c=sqlite3.connect('<db>'); print(c.execute('<sql>').fetchall())") — hoặc dùng tool phù hợp khác (file_read/grep/db_query).`,
+                    }),
+                  })
+                  if (sessionId && delegationRunId) {
+                    try { recordAgentThought(sessionId, `🔧 Auto-hint môi trường: "${nfCmd}" không tồn tại (fail ×${nfCount}) — đã inject thay thế python3/tool khác`, iterations, delegationRunId) } catch { /* fail-open */ }
+                  }
+                }
+              }
+            } catch { /* fail-open — hint không được phá tool flow */ }
+          }
         }
 
         // USER DIRECTIVE 2026-10-29 — CI-2 CHO ĐƯỜNG SUB-AGENT (parity goal-loop
@@ -1752,6 +1900,17 @@ async function runSubAgentForProfileInner(params: {
       report = `⚠️ (LƯU Ý: sub-agent ${profile.name} KHÔNG chạy tool nào — nội dung dưới đây từ kiến thức model, chưa có bằng chứng đọc file/lệnh thật. Nếu cần chính xác, hãy tự file_read/grep verify hoặc delegate lại với yêu cầu rõ ràng dùng tool.)\n\n${report}`
     }
 
+    // ━━ EXECUTION-EFFICIENCY S2.1 — capture báo cáo FULL TRƯỚC KHI CUT ━━
+    // Bất biến S2: "báo cáo cuối của sub-agent phải tồn tại nguyên vẹn ở ít nhất
+    // 1 nơi có địa chỉ truy hồi 1 bước". Bản dưới đây (wrap-up/lastContent +
+    // disclaimer anti-hallucination) được lưu trọn vẹn vào TaskContextArchive
+    // kind='delegation_report' + trace event final_report (cap 32K) — bản cắt
+    // REPORT_MAX_CHARS chỉ là tầng HIỂN THỊ cho context cha.
+    const fullReport = report
+    // reportTail: các block được append SAU khi cắt (⚠ trọng tài + 📊 máy đo)
+    // — ghép vào fullReport để artifact chứa bản ĐẦY ĐỦ NHẤT.
+    let reportTail = ''
+
     if (report.length > REPORT_MAX_CHARS) {
       // 2026-09-30: head-only → truncateResult (giữ đầu 60% + cuối) — kết luận
       // + artifact path của sub-agent nằm CUỐI báo cáo, không được cắt mất.
@@ -1777,6 +1936,7 @@ async function runSubAgentForProfileInner(params: {
       agent: profile.name,
       position: '-',
       report,
+      subRunId: delegationRunId ?? undefined,
       tokensUsed,
       iterations,
       toolCalls: toolCallCount,
@@ -1831,7 +1991,9 @@ async function runSubAgentForProfileInner(params: {
         // lại phần còn thiếu. Chỉ nhấn mạnh verdict CHƯA ĐẠT trong report để
         // parent (LLM) không bỏ qua khi phần việc chỉ làm dở.
         if (!evaluation.pass) {
-          outcome.report += `\n\n⚠ Trọng tài độc lập: CHƯA ĐẠT — ${(evaluation.gaps.join('; ') || evaluation.note).slice(0, 300)} — hãy giao lại phần còn thiếu (re-delegate kèm gaps cụ thể) hoặc đổi agent phù hợp hơn.`
+          const arbiterNote = `\n\n⚠ Trọng tài độc lập: CHƯA ĐẠT — ${(evaluation.gaps.join('; ') || evaluation.note).slice(0, 300)} — hãy giao lại phần còn thiếu (re-delegate kèm gaps cụ thể) hoặc đổi agent phù hợp hơn.`
+          outcome.report += arbiterNote
+          reportTail += arbiterNote // S2.1 — artifact giữ bản đầy đủ
         }
       } else {
         // IMP-1 (W2 — fail-open transparency): evaluator KHÔNG chạy được
@@ -1839,7 +2001,9 @@ async function runSubAgentForProfileInner(params: {
         // GIỮ NGUYÊN (delegation vẫn trả kết quả) — parent biết kết quả
         // CHƯA được trọng tài xác nhận để tự cân nhắc/verify thêm.
         outcome.evaluationMissing = true
-        outcome.report += '\n\n⚠ Chưa có đánh giá độc lập (evaluator lỗi/timeout) — kết quả CHƯA được trọng tài xác nhận.'
+        const evalMissingNote = '\n\n⚠ Chưa có đánh giá độc lập (evaluator lỗi/timeout) — kết quả CHƯA được trọng tài xác nhận.'
+        outcome.report += evalMissingNote
+        reportTail += evalMissingNote // S2.1 — artifact giữ bản đầy đủ
         console.log(`[SubAgent] ${profile.name} trọng tài độc lập KHÔNG chạy được (evaluationMissing=true — kết quả chưa được xác nhận)`)
       }
 
@@ -1894,8 +2058,138 @@ async function runSubAgentForProfileInner(params: {
             if (block) machineLines.push(block.split('\n').slice(0, 12).join('\n'))
           }
         } catch { /* fail-open — git delta không được phá máy đo */ }
-        outcome.report += `\n\n${machineLines.join('\n')}`
+        const machineBlock = `\n\n${machineLines.join('\n')}`
+        outcome.report += machineBlock
+        reportTail += machineBlock // S2.1 — artifact giữ bản đầy đủ (máy đo là bằng chứng đối chiếu r68)
       } catch { /* fail-open — máy đo không được phá delegation result */ }
+    }
+
+    // ━━ EXECUTION-EFFICIENCY S2.1/S2.2/S2.3 — DELEGATION ARTIFACT STORE ━━
+    // (P2: báo cáo sub-agent từng bị cắt ở 6 tầng — tốt nhất 2.400 ký tự cụt —
+    // nên cha/evaluator/final-report KHÔNG đường nào lấy lại nguyên vẹn.)
+    // 3 việc, đều fail-open tuyệt đối (không được phép làm hỏng delegation):
+    //   1. Trace event 'final_report' (cap 32K riêng — thought thường 2400)
+    //      → agent-runs/<subRunId>.jsonl có bản GẦN ĐẦY ĐỦ + mọi panel/UI đọc được.
+    //   2. TaskContextArchive kind='delegation_report' (runId=subRunId) —
+    //      SINGLE SOURCE OF TRUTH truy hồi 1 bước qua context_recall; metadata
+    //      (parentRunId/verdict/tokens/toolCalls/iterations/endedBy) JSON vào
+    //      cột tags (schema không có cột metadata riêng — r43 hiệu đính #5).
+    //      Phải chạy TRƯỚC finishDelegationRun/endAgentRun (run còn 'running').
+    //   3. Dòng tham chiếu 📌 cuối outcome.report — parent (LLM) + evaluator
+    //      biết đường lấy bản đầy đủ mà KHÔNG phải đào trace thủ công.
+    // S2.6: archiveContext tự embed Qdrant cho kind='delegation_report' (đã mở
+    // điều kiện) — semantic recall sống kể cả khi không nhớ đúng runId.
+    if (delegationRunId && fullReport.trim()) {
+      const artifactContent = (fullReport + reportTail).slice(0, 32_000)
+      const artifactRunId = delegationRunId // closure an toàn kiểu (không null trong block này)
+      try { recordFinalReport(sessionId, artifactContent, delegationRunId) } catch { /* fail-open */ }
+      try {
+        const artifactRef = `📌 Báo cáo đầy đủ: context_recall({runId:'${delegationRunId}'})`
+        outcome.report += `\n\n${artifactRef}`
+        if (sessionId) {
+          const artifactMeta = {
+            parentRunId: parentRunId ?? null,
+            verdict: outcome.evaluation ? (outcome.evaluation.pass ? 'ĐẠT' : 'CHƯA ĐẠT') : 'chưa chấm',
+            pass: outcome.evaluation ? outcome.evaluation.pass : null,
+            confidence: outcome.evaluation ? Math.round(outcome.evaluation.confidence * 100) / 100 : null,
+            tokens: tokensUsed,
+            toolCalls: toolCallCount,
+            iterations,
+            endedBy: state.endedBy,
+            agent: profile.name,
+            artifact: 'delegation_report',
+          }
+          void import('@/lib/context-store')
+            .then(({ archiveContext }) => archiveContext({
+              runId: artifactRunId,
+              sessionId,
+              agentName: profile.name,
+              kind: 'delegation_report',
+              content: artifactContent,
+              tags: JSON.stringify(artifactMeta),
+            }))
+            .then(r => {
+              if (r.archived) {
+                console.log(`[SubAgent] S2 artifact: báo cáo FULL của ${profile.name} (${artifactContent.length} chars) → TaskContextArchive runId=${artifactRunId.slice(0, 22)}… (truy hồi: context_recall)${r.embedded ? ' + embed Qdrant' : ''}`)
+              }
+            })
+            .catch(() => { /* fail-open — artifact không được phá delegation */ })
+        }
+      } catch { /* fail-open */ }
+    }
+
+    // ━━ EXECUTION-EFFICIENCY S7 — TODO EVIDENCE AUTO-ATTACH (fix P7) ━━
+    // Run bằng chứng: todo "chốt danh sách… đóng khi có căn cứ từ báo cáo
+    // ALISTA" của cha kẹt vì MỌI đường lấy căn cứ đều gãy (P1 search vô hình
+    // + P2 báo cáo cắt) → evaluator chấm CHƯA ĐẠT "còn thiếu" lặp lại → stall
+    // brake dừng run 6/12 chu kỳ MẶC DÙ nghiên cứu đã xong (ĐẠT 92%). Giờ:
+    // khi delegation kết thúc, harness TỰ gắn evidence vào todo CỦA RUN CHA
+    // (rule r43: cùng parentRunId + content nhắc tên agent/task đã delegate —
+    // match tên thường-hoá; merge taskMetaJson, KHÔNG đè key sẵn có). Agent
+    // đóng todo bằng cách THAM CHIẾU evidence hệ thống gắn — không phải tự
+    // truy hồi. Không match todo nào → thought hệ thống (không im lặng).
+    if (parentRunId && sessionId) {
+      try {
+        const { db } = await import('@/lib/db')
+        const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim()
+        const agentKey = norm(profile.name)
+        const taskTokens = [...new Set(norm(task).split(' ').filter(w => w.length >= 4))].slice(0, 12)
+        const parentTodos = await db.todo.findMany({
+          where: {
+            runId: parentRunId,
+            status: { in: ['pending', 'in_progress', 'blocked'] },
+            archivedAt: null,
+          },
+          select: { id: true, content: true, taskMetaJson: true },
+          take: 40,
+        })
+        const matched = parentTodos.filter(t => {
+          const nc = norm(t.content || '')
+          if (!nc) return false
+          if (agentKey && nc.includes(agentKey)) return true
+          const hitTokens = taskTokens.filter(tok => nc.includes(tok)).length
+          return taskTokens.length >= 2 && hitTokens >= Math.max(2, Math.ceil(taskTokens.length * 0.25))
+        })
+        const evidenceObj = {
+          subRunId: delegationRunId ?? undefined,
+          artifactRef: delegationRunId ? `context_recall({runId:'${delegationRunId}'})` : undefined,
+          verdict: outcome.evaluation ? (outcome.evaluation.pass ? 'ĐẠT' : 'CHƯA ĐẠT') : 'chưa chấm',
+          pass: outcome.evaluation ? outcome.evaluation.pass : null,
+          confidence: outcome.evaluation ? Math.round(outcome.evaluation.confidence * 100) / 100 : null,
+          tokens: tokensUsed,
+          toolCalls: toolCallCount,
+          iterations,
+          endedBy: state.endedBy,
+          agent: profile.name,
+          attachedBy: 'S7-todo-evidence-auto-attach',
+          attachedAt: new Date().toISOString(),
+        }
+        let attached = 0
+        for (const t of matched.slice(0, 5)) {
+          try {
+            let meta: Record<string, unknown> = {}
+            try { meta = t.taskMetaJson ? JSON.parse(t.taskMetaJson) as Record<string, unknown> : {} } catch { meta = {} }
+            meta.evidence = evidenceObj // merge — giữ các key khác của taskMetaJson
+            await db.todo.update({ where: { id: t.id }, data: { taskMetaJson: JSON.stringify(meta) } })
+            attached++
+          } catch { /* fail-open từng todo */ }
+        }
+        if (attached > 0) {
+          const todoTitles = matched.slice(0, 3).map(t => `"${t.content.slice(0, 60)}"`).join(', ')
+          console.log(`[SubAgent] S7 evidence attach: ${attached} todo của run cha (${parentRunId.slice(0, 18)}…) đã gắn evidence delegation [${profile.name}] — ${todoTitles}`)
+          try {
+            recordAgentThought(sessionId, `📎 Chu kỳ kết thúc delegation — S7 evidence tự gắn: ${attached} todo (${todoTitles}) đã có bằng chứng hệ thống trong taskMetaJson.evidence (verdict ${evidenceObj.verdict}, ${evidenceObj.toolCalls} tools, ${evidenceObj.tokens} tokens, artifact ${evidenceObj.artifactRef ?? 'n/a'}). Đóng todo bằng THAM CHIẾU evidence này — không cần truy hồi lại từ nguồn khác.`, undefined, parentRunId)
+          } catch { /* fail-open */ }
+        } else {
+          // KHÔNG im lặng (r43): delegation kết thúc mà không tìm todo cha tương
+          // ứng → thought hệ thống — parent biết evidence đang "lơ lửng".
+          try {
+            recordAgentThought(sessionId, `📎 Delegation [${profile.name}] kết thúc (${state.endedBy}, verdict ${evidenceObj.verdict}) — KHÔNG tìm thấy todo nào của run này nhắc agent/task nên chưa gắn evidence; báo cáo đầy đủ ở ${evidenceObj.artifactRef ?? 'trace sub-run'}.`, undefined, parentRunId)
+          } catch { /* fail-open */ }
+        }
+      } catch (s7Err) {
+        console.warn('[SubAgent] S7 todo evidence attach fail-open:', s7Err instanceof Error ? s7Err.message : String(s7Err))
+      }
     }
 
     // USER DIRECTIVE 2026-10-29 (re-audit fix: DỜI SAU trọng tài) — đóng todo
@@ -2056,6 +2350,7 @@ async function runSubAgentForProfileInner(params: {
       agent: profile.name,
       position: '-',
       report: '',
+      subRunId: delegationRunId ?? undefined, // S2.3 — parent vẫn truy hồi được những gì sub-run đã làm qua trace/artifact
       tokensUsed,
       iterations,
       toolCalls: toolCallCount,
@@ -2224,8 +2519,9 @@ ${allowedTools.includes('list_skills') ? `- 56+ SKILLS HƯỚNG DẪN có sẵn 
 ` : ''}
 
 QUY TRÌNH LÀM VIỆC (bắt buộc):
-${canTodo ? `- BƯỚC 0 — LẬP KẾ HOẠCH: đánh giá nhiệm vụ. Nếu cần NHIỀU BƯỚC (đọc/sửa nhiều file, research rồi code, cài đặt rồi kiểm định...) → gọi todo_write NGAY ĐẦU TIÊN, chia nhiệm vụ thành các bước có thứ tự (mỗi bước 1 mục, mô tả đo đếm được) → làm TỪNG BƯỚC, cập nhật trạng thái qua todo_write (pending → in_progress → completed/failed). Nhiệm vụ đơn giản (1-2 tool call) → làm thẳng, không cần todo.
+${canTodo ? `- BƯỚC 0 — LẬP KẾ HOẠCH: đánh giá nhiệm vụ. Nếu cần NHIỀU BƯỚC (đọc/sửa nhiều file, research rồi code, cài đặt rồi kiểm định...) → gọi todo_write NGAY ĐẦU TIÊN, chia nhiệm vụ thành các bước có thứ tự (mỗi bước 1 mục, mô tả đo đếm được) → làm TỪNG BƯỚC, cập nhật trạng thái qua todo_write (pending → in_progress → completed/failed). Kế hoạch ≤8 bước, kèm ước lượng số vòng cho từng bước. Nhiệm vụ đơn giản (1-2 tool call) → làm thẳng, không cần todo.
 ` : ''}- Dùng tools thật để đọc/sửa/chạy — không đoán kết quả file/lệnh.
+- HIỆU QUẢ THEO CÔNG VIỆC (S4.2 — chi phí nhân theo VÒNG, không phải theo việc): (a) GỘP nhiều truy vấn/đọc file ĐỘC LẬP vào 1 script shell duy nhất khi có thể (1 lệnh python3/sqlite3 chạy 5 truy vấn rẻ hơn 5 lệnh riêng — mỗi lệnh riêng là 1 vòng LLM gửi lại toàn bộ ngữ cảnh); (b) phát NHIỀU tool_call trong CÙNG một message cho các tool độc lập; (c) kết quả phép đo đã có trong transcript thì DÙNG LẠI, không đo lại.
 - TỰ KIỂM ĐỊNH trước khi kết luận: chạy ít nhất 1 tool xác nhận kết quả cuối (file_read đọc lại / lint / type_check / run_tests...) — KHÔNG kết luận "hoàn thành" suông không bằng chứng.${acceptanceCriteria ? ' Đối chiếu TỪNG điều kiện hoàn thành phía trên — điều kiện nào chưa đạt phải nói rõ.' : ''}
 - Mỗi vòng tối đa vài tool calls; ưu tiên hành động trực tiếp.
 - ⛔ PHẠM VI (ROUND-53 — bằng chứng r53: sub-agent chẩn đoán tự mở rộng làm thay toàn bộ nhiệm vụ gốc của run cha, đốt 950k tokens rồi trọng tài chấm CHƯA ĐẠT): CHỈ làm đúng NHIỆM VỤ được delegate phía trên. Có kết luận đúng phạm vi là BÁO CÁO + DỪNG — nhiệm vụ lớn hơn là việc của parent sau khi đọc báo cáo của bạn. KHÔNG tự mở rộng phạm vi.

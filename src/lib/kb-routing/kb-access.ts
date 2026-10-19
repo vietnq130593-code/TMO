@@ -665,6 +665,58 @@ async function searchEntitiesForUser(agentId: string, query: string, topK: numbe
       // description only) — use the name as a stable identifier.
       merged.push({ id: e.name, name: e.name, type: e.type, description: e.description, domain: e.domain })
     }
+
+    // ━━ EXECUTION-EFFICIENCY S1.3 — LOCAL ENTITY (SQLite) LIKE LAYER ━━
+    // P1 (run bằng chứng run_1792386145100_1): knowledge_write của agent ghi
+    // LocalEntity (SQLite) nhưng tầng search chỉ đọc Neo4j/Qdrant → 6 entity
+    // ALISTA "vô hình" với knowledge_search dù nằm ĐẦY ĐỦ trong DB. Nguồn thứ 3
+    // này LUÔN chạy (kể cả Neo4j chết) — SQL LIKE trên entityName/description,
+    // không cần embedding → biến LocalEntity từ "buffer mù" thành "tầng KV chắc
+    // chắn tìm được".
+    // THỨ TỰ: dưới semantic, ngang lexical (S1). NHƯNG luôn được HIỂN THỊ khi
+    // khớp — verify backfill 19/10 cho thấy gate `merged.length < topK` khiến
+    // entity cũ Neo4j chiếm hết slot topK che mất entity agent (KPI §6 "100%
+    // tìm thấy ≤1 call" fail) → local hits append SAU lexical, được phép vượt
+    // topK (cap riêng topK) thay vì chỉ lấp chỗ trống. Chỉ thêm khi CÓ match —
+    // query không khớp LocalEntity nào thì hành vi giữ nguyên như cũ.
+    // Scope note: LocalEntity không có cột user/agent → kết quả là KB DÙNG CHUNG
+    // toàn hệ thống (đúng tinh thần "KB chung" — không scoping theo agent).
+    try {
+      if (query.trim()) {
+        const { db } = await import('@/lib/db')
+        const q = query.trim()
+        // Prisma `contains` → SQLite LIKE '%q%' (case-insensitive ASCII —
+        // đủ cho "tìm theo tên entity" của S1, không cần embedding)
+        const localHits = await db.localEntity.findMany({
+          where: {
+            OR: [
+              { entityName: { contains: q } },
+              { description: { contains: q } },
+            ],
+          },
+          // SELECT tối thiểu — không kéo properties JSON (có thể dài)
+          select: { id: true, entityName: true, entityType: true, description: true, domain: true },
+          take: topK,
+          orderBy: { createdAt: 'desc' },
+        })
+        for (const e of localHits) {
+          const key = e.entityName.toLowerCase()
+          if (!key || seen.has(key)) continue
+          seen.add(key)
+          merged.push({
+            id: e.id,
+            name: e.entityName,
+            type: e.entityType,
+            description: e.description ?? '',
+            domain: e.domain ?? '',
+          })
+        }
+      }
+    } catch (localErr) {
+      // Fail-open — nguồn LIKE là tầng phụ, không được phá search
+      console.warn('[KB-Access] LocalEntity LIKE layer failed (fail-open):', localErr instanceof Error ? localErr.message : String(localErr))
+    }
+
     if (semantic.length > 0 || isFlagEnabled('ENABLE_SEMANTIC_ENTITY_SEARCH')) {
       console.log(`[KB-Access] Entity search: semantic=${semantic.length}, lexical=${lexical.length}, merged=${merged.length}`)
     }

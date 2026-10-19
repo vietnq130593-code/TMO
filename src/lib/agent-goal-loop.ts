@@ -54,7 +54,7 @@
  * (chat route) có fallback /api/query như cũ.
  */
 
-import { callLLMForAgent, type LLMTool } from '@/lib/llm'
+import { callLLMForAgent, verdictBudget, NEMOTRON_550B_NIM_ID, DEEPSEEK_V41_FLASH_NIM_ID, type LLMTool } from '@/lib/llm'
 import { executeTool, buildCompactToolSchemasSection, resolveToolAlias, getToolDefinitions, getAllBuiltinToolNames } from '@/lib/code-team/tool-executor'
 import { parseToolCallsFromOutput, formatMessagesForLLM, detectBrokenToolCallHint, countProviderGarbleMarkers, tryParseLooseJson, salvageNativeToolArgs, maskToolCallText } from '@/lib/tool-calls'
 // R12 (triển khai fix lượt quan sát 5 — 2026-10-14): INFRA-DEBT DEMOTION —
@@ -1397,9 +1397,15 @@ export function buildDelegationOutcomeThought(cycle: number, tc: { name: string;
     const statusLabel = toolResult.success
       ? (evalPassBool === false ? 'TRẢ VỀ ĐẦY ĐỦ (trọng tài CHƯA ĐẠT)' : 'HOÀN THÀNH')
       : 'CHƯA ĐẠT'
-    const report = dlClip(r.report, 220)
+    // EXECUTION-EFFICIENCY S2.3: 220 → 400 (r43 — bản 220 chỉ là 1 dòng teaser,
+    // không đủ chốt danh sách việc) + dòng tham chiếu artifact 1 bước — cha
+    // không còn phải đào trace thủ công để lấy báo cáo đầy đủ (P2).
+    const report = dlClip(r.report, 400)
     const err = toolResult.success ? '' : (dlClip(r.error, 120) ? ` · lỗi: ${dlClip(r.error, 120)}` : '')
-    return `📥 Chu kỳ ${cycle} — KẾT QUẢ PHÂN CÔNG: agent [${agent}] ${statusLabel} "${taskShort}" — triển khai: ${it} vòng ReAct · ${tl} tool calls · ${fmtTokens(r.tokensUsed)} tokens · kết thúc bởi ${ended}${evalPass}${err}${report ? `; báo cáo: ${report}` : ''}`
+    const artifactRef = typeof r.subRunId === 'string' && r.subRunId
+      ? `\n📌 Báo cáo đầy đủ: context_recall({runId:'${r.subRunId}'}) — 1 bước, nguyên vẹn (không cần đào trace)`
+      : ''
+    return `📥 Chu kỳ ${cycle} — KẾT QUẢ PHÂN CÔNG: agent [${agent}] ${statusLabel} "${taskShort}" — triển khai: ${it} vòng ReAct · ${tl} tool calls · ${fmtTokens(r.tokensUsed)} tokens · kết thúc bởi ${ended}${evalPass}${err}${report ? `; báo cáo: ${report}` : ''}${artifactRef}`
   }
 
   // dispatch_agents_parallel — fan-out nhiều agent
@@ -1409,7 +1415,9 @@ export function buildDelegationOutcomeThought(cycle: number, tc: { name: string;
     const results = Array.isArray(r.results) ? (r.results as Array<Record<string, unknown>>) : []
     const lines = results.slice(0, 4).map(x => {
       const s = x.success === true
-      return `[${String(x.agent ?? '?')}] ${s ? 'HOÀN THÀNH' : 'CHƯA ĐẠT'} · ${typeof x.iterations === 'number' ? x.iterations : 0} vòng · ${typeof x.toolCalls === 'number' ? x.toolCalls : 0} tools${dlClip(x.report, 90) ? ` — ${dlClip(x.report, 90)}` : ''}`
+      // S2.3 — kèm địa chỉ artifact từng sub-run (nếu có)
+      const subRef = typeof x.subRunId === 'string' && x.subRunId ? ` · 📌 context_recall({runId:'${x.subRunId}'})` : ''
+      return `[${String(x.agent ?? '?')}] ${s ? 'HOÀN THÀNH' : 'CHƯA ĐẠT'} · ${typeof x.iterations === 'number' ? x.iterations : 0} vòng · ${typeof x.toolCalls === 'number' ? x.toolCalls : 0} tools${dlClip(x.report, 90) ? ` — ${dlClip(x.report, 90)}` : ''}${subRef}`
     })
     return `📥 Chu kỳ ${cycle} — KẾT QUẢ PHÂN CÔNG THEO LƯỢT (tuần tự — R14): ${ok}/${total} agent hoàn thành · tổng ${fmtTokens(r.tokensUsed)} tokens${lines.length > 0 ? `\n${lines.map(l => `  - ${l}`).join('\n')}` : ''}`
   }
@@ -1549,6 +1557,9 @@ Nguyên tắc SẮT:
 16. NEEDS-INPUT CHECK (Task 48 — chống đốt chu kỳ vô ích): xác định xem mục tiêu có đang bị chặn DUY NHẤT bởi thông tin/ủy quyền/phê duyệt mà CHỈ NGƯỜI DÙNG cung cấp được không (agent đã hỏi trong lời kết luận — vd: thiếu scope/ủy quyền pentest, thiếu credentials, cần user chọn giữa các phương án, thông tin không có trong hệ thống...). ĐÚNG → "needsInput": true + "complete": false + "missing" nêu RÕ thông tin cụ thể cần user trả lời. KHÔNG dùng needsInput cho việc agent TỰ làm được bằng tool/tự phục vụ (xem rule 9a — đó là trốn tránh, không phải thiếu thông tin); cũng KHÔNG dùng khi agent chưa hề hỏi hoặc còn đường tấn công khả thi chưa thử. needsInput=true → hệ thống DỪNG vòng lặp ngay và trả câu hỏi về user (không chạy thêm chu kỳ).
 17. REGRESSION CHECK (user directive 2026-10-06 — hồi quy phần việc dở): prompt có khối "PHẦN VIỆC ĐANG LÀM DỞ TỪ CÁC RUN TRƯỚC" (các run trước trong phiên còn việc chưa xong, kèm todo id). Đối chiếu TỪNG mục với bằng chứng của run này: mục đã được hồi quy làm tiếp VÀ có bằng chứng hoàn thành (todo_write đóng đúng id + bằng chứng tool) → coi như đã xử lý. Còn mục NÀO chưa có bằng chứng hoàn thành → "complete": false và ghi vào "missing" dòng bắt đầu bằng "hồi quy: <nội dung mục>" — mục tiêu riêng của run có đạt tới đâu thì phiên vẫn còn việc dở, tác vụ chỉ trọn vẹn khi đã hồi quy xong phần dở. KHÔNG dùng needsInput cho regression (đó là việc còn tồn, không phải thiếu thông tin).
 18. METADATA-TRUTH + COMPRESSION-AWARE (r60 — từ quan sát mission r59 …9k3kp8): (a) METADATA LÀ SỐ MÁY ĐO: khi tiêu chí đòi CON SỐ đếm, trường total/rowCount/totalMatches trong KẾT QUẢ TOOL là bằng chứng máy hợp lệ (mở rộng rule 11) — KHÔNG bắt agent "đếm tay lại" khi tool đã trả số; agent tự đếm tay mâu thuẫn với metadata → tin metadata. (b) NÉN CONTEXT: prompt có dòng "⚙️ GHI CHÚ CONTEXT ... đã qua nén ×N" → tool-result cũ trong transcript của agent có thể chỉ còn tóm tắt digest — NHẬT KÝ BẰNG CHỨNG TOOL dưới đây là bản ghi CỐ ĐỊNH lúc tool chạy (KHÔNG bị nén) nên đối chiếu dựa trên đó. KHÔNG đòi trích nguyên văn một phần đã bị nén khi nhật ký + digest đã xác nhận nội dung (đó là yêu cầu bất khả thi — nguyên nhân chu kỳ bế tắc 1%/2%/3% r59); khi cần nguyên văn chính xác hơn, chấp nhận lời đề xuất re-read-trích-dẫn của agent ở chu kỳ sau (đó là hành động hợp lệ, không phải lặp việc).
+19. EVIDENCE-PATH AWARENESS (EXECUTION-EFFICIENCY S7 — từ run bằng chứng run_1792386145100_1: todo kẹt vì ĐƯỜNG truy hồi bằng chứng gãy, run chết ở khâu GIAO HÀNG dù công việc ĐÃ xong): PHÂN BIỆT 2 trạng thái khi một mục tiêu/todo "thiếu bằng chứng":
+   (a) "CHƯA LÀM" — không có tool call/delegation nào liên quan trong nhật ký → khuyên LÀM TIẾP (missing ghi việc cụ thể còn thiếu).
+   (b) "ĐÃ LÀM nhưng đường truy hồi gãy/ra thất lạc" — nhật ký CÓ delegation/tool call liên quan (vd: delegation [ALISTA] kết thúc concluded + trọng tài ĐẠT) mà agent không truy hồi được chi tiết → KHÔNG phán lặp "còn thiếu" như nhau 2 chu kỳ; hint ĐƯỜNG thay thế vào "missing"/"nextPlan": (1) dòng "📌 Báo cáo đầy đủ: context_recall({runId:'sub_…'})" trong tool-result delegation là địa chỉ truy hồi 1 bước HỢP LỆ; (2) todo có "taskMetaJson.evidence" do HỆ THỐNG gắn (S7 — kèm verdict + artifactRef) là CĂN CỨ HỢP LỆ để đóng todo — agent tham chiếu evidence hệ thống này coi như "có căn cứ", KHÔNG bắt truy hồi nguyên văn lại từ nguồn khác; (3) entity đã knowledge_write → knowledge_search theo đúng tên (KB chung); (4) db_query bảng LocalEntity.
    (r67 F7 — quy tắc 19 delegation check đã chuyển sang CƯỞNG CHẾ MÃ harness, không còn trong prompt này)
 
 Output DUY NHẤT một dòng JSON hợp lệ (KHÔNG markdown fence, KHÔNG giải thích thêm):
@@ -2123,27 +2134,61 @@ ${evidenceBlock}
 ĐÁNH GIÁ: mục tiêu đã hoàn thành chưa? Output JSON.`
 
   try {
-    const result = await withTimeout(
-      callLLMForAgent(prompt, { provider: agentProvider, model: agentModel }, EVALUATOR_SYSTEM_PROMPT, {
-        agentId,
-        agentName: `${agentName} (evaluator)`,
-        temperature: 0.2,
-        // IMP-2 (H G3 — audit Task H): 1200 sát nút vs worst-case verdict tiếng
-        // Việt ~3900 chars → truncate → JSON hỏng → null → rơi nhánh heuristic
-        // (false-done G1). 2000 cho evaluator đủ chỗ trả verdict trọn vẹn.
-        maxTokens: 2000,
-        abortCheck,
-      }),
-      LLM_TIMEOUT_MS,
-      'Evaluator LLM',
-    )
-    if (!result || (!result.content && !result.tool_calls)) return null
-    if (!result.content) return null
-    // TOKEN ACCOUNTING (fix review 2026-09-08): evaluator call tiêu token thật
-    // (tối đa 4 lần/run) — trước đây không được đếm vào tokensUsed → budget
-    // ảo (thực tiêu nhiều hơn metadata báo).
-    if (typeof result.tokensUsed === 'number' && result.tokensUsed > 0) onTokens?.(result.tokensUsed)
-    return parseEvalVerdict(result.content)
+    // ━━ EXECUTION-EFFICIENCY S3.1+S3.2 — MODEL-AWARE BUDGET + RETRY LADDER ━━
+    // P3 (2 biến thể bắt sống): (a) reasoning starvation — glm-5.3-flash đốt
+    // hết max_tokens 2000 cho suy luận, KHÔNG còn chỗ trả JSON verdict (R41-
+    // OBSV1: kể cả ×2 nội bộ llm.ts R25 = 4.000 vẫn cạn) → null; (b) circuit
+    // breaker mở 600s → chu kỳ 4-6 "(evaluator LLM lỗi)" gần như trắng.
+    // S3.1: budget model-aware — reasoning model → 8.000 (4× base).
+    // S3.2: ladder đa model — attempt 1 model agent; fail (null/empty/starve)
+    // → attempt 2 KHÁC provider theo chính sách R39 (nemotron-550b — lõi
+    // extraction ổn định, chậm 13s nhưng breaker riêng); fail nữa → null như
+    // cũ (caller rơi heuristic — đường an toàn giữ nguyên).
+    const attemptEval = async (provider: string, model: string) => {
+      const result = await withTimeout(
+        callLLMForAgent(prompt, { provider, model }, EVALUATOR_SYSTEM_PROMPT, {
+          agentId,
+          agentName: `${agentName} (evaluator${model === agentModel ? '' : '+ladder'})`,
+          temperature: 0.2,
+          // IMP-2 (H G3 — audit Task H): 1200 sát nút vs worst-case verdict tiếng
+          // Việt ~3900 chars → truncate → JSON hỏng → null → rơi nhánh heuristic
+          // (false-done G1). 2000 cho evaluator thường đủ; S3.1 nâng 4× khi model
+          // là reasoning (đồng thời vượt lớp ×2 nội bộ R25 đã chứng minh không đủ).
+          maxTokens: verdictBudget(model, 2000),
+          abortCheck,
+        }),
+        LLM_TIMEOUT_MS,
+        'Evaluator LLM',
+      )
+      if (!result || !result.content) return null
+      // TOKEN ACCOUNTING (fix review 2026-09-08): evaluator call tiêu token thật
+      // (tối đa 4 lần/run) — trước đây không được đếm vào tokensUsed → budget
+      // ảo (thực tiêu nhiều hơn metadata báo).
+      if (typeof result.tokensUsed === 'number' && result.tokensUsed > 0) onTokens?.(result.tokensUsed)
+      return parseEvalVerdict(result.content)
+    }
+
+    // Attempt 1 — model của agent (hành vi cũ)
+    const verdict = await attemptEval(agentProvider, agentModel)
+    if (verdict) return verdict
+    if (abortCheck()) return null
+
+    // Attempt 2 (S3.2 ladder) — KHÁC model, chỉ khi attempt 1 fail thật sự
+    // (null/empty/starve). Bỏ qua khi agent model ĐÃ là nemotron-550b (đổi
+    // sang deepseek-v4.1-flash) để ladder luôn xoay 2 model khác nhau.
+    const ladderProvider = 'nvidia'
+    const ladderModel = agentModel === NEMOTRON_550B_NIM_ID ? DEEPSEEK_V41_FLASH_NIM_ID : NEMOTRON_550B_NIM_ID
+    console.warn(`[GoalLoop] Evaluator LLM attempt 1 (${agentModel}) trả null/empty — S3.2 ladder thử model khác: ${ladderModel}`)
+    try {
+      const verdict2 = await attemptEval(ladderProvider, ladderModel)
+      if (verdict2) {
+        console.log(`[GoalLoop] Evaluator S3.2 ladder: ${ladderModel} chấm được verdict (attempt 1 ${agentModel} fail)`)
+        return verdict2
+      }
+    } catch (ladderErr) {
+      console.warn(`[GoalLoop] Evaluator S3.2 ladder (${ladderModel}) failed: ${ladderErr instanceof Error ? ladderErr.message : String(ladderErr)}`)
+    }
+    return null
   } catch (err) {
     console.warn(`[GoalLoop] Evaluator LLM failed: ${err instanceof Error ? err.message : String(err)}`)
     return null
@@ -2180,11 +2225,20 @@ async function generateFinalReport(params: {
   fullSystemPrompt: string
   abortCheck: () => boolean
   onTokens: (tokens: number) => void
+  /** EXECUTION-EFFICIENCY S3.3/S8 — artifact refs delegation (chỉ đường truy hồi
+   *  báo cáo full trong final report + fallback không-LLM) */
+  delegationArtifacts?: Array<{ agent: string; subRunId: string }>
+  /** S3.3 — scope để fallback dựng danh sách todo từ DB (server-side có sẵn) */
+  runId?: string | null
+  agentSessionId?: string | null
+  /** S3.3 — tổng tool calls của run (fallback section "đã làm") */
+  totalToolCalls?: number
 }): Promise<string | null> {
   const {
     goal, lastContent, evidence, lastVerdict, stopReason, cyclesAttempted, maxCycles, debtIssues, regressionPending,
     agentProvider, agentModel, agentId, agentName, agentTemperature, agentMaxTokens,
     fullSystemPrompt, abortCheck, onTokens,
+    delegationArtifacts, runId, agentSessionId, totalToolCalls,
   } = params
 
   // r60.1 — mirror total-cap của evaluator: trước đây slice(0, 8000) giữ NGUYÊN
@@ -2219,6 +2273,13 @@ async function generateFinalReport(params: {
     ? `\nPHẦN VIỆC ĐANG LÀM DỞ CHỜ HỒI QUY (các run trước trong phiên còn việc chưa xong mà run này chưa hồi quy xong):\n${regressionPending.map(r => `- ${r}`).join('\n')}`
     : ''
 
+  // S3.3/S8 — block tham chiếu artifact delegation: LLM tổng kết phải chỉ cho
+  // user nơi lấy báo cáo FULL của từng sub-agent (1 bước — không mất công sức
+  // nghiên cứu đã trả token).
+  const artifactBlock = (delegationArtifacts ?? []).length > 0
+    ? `\n\nBÁO CÁO DELEGATION LƯU TRỮ (báo cáo đầy đủ của từng sub-agent đã lưu nguyên vẹn — TRÍCH DẪN đủ địa chỉ context_recall vào mục liên quan):\n${(delegationArtifacts ?? []).slice(-8).map(a => `- [${a.agent}] context_recall({runId:'${a.subRunId}'})`).join('\n')}`
+    : ''
+
   const prompt = `MỤC TIÊU GỐC:
 ${goal.slice(0, 1500)}
 
@@ -2229,7 +2290,7 @@ NHẬT KÝ BẰNG CHỨNG TOOL THẬT (sự thật duy nhất đáng tin — tr�
 ${evidenceLines}
 
 ĐÁNH GIÁ CỦA TRỌNG TÀI ĐỘC LẬP:
-${verdictBlock}${debtBlock}${regressionBlock}
+${verdictBlock}${debtBlock}${regressionBlock}${artifactBlock}
 
 TÌNH TRẠNG: vòng lặp dừng sau ${cyclesAttempted}/${maxCycles === 0 ? '∞' : maxCycles} chu kỳ — lý do: ${stopReason}.
 
@@ -2249,16 +2310,30 @@ QUY TẮC: KHÔNG gọi tool. KHÔNG bắt đầu công việc mới. Chỉ tổ
   // retry tối đa 2 lần kèm backoff (12s / 30s — đủ vượt cơn nghẽn ngắn của
   // provider), check abortCheck giữa các lần. Không đổi hành vi thành công:
   // lần đầu OK thì return như cũ (0 chờ thêm).
+  //
+  // ━━━ EXECUTION-EFFICIENCY S3.3 — LADDER ĐA MODEL (thay pattern "cùng model
+  // chết 3 lần") ━━━ P3 bằng chứng: final report fail 3× với CÙNG model đang
+  // chết (breaker mở 600s) → 3 fail là tất yếu → BUG-024 fallback generic mất
+  // toàn bộ nội dung nghiên cứu. Ladder: attempt 1+2 = model agent (backoff
+  // transient như cũ); attempt 3 = model KHÁC (nemotron-550b — chính sách R39
+  // cho đường chấm điểm/tổng kết; deepseek-v4.1-flash nếu agent đã là nemotron).
   const FINAL_REPORT_RETRY_BACKOFF_MS = [12_000, 30_000]
   const FINAL_REPORT_MAX_ATTEMPTS = FINAL_REPORT_RETRY_BACKOFF_MS.length + 1
+  const ladderModel = agentModel === NEMOTRON_550B_NIM_ID ? DEEPSEEK_V41_FLASH_NIM_ID : NEMOTRON_550B_NIM_ID
+  const attemptModels: Array<{ provider: string; model: string }> = [
+    { provider: agentProvider, model: agentModel },
+    { provider: agentProvider, model: agentModel },
+    { provider: 'nvidia', model: ladderModel },
+  ]
   let finalReportLastErr = 'unknown'
   for (let attempt = 1; attempt <= FINAL_REPORT_MAX_ATTEMPTS; attempt++) {
     if (abortCheck()) return null
+    const { provider: tryProvider, model: tryModel } = attemptModels[Math.min(attempt - 1, attemptModels.length - 1)]
     try {
       const result = await withTimeout(
-        callLLMForAgent(prompt, { provider: agentProvider, model: agentModel }, fullSystemPrompt, {
+        callLLMForAgent(prompt, { provider: tryProvider, model: tryModel }, fullSystemPrompt, {
           agentId,
-          agentName: `${agentName} (final-report)`,
+          agentName: `${agentName} (final-report${tryModel === agentModel ? '' : '+ladder'})`,
           temperature: agentTemperature ?? 0.4,
           maxTokens: Math.max(agentMaxTokens ?? 2048, 4096),
           abortCheck,
@@ -2276,12 +2351,137 @@ QUY TẮC: KHÔNG gọi tool. KHÔNG bắt đầu công việc mới. Chỉ tổ
     }
     if (attempt < FINAL_REPORT_MAX_ATTEMPTS) {
       const waitMs = FINAL_REPORT_RETRY_BACKOFF_MS[attempt - 1]
-      console.warn(`[GoalLoop] Final report LLM thất bại lần ${attempt}/${FINAL_REPORT_MAX_ATTEMPTS}: ${finalReportLastErr} — retry sau ${Math.round(waitMs / 1000)}s (BUG-024 wrap-up là cuộc gọi quan trọng nhất run)`)
+      console.warn(`[GoalLoop] Final report LLM thất bại lần ${attempt}/${FINAL_REPORT_MAX_ATTEMPTS} (${tryModel}): ${finalReportLastErr} — retry sau ${Math.round(waitMs / 1000)}s (BUG-024 wrap-up là cuộc gọi quan trọng nhất run)`)
       await new Promise(resolve => setTimeout(resolve, waitMs))
     }
   }
-  console.warn(`[GoalLoop] Final report LLM thất bại SAU ${FINAL_REPORT_MAX_ATTEMPTS} lần thử (BUG-024) — rơi đường không-LLM: ${finalReportLastErr}`)
+  // ━━━ EXECUTION-EFFICIENCY S3.3/S8 — FALLBACK CÓ NỘI DUNG (không còn null) ━━━
+  // KPI §6: "Final report chứa nội dung công việc khi LLM chết = 100%" — user
+  // KHÔNG BAO GIỜ nhận về báo cáo rỗng/generic. Dựng deterministic 100% từ dữ
+  // liệu server-side có sẵn (task_summary + evidence + todo DB + artifact refs
+  // + thông điệp cuối + next action) — không gọi thêm LLM nào.
+  console.warn(`[GoalLoop] Final report LLM thất bại SAU ${FINAL_REPORT_MAX_ATTEMPTS} lần thử (ladder ${agentModel} → ${ladderModel}) — S3.3 fallback deterministic có nội dung (BUG-024 đã vá): ${finalReportLastErr}`)
+  try {
+    const fallback = await buildDeterministicFinalReport({
+      goal, lastContent, evidence, lastVerdict, stopReason, cyclesAttempted, maxCycles,
+      debtIssues, regressionPending, agentName,
+      delegationArtifacts, runId, agentSessionId, totalToolCalls,
+      lastError: finalReportLastErr,
+    })
+    if (fallback && fallback.length > 200) return fallback
+  } catch (fbErr) {
+    console.warn('[GoalLoop] S3.3 deterministic fallback build lỗi (đường cũ null):', fbErr instanceof Error ? fbErr.message : String(fbErr))
+  }
   return null
+}
+
+/**
+ * EXECUTION-EFFICIENCY S3.3/S8 — BÁO CÁO CUỐI DETERMINISTIC (0 LLM call).
+ * Chạy khi MỌI attempt LLM của generateFinalReport thất bại. Nguyên tắc S8:
+ * bất kể LLM sống chết, người dùng KHÔNG BAO GIỜ nhận về báo cáo rỗng nội dung
+ * — tối thiểu: mục tiêu + những gì đã làm (evidence log) + danh sách todo mở
+ * kèm lý do + nơi lấy đầy đủ (artifact refs) + next action đề xuất. Mọi thứ
+ * đều có sẵn server-side (checkpoint/result/DB) — chỉ cần format.
+ */
+async function buildDeterministicFinalReport(params: {
+  goal: string
+  lastContent: string
+  evidence: EvidenceEntry[]
+  lastVerdict: EvalVerdict | null
+  stopReason: GoalStopReason
+  cyclesAttempted: number
+  maxCycles: number
+  debtIssues?: string[]
+  regressionPending?: string[]
+  agentName: string
+  delegationArtifacts?: Array<{ agent: string; subRunId: string }>
+  runId?: string | null
+  agentSessionId?: string | null
+  totalToolCalls?: number
+  lastError: string
+}): Promise<string> {
+  const {
+    goal, lastContent, evidence, lastVerdict, stopReason, cyclesAttempted, maxCycles,
+    debtIssues, regressionPending, agentName, delegationArtifacts, runId, agentSessionId,
+    totalToolCalls, lastError,
+  } = params
+
+  const complete = stopReason === 'complete'
+  const out: string[] = []
+
+  // Header — trung thực về chế độ fallback
+  out.push(`BÁO CÁO CUỐI — ${complete ? 'MỤC TIÊU HOÀN THÀNH' : 'CHƯA HOÀN THÀNH'} (chế độ tổng hợp tự động: mọi lần sinh báo cáo bằng LLM đều lỗi — ${lastError.slice(0, 160)}). Nội dung dưới đây dựng 100% từ dữ liệu ghi nhận server-side của run, không bỏ sót bằng chứng.`)
+
+  // 1. Tóm tắt 1 dòng (dùng cùng builder task_summary — CI-3 B4)
+  out.push(`1. TÓM TẮT\n${distillTaskSummary({
+    goal, finalContent: lastContent, stopReason, complete,
+    verdictMissing: lastVerdict?.missing, rootCause: lastVerdict?.rootCause,
+    cycles: cyclesAttempted, toolCalls: totalToolCalls ?? evidence.filter(e => e.kind === 'tool').length,
+    maxChars: 600,
+  })}`)
+
+  // 2. Mục tiêu gốc
+  out.push(`2. MỤC TIÊU GỐC\n${goal.slice(0, 800)}`)
+
+  // 3. Việc đã làm — evidence log (đếm + tối đa 12 dòng gần nhất)
+  const toolEvidence = evidence.filter(e => e.kind === 'tool')
+  const okCount = toolEvidence.filter(e => e.success !== false).length
+  const recent = toolEvidence.slice(-12).map(e => `- [${e.success === false ? '✗' : '✓'}] ${e.tool}: ${(e.text ?? '').slice(0, 140)}`)
+  out.push(`3. VIỆC ĐÃ LÀM (nhật ký bằng chứng tool — ${toolEvidence.length} calls, ${okCount} thành công)\n${recent.length > 0 ? recent.join('\n') : '- (không có tool call nào được ghi)'}`)
+
+  // 4. Danh sách todo (DB — đóng/mở kèm trạng thái)
+  let todoSection = ''
+  try {
+    if (runId) {
+      const { db } = await import('@/lib/db')
+      const todos = await db.todo.findMany({
+        where: { OR: [{ runId }, ...(agentSessionId ? [{ sessionId: agentSessionId, runId: null }] : [])] },
+        orderBy: { createdAt: 'asc' },
+        take: 30,
+        select: { content: true, status: true, priority: true },
+      })
+      if (todos.length > 0) {
+        const byStatus = (s: string[]) => todos.filter(t => s.includes(t.status))
+        const open = byStatus(['pending', 'in_progress', 'blocked'])
+        const closed = byStatus(['completed'])
+        const other = todos.filter(t => !open.includes(t) && !closed.includes(t))
+        const fmt = (t: { content: string; status: string; priority: string }) => `- [${t.status}] ${t.content.slice(0, 160)}`
+        todoSection = `4. DANH SÁCH TODO (${todos.length} mục — ${closed.length} completed, ${open.length} mở)\n${closed.length > 0 ? `Đã xong:\n${closed.slice(0, 10).map(fmt).join('\n')}\n` : ''}${open.length > 0 ? `Còn mở (chưa làm xong — lý do: run dừng vì ${stopReason}):\n${open.slice(0, 10).map(fmt).join('\n')}` : ''}${other.length > 0 ? `\nKhác (failed/cancelled/archived):\n${other.slice(0, 6).map(fmt).join('\n')}` : ''}`
+      }
+    }
+  } catch { /* fail-open — không có todo section thay vì chết cả fallback */ }
+  if (todoSection) out.push(todoSection)
+
+  // 5. Artifact refs — nơi lấy báo cáo delegation đầy đủ (S2)
+  if (delegationArtifacts && delegationArtifacts.length > 0) {
+    const uniq = new Map<string, { agent: string; subRunId: string }>()
+    for (const a of delegationArtifacts) uniq.set(a.subRunId, a)
+    out.push(`${todoSection ? '5' : '4'}. BÁO CÁO DELEGATION LƯU TRỮ NGUYÊN VẸN (truy hồi 1 bước — dùng context_recall hoặc hỏi lại agent với runId)\n${[...uniq.values()].slice(-8).map(a => `- [${a.agent}] context_recall({runId:'${a.subRunId}'})`).join('\n')}`)
+  }
+
+  // 6. Thông điệp cuối của agent (thought cuối — nguyên văn trích đoạn)
+  if (lastContent && lastContent.trim()) {
+    out.push(`6. THÔNG ĐIỆP CUỐI CỦA AGENT (nguyên văn — có thể đang dở giữa chừng)\n${lastContent.slice(0, 1500)}`)
+  }
+
+  // 7. Còn thiếu theo trọng tài
+  if (!complete && lastVerdict) {
+    const missing = lastVerdict.missing?.length ? lastVerdict.missing.map(m => `- ${m}`).join('\n') : ''
+    out.push(`7. CÒN THIẾU (theo trọng tài chu kỳ cuối)\n${missing || '- (trọng tài không liệt kê cụ thể)'}${lastVerdict.rootCause ? `\nVấn đề gốc: ${lastVerdict.rootCause}` : ''}`)
+  }
+
+  // 8. Nợ kỹ thuật + hồi quy (nếu có)
+  if (debtIssues && debtIssues.length > 0) {
+    out.push(`NỢ KỸ THUẬT (${debtIssues.length} — đã ghi Todo follow-up)\n${debtIssues.map(d => `- ${d}`).join('\n')}`)
+  }
+  if (regressionPending && regressionPending.length > 0) {
+    out.push(`HỒI QUY CÒN TỒN (${regressionPending.length} phần việc dở từ run trước)\n${regressionPending.map(r => `- ${r}`).join('\n')}`)
+  }
+
+  // 9. Next action đề xuất
+  out.push(`ĐỀ XUẤT NEXT ACTION\n- Yêu cầu agent tiếp tục (run dừng vì ${stopReason} sau ${cyclesAttempted}/${maxCycles === 0 ? '∞' : maxCycles} chu kỳ) — checkpoint đã lưu, resume không mất ngữ cảnh.\n- Nếu cần báo cáo delegation chi tiết hơn: dùng các địa chỉ context_recall ở trên (nguyên vẹn, không bị cắt).\n- Kiểm tra trạng thái provider model (${lastError.slice(0, 100)}) trước khi chạy lại để tránh lặp chu kỳ rác.`)
+
+  return out.join('\n\n')
 }
 
 // ==================== CI-3 B4 (Task 13-c) — TASK SUMMARY LIÊN TÁC VỤ ====================
@@ -3104,6 +3304,10 @@ async function buildAgentMemoryBlock(agentId: string, agentName: string, query: 
   let compressions = resumeState?.counters.compressions ?? 0
   /** [F] Số lần delegate + token sub-agent tiêu thụ (báo cáo lên metadata) */
   let delegations = resumeState?.counters.delegations ?? 0
+  // EXECUTION-EFFICIENCY S3.3/S8 — artifact refs của delegation trong run
+  // (fallback BUG-024 cần chỉ đường truy hồi báo cáo full khi mọi LLM chết;
+  // đồng thời nguồn cho final report LLM nhắc "nơi lấy đầy đủ" — S8)
+  let delegationArtifacts: Array<{ agent: string; subRunId: string }> = []
   let subagentTokens = resumeState?.counters.subagentTokens ?? 0
   /** [G] Số lần auto-escalate hỏi Omega + advisory đang chờ inject */
   let escalations = resumeState?.counters.escalations ?? 0
@@ -4523,6 +4727,23 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             const t = buildDelegationOutcomeThought(cycle, tc, toolResult)
             if (t) recordAgentThought(agentSessionId, t, totalIterations)
           } catch { /* display-only — fail-open */ }
+          // S3.3/S8 — thu thập artifact refs (subRunId) cho final report + fallback
+          try {
+            const robj = (toolResult.result !== null && typeof toolResult.result === 'object')
+              ? (toolResult.result as Record<string, unknown>) : null
+            if (robj) {
+              if (typeof robj.subRunId === 'string' && robj.subRunId) {
+                delegationArtifacts.push({ agent: String(robj.agent ?? tc.args?.agent ?? '?'), subRunId: robj.subRunId })
+              }
+              if (Array.isArray(robj.results)) {
+                for (const x of robj.results as Array<Record<string, unknown>>) {
+                  if (x && typeof x.subRunId === 'string' && x.subRunId) {
+                    delegationArtifacts.push({ agent: String(x.agent ?? '?'), subRunId: x.subRunId })
+                  }
+                }
+              }
+            }
+          } catch { /* fail-open — tracking không được phá tool flow */ }
         }
 
         // [C] Harness kiểm đếm bằng chứng kiểm định theo thứ tự thời gian.
@@ -6121,6 +6342,11 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         fullSystemPrompt,
         abortCheck: isCancelled,
         onTokens: (t) => { tokensUsed += t },
+        // EXECUTION-EFFICIENCY S3.3/S8 — dữ liệu cho ladder + fallback có nội dung
+        delegationArtifacts: delegationArtifacts.length > 0 ? delegationArtifacts : undefined,
+        runId,
+        agentSessionId,
+        totalToolCalls,
       }))
       if (wrapUp && wrapUp.length > 200) {
         content = wrapUp

@@ -153,6 +153,14 @@ if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
   // chết trở thành CÓ LOG + CÓ KIỂM SOÁT (checkpoint per-iteration giữ nguyên,
   // PM2 restart sạch ~5s, goal jobs RESUME). 0 = tắt tầng này.
   const MEM_WATCHDOG_RSS_HARD_MB = Number(process.env.MEM_WATCHDOG_RSS_HARD_MB ?? 2100)
+  // EXECUTION-EFFICIENCY S6-code — TIER-2 SOFT (blueprint P6): hành động Chủ
+  // ĐỘNG TRƯỚC khi tới hard — RSS vượt soft (mặc định 1600MB) → log cảnh báo
+  // (1 lần/episode, hysteresis hồi phục −200MB) + cố gắng giảm GC pressure
+  // (globalThis.gc nếu được expose; no-op an toàn khi không) + phát observation
+  // event cho kênh quan sát. 0 = tắt tầng này. Tier này KHÔNG exit — chỉ chuẩn
+  // bị: mục tiêu là hard-tier ít khi phải bắn (spike bị chặn sớm ở tầng V8 GC).
+  const MEM_WATCHDOG_SOFT_MB = Number(process.env.MEM_WATCHDOG_SOFT_MB ?? 1600)
+  let softWarnActive = false
   if (MEM_WATCHDOG_MB > 0) {
     const readMemAvailableMb = (): number | null => {
       try {
@@ -170,6 +178,29 @@ if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
     const memWatchdogTimer = setInterval(() => {
       try {
         const rssMb = process.memoryUsage().rss / 1048576
+        // ━━ EXECUTION-EFFICIENCY S6-code — TIER-2 SOFT ACTION (P6) ━━
+        // Vượt soft ngưỡng → cảnh báo 1 lần/episode + giảm GC pressure chủ
+        // động (chặn spike trước khi chạm hard); hồi dưới (soft−200) → reset.
+        if (MEM_WATCHDOG_SOFT_MB > 0) {
+          if (rssMb >= MEM_WATCHDOG_SOFT_MB && !softWarnActive) {
+            softWarnActive = true
+            const gc = (globalThis as unknown as { gc?: () => void }).gc
+            console.warn(`[MemWatchdog] S6 TIER-2 SOFT: RSS ${rssMb.toFixed(0)}MB ≥ ${MEM_WATCHDOG_SOFT_MB}MB — chủ động giảm áp lực GC${gc ? ' (đã gọi globalThis.gc)' : ' (gc chưa expose — chỉ cảnh báo)'} — hard tiers: RSS ${MEM_WATCHDOG_MB}MB×2/avail-aware, HARD-RSS ${MEM_WATCHDOG_RSS_HARD_MB}MB`)
+            try { gc?.() } catch { /* no-op */ }
+            // phát observation event — operator thấy episode memory sớm (S6)
+            void import('@/lib/observation/ledger')
+              .then(m => m.observeEvent({
+                actor: 'system:memwatchdog',
+                kind: 'mem.soft_tier',
+                summary: `RSS ${rssMb.toFixed(0)}MB vượt soft ${MEM_WATCHDOG_SOFT_MB}MB — tier-2 action (gc + cảnh báo) trước hard tiers`,
+                payload: { rssMb: Math.round(rssMb), softMb: MEM_WATCHDOG_SOFT_MB, gcExposed: typeof gc === 'function' },
+              }))
+              .catch(() => { /* fail-open — observation không được phá watchdog */ })
+          } else if (softWarnActive && rssMb < MEM_WATCHDOG_SOFT_MB - 200) {
+            softWarnActive = false
+            console.log(`[MemWatchdog] S6 TIER-2: RSS hồi về ${rssMb.toFixed(0)}MB (< soft−200) — kết thúc episode soft`)
+          }
+        }
         if (!memNearWarned && rssMb > MEM_WATCHDOG_MB - 200) {
           memNearWarned = true
           console.warn(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB tiệm cận ngưỡng ${MEM_WATCHDOG_MB}MB (còn ${Math.max(0, Math.round(MEM_WATCHDOG_MB - rssMb))}MB) — vượt ngưỡng 2 lần kiểm tra liên tiếp sẽ self-exit graceful; PM2 max_memory_restart (3200M — vòng 11) là backstop phía sau`)
