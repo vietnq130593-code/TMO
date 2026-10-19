@@ -276,7 +276,13 @@ const globalForHttpWatchdog = globalThis as unknown as { __tmoHttpWatchdogStarte
 if (!globalForHttpWatchdog.__tmoHttpWatchdogStarted) {
   globalForHttpWatchdog.__tmoHttpWatchdogStarted = true
   const HTTP_WATCHDOG = (process.env.HTTP_WATCHDOG ?? '1') !== '0'
-  const HTTP_PROBE_URL = `http://127.0.0.1:${process.env.PORT ?? '3000'}/api/goal-loop-jobs`
+  // REQ-AUDIT FIX3 (2026-10-19): probe /api/goal-loop-jobs → /api/health.
+  // Watchdog chỉ cần MỘT HTTP response bất kỳ để chứng minh intake sống
+  // (wedge = lỗi transport) — dùng đúng endpoint UI poll khiến goal-loop-jobs
+  // đứng đầu bảng request (262/3h, đa số là watchdog 60s). /api/health là
+  // chuẩn liveness (tmo-keepalive dùng cùng), không đụng DB, không đếm vào
+  // lưu lượng UI poll.
+  const HTTP_PROBE_URL = `http://127.0.0.1:${process.env.PORT ?? '3000'}/api/health`
   if (HTTP_WATCHDOG) {
     let httpFailCount = 0
     let httpEverSucceeded = false

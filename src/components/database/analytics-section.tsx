@@ -678,7 +678,11 @@ export function Neo4jVerification({ health }: { health?: HealthResponse | null }
   // data without forcing (no extra Aura load). This catches writes that happen
   // while the analytics tab is open but the user isn't actively pressing buttons.
   useEffect(() => {
-    const interval = setInterval(() => { checkNeo4j() }, 30000)
+    // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip check Neo4j
+    const interval = setInterval(() => {
+      if (document.hidden) return
+      checkNeo4j()
+    }, 30000)
     return () => clearInterval(interval)
   }, [checkNeo4j])
 
@@ -866,7 +870,11 @@ export function CollectionsHealthPanel() {
 
   useEffect(() => {
     queueMicrotask(() => { void checkCollections() })
-    const interval = setInterval(() => { void checkCollections() }, 60_000)
+    // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip check collections
+    const interval = setInterval(() => {
+      if (document.hidden) return
+      void checkCollections()
+    }, 60_000)
     return () => { clearInterval(interval) }
   }, [checkCollections])
 

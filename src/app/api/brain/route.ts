@@ -23,6 +23,11 @@
 
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+// REQ-AUDIT FIX2 (2026-10-19) — micro-cache GET: brain-tab poll 15s
+// (fetchBrainData). TTL 20s ≈ 1.3× nhịp → ~50% gộp; dữ liệu đếm nguồn
+// thức tỉnh + model list tối đa 20s tuổi. Train (POST /api/brain/train)
+// invalidate prefix này ngay tại đầu handler.
+import { withPollCache } from '@/lib/poll-microcache'
 import { getKnowledgeCorpusOverview } from '@/lib/brain/corpus-overview'
 import {
   BRAIN_REGISTRY,
@@ -74,7 +79,12 @@ function parseTrainMeta(raw: string): BrainModelSummary['meta'] {
   }
 }
 
+// REQ-AUDIT FIX2 — wrapper micro-cache (key không tham số — GET() thuần).
 export async function GET() {
+  return withPollCache('br|', 20_000, () => GET_impl())
+}
+
+async function GET_impl() {
   try {
     // ── Đếm nguồn thức tỉnh (mỗi nguồn fail-open độc lập) ──
     // R4-ĐIỀU TRA: qEntries dùng SUM(visits) (số lần updateQ — thoát deadlock

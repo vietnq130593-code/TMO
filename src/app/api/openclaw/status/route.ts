@@ -6,10 +6,16 @@
 
 import { NextResponse } from 'next/server'
 import { isGatewayOnline } from '@/lib/openclaw'
+// REQ-AUDIT FIX2 (2026-10-19) — micro-cache GET: Smolab poll 15s/lần (pill
+// trạng thái gateway). TTL 20s ≈ 1.3× nhịp poll → ~50% request được gộp,
+// dữ liệu tối đa 20s tuổi — chấp nhận được cho pill online/offline. Thất
+// bại kết nối (offline) cũng được cache: bớt nỗ lực connect liên tục khi
+// gateway đang tắt (on-demand idle-shutdown 10 phút).
+import { withPollCache } from '@/lib/poll-microcache'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
+async function GET_impl() {
   const startTime = Date.now()
 
   try {
@@ -37,4 +43,8 @@ export async function GET() {
       timestamp: new Date().toISOString(),
     })
   }
+}
+
+export async function GET() {
+  return withPollCache('oc|status', 20_000, () => GET_impl())
 }

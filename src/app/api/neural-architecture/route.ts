@@ -16,6 +16,9 @@
 
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+// REQ-AUDIT FIX2 (2026-10-19) — micro-cache GET + invalidate khi set/reset.
+// Xem wrapper GET_impl bên dưới cho lý do TTL.
+import { withPollCache, invalidatePollCache } from '@/lib/poll-microcache'
 import { NEURAL_GRAPH } from '@/lib/learning/neural-types'
 import {
   getTuningState,
@@ -136,7 +139,14 @@ async function liveForNode(nodeId: string, qTop: QAdviceEntry[]): Promise<[strin
   return [nodeId, entries]
 }
 
+// REQ-AUDIT FIX2 (2026-10-19) — micro-cache GET: neural-arch section poll
+// 15s khi tab hiển thị (visibilitychange đã dừng khi ẩn). TTL 20s ≈ 1.3×
+// nhịp → ~50% gộp khi hiện. POST set/reset invalidate ngay.
 export async function GET() {
+  return withPollCache('na|', 20_000, () => GET_impl())
+}
+
+async function GET_impl() {
   try {
     const [tuning, qTop] = await Promise.all([
       getTuningState(),
@@ -195,6 +205,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  invalidatePollCache('na|') // REQ-AUDIT FIX2 — set/reset đổi đồ thị runtime
   let body: { action?: string; key?: string; value?: string | number }
   try {
     body = await request.json()

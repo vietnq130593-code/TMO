@@ -672,7 +672,11 @@ export function CodeTabContent() {
   // effect body (react-hooks/set-state-in-effect stays at baseline).
   useEffect(() => {
     const initial = setTimeout(() => { void loadPendingEdits() }, 0)
-    const timer = setInterval(() => { void loadPendingEdits() }, 30000)
+    // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip poll pending edits
+    const timer = setInterval(() => {
+      if (document.hidden) return
+      void loadPendingEdits()
+    }, 30000)
     return () => { clearTimeout(initial); clearInterval(timer) }
   }, [loadPendingEdits])
 
@@ -945,7 +949,11 @@ export function CodeTabContent() {
       loadGitStatus()
       loadKbContext()
     })
-    const interval = setInterval(() => { loadStatus() }, 30000)
+    // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip poll status
+    const interval = setInterval(() => {
+      if (document.hidden) return
+      loadStatus()
+    }, 30000)
     return () => clearInterval(interval)
   }, [loadStatus, loadFileTree, loadSessions, loadMcpStatus, loadTerminal, loadDiagnostics, loadGitStatus, loadKbContext])
 
@@ -1112,7 +1120,11 @@ export function CodeTabContent() {
       } catch { /* offline — retry ở interval sau */ }
     }
     poll()
-    const interval = setInterval(poll, 2500)
+    // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip (onVisible vẫn poll lại khi quay lại)
+    const interval = setInterval(() => {
+      if (document.hidden) return
+      poll()
+    }, 2500)
     const onVisible = () => { if (!document.hidden) poll() }
     document.addEventListener('visibilitychange', onVisible)
     return () => {

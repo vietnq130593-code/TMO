@@ -139,6 +139,8 @@ export function AutoLearnSection() {
       fetchSyncStatus()
     })
     const interval = setInterval(() => {
+      // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip poll
+      if (document.hidden) return
       fetchData()
       fetchSyncStatus()
     }, 10000)

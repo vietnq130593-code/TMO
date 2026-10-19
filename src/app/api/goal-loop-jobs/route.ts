@@ -39,6 +39,9 @@ import { goalLoopWorker } from '@/lib/goal-loop-worker'
 import type { GoalLoopJobStatus, GoalLoopJobInput } from '@/lib/goal-loop-durable-types'
 import type { GoalLoopResult } from '@/lib/agent-goal-loop'
 import { db } from '@/lib/db'
+// REQ-AUDIT FIX2 (2026-10-19) — micro-cache GET + invalidate khi cancel.
+// Xem wrapper GET_impl bên dưới cho lý do TTL.
+import { withPollCache, invalidatePollCache } from '@/lib/poll-microcache'
 
 export const dynamic = 'force-dynamic'
 
@@ -104,7 +107,7 @@ function isGoalLoopJobReady(): boolean {
 
 // ==================== GET ====================
 
-export async function GET(request: NextRequest) {
+async function GET_impl(request: NextRequest) {
   try {
     const jobId = request.nextUrl.searchParams.get('jobId')
     const sessionId = request.nextUrl.searchParams.get('sessionId')
@@ -247,7 +250,17 @@ export async function GET(request: NextRequest) {
 
 // ==================== POST (cancel) ====================
 
+// REQ-AUDIT FIX2 (2026-10-19) — micro-cache GET: UI poll jobId 3s khi job
+// chạy + panel list. TTL 4s ≈ 1.3× nhịp 3s → ~50% gộp, tiến độ tối đa 4s
+// tuổi (chu kỳ goal-loop dài hàng phút — chấp nhận được). POST cancel
+// invalidate ngay (UI không thấy trạng thái cancelled cũ).
+export async function GET(request: NextRequest) {
+  const sp = request.nextUrl.searchParams
+  return withPollCache(`glj|${sp.get('jobId') ?? ''}|${sp.get('sessionId') ?? ''}|${sp.get('all') === 'true'}`, 4_000, () => GET_impl(request))
+}
+
 export async function POST(request: NextRequest) {
+  invalidatePollCache('glj|') // REQ-AUDIT FIX2 — cancel/cancel_all: bỏ cache
   try {
     const body = await request.json().catch(() => null) as {
       jobId?: string

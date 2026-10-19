@@ -101,7 +101,11 @@ export function ChannelsTabContent() {
   useEffect(() => { queueMicrotask(() => { loadChannels() }) }, [loadChannels])
   useEffect(() => {
     queueMicrotask(() => { loadMessages() })
-    const interval = setInterval(loadMessages, 30000)
+    // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip poll tin nhắn kênh
+    const interval = setInterval(() => {
+      if (document.hidden) return
+      void loadMessages()
+    }, 30000)
     return () => clearInterval(interval)
   }, [loadMessages])
 

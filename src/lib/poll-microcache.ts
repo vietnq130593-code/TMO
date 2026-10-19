@@ -86,3 +86,25 @@ export async function withPollCache(
   inflight.set(key, p)
   return p
 }
+
+/**
+ * REQ-AUDIT FIX2 (2026-10-19) — invalidate cache theo key-prefix cho route
+ * có mutation (POST/PUT/PATCH/DELETE): sau khi đổi dữ liệu, poll kế tiếp của
+ * UI phải thấy trạng thái MỚI, không ăn cache cũ hết TTL.
+ *
+ * - prefix undefined → xoá toàn bộ (dùng khi không chắc key family).
+ * - In-flight promise KHÔNG hủy — nó hoàn tất SAU lệnh mutate nên dữ liệu nó
+ *   cache hóa là mới (đưa vào cache lại cũng đúng).
+ * - Đầu vào an toàn: cache chưa khởi tạo → no-op.
+ */
+export function invalidatePollCache(prefix?: string): void {
+  const cache = g.__pollMicroCache
+  if (!cache) return
+  if (prefix === undefined) {
+    cache.clear()
+    return
+  }
+  for (const k of Array.from(cache.keys())) {
+    if (k.startsWith(prefix)) cache.delete(k)
+  }
+}

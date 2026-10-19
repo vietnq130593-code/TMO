@@ -9,6 +9,9 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+// REQ-AUDIT FIX2 (2026-10-19) — micro-cache GET nhánh list + invalidate khi
+// mutation. Xem wrapper GET_impl bên dưới cho lý do TTL.
+import { withPollCache, invalidatePollCache } from '@/lib/poll-microcache'
 import { hasActiveRun, cancelSessionRuns } from '@/lib/agent-run-tracker'
 // FIX 2026-09-29 — nguồn sự thật hoạt động dùng chung (GoalLoopJob DB +
 // run tracker) cho hasActiveRun + activeSessions (xem lib/active-sessions.ts)
@@ -23,7 +26,7 @@ export const dynamic = 'force-dynamic'
 const TITLE_MIN = 1
 const TITLE_MAX = 200
 
-export async function GET(request: NextRequest) {
+async function GET_impl(request: NextRequest) {
   const { searchParams } = new URL(request.url)
   const action = searchParams.get('action') || 'list'
 
@@ -97,7 +100,19 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
 }
 
+// REQ-AUDIT FIX2 (2026-10-19) — micro-cache CHỈ nhánh action=list (UI poll
+// 30s Smolab loadSessions). Key gộp agentProfileId|teamName (bộ lọc).
+// TTL 40s ≈ 1.3× nhịp; POST/PATCH/DELETE của route này invalidate ngay.
+// GET action khác (nếu có) không cache — pass-through nguyên trạng.
+export async function GET(request: NextRequest) {
+  const sp = new URL(request.url).searchParams
+  const action = sp.get('action') || 'list'
+  if (action !== 'list') return GET_impl(request)
+  return withPollCache(`ocs|${sp.get('agentProfileId') ?? ''}|${sp.get('teamName') ?? ''}`, 40_000, () => GET_impl(request))
+}
+
 export async function POST(request: NextRequest) {
+  invalidatePollCache('ocs|') // REQ-AUDIT FIX2 — mutation: bỏ cache list
   const { searchParams } = new URL(request.url)
   const action = searchParams.get('action') || 'create'
 
@@ -228,6 +243,7 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
+  invalidatePollCache('ocs|') // REQ-AUDIT FIX2 — mutation: bỏ cache list
   const { searchParams } = new URL(request.url)
   const action = searchParams.get('action') || 'rename'
 
@@ -271,6 +287,7 @@ export async function PATCH(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  invalidatePollCache('ocs|') // REQ-AUDIT FIX2 — mutation: bỏ cache list
   const { searchParams } = new URL(request.url)
   const action = searchParams.get('action') || 'delete'
   const sessionId = searchParams.get('sessionId')

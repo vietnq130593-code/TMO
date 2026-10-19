@@ -36,6 +36,9 @@
 
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+// REQ-AUDIT FIX2 (2026-10-19) — train đổi lifecycle/counts: poll /api/brain
+// phải thấy bản mới ngay (không đợi TTL 20s).
+import { invalidatePollCache } from '@/lib/poll-microcache'
 import {
   BRAIN_TRAINABLE_KEYS,
 } from '@/lib/brain/registry'
@@ -108,6 +111,7 @@ async function loadDraftOverride(
 }
 
 export async function POST(request: Request) {
+  invalidatePollCache('br|') // REQ-AUDIT FIX2 — train đổi lifecycle/counts
   let body: { brain?: unknown; inputMode?: unknown; useDraft?: unknown; force?: unknown; origin?: unknown; searchRunId?: unknown } = {}
   try {
     body = (await request.json()) as { brain?: unknown; inputMode?: unknown; useDraft?: unknown; force?: unknown; origin?: unknown; searchRunId?: unknown }

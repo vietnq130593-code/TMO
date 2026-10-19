@@ -291,7 +291,11 @@ export function LearningTabContent() {
     }
 
     fetchData()
-    const interval = setInterval(fetchData, 30000)
+    // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip poll timeline
+    const interval = setInterval(() => {
+      if (document.hidden) return
+      void fetchData()
+    }, 30000)
     return () => clearInterval(interval)
   }, [timelineFilter])
 
@@ -333,7 +337,11 @@ export function LearningTabContent() {
       }
     }
     fetchWritebackAudit()
-    const interval = setInterval(fetchWritebackAudit, 60000)
+    // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip audit writeback
+    const interval = setInterval(() => {
+      if (document.hidden) return
+      void fetchWritebackAudit()
+    }, 60000)
     return () => {
       cancelled = true
       clearInterval(interval)
@@ -356,7 +364,11 @@ export function LearningTabContent() {
       }
     }
     fetchReviewItems()
-    const interval = setInterval(fetchReviewItems, 30000)
+    // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip poll review items
+    const interval = setInterval(() => {
+      if (document.hidden) return
+      void fetchReviewItems()
+    }, 30000)
     return () => {
       cancelled = true
       clearInterval(interval)
@@ -435,7 +447,11 @@ export function LearningTabContent() {
       }
     }
     fetchLayer9()
-    const interval = setInterval(fetchLayer9, 30000)
+    // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip poll Layer 9
+    const interval = setInterval(() => {
+      if (document.hidden) return
+      void fetchLayer9()
+    }, 30000)
     return () => {
       cancelled = true
       clearInterval(interval)

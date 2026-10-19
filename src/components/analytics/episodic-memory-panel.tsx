@@ -356,7 +356,11 @@ export function EpisodicMemoryPanel({ analyticsRange, onAnalyticsRangeChange }: 
     // Live mode: poll 15s như cũ.
     let interval: ReturnType<typeof setInterval> | null = null
     if (!rangeActive) {
-      interval = setInterval(poll, POLL_INTERVAL_MS)
+      // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip poll (interval vẫn chạy, no-op)
+      interval = setInterval(() => {
+        if (document.hidden) return
+        void poll()
+      }, POLL_INTERVAL_MS)
     }
     return () => {
       cancelled = true
@@ -384,7 +388,11 @@ export function EpisodicMemoryPanel({ analyticsRange, onAnalyticsRangeChange }: 
     // Defer ra macrotask — tránh setState sync trong effect body (lint rule)
     const initial = setTimeout(() => void fetchAlistaHistory(true), 0)
     // Poll 60s — bắt sự kiện verify follow-up chạy nền (sau khi đề xuất hoàn tất)
-    const h = setInterval(() => void fetchAlistaHistory(), 60_000)
+    // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip poll lịch sử ALISTA
+    const h = setInterval(() => {
+      if (document.hidden) return
+      void fetchAlistaHistory()
+    }, 60_000)
     return () => {
       mountedRef.current = false
       clearTimeout(initial)

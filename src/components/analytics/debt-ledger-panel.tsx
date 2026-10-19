@@ -144,7 +144,11 @@ export function DebtLedgerPanel() {
     // set-state-in-effect): setState chỉ xảy ra SAU await trong fetchStatus.
     const poll = async () => { await fetchStatus(true) }
     void poll()
-    const timer = setInterval(() => { void poll() }, 15_000)
+    // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip poll
+    const timer = setInterval(() => {
+      if (document.hidden) return
+      void poll()
+    }, 15_000)
     return () => { aliveRef.current = false; clearInterval(timer) }
   }, [fetchStatus])
 

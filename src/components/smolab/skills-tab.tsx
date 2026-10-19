@@ -356,6 +356,8 @@ export function SkillsTabContent() {
   useEffect(() => {
     if (!toolsRegistryOpen) return // panel đóng → không tốn request
     const interval = setInterval(() => {
+      // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip poll registry
+      if (document.hidden) return
       loadToolsRegistry()
     }, 30_000)
     return () => clearInterval(interval)

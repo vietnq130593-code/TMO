@@ -213,7 +213,11 @@ function ToolBalanceCard() {
       await fetchWindow(win)
     }
     void poll()
-    const interval = setInterval(() => void poll(), 30_000)
+    // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip poll (interval vẫn chạy, no-op)
+    const interval = setInterval(() => {
+      if (document.hidden) return
+      void poll()
+    }, 30_000)
     return () => {
       cancelled = true
       clearInterval(interval)
@@ -392,7 +396,11 @@ export function RuntimeMetricsPanel({ analyticsRange }: RuntimeMetricsPanelProps
     // Live mode: poll 10s như cũ.
     let interval: ReturnType<typeof setInterval> | null = null
     if (!rangeActive) {
-      interval = setInterval(poll, POLL_INTERVAL_MS)
+      // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip poll (interval vẫn chạy, no-op)
+      interval = setInterval(() => {
+        if (document.hidden) return
+        void poll()
+      }, POLL_INTERVAL_MS)
     }
     return () => {
       cancelled = true

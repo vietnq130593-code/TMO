@@ -107,7 +107,11 @@ export function KnowledgeTabContent() {
       } catch {}
     }
     fetchData()
-    const interval = setInterval(fetchData, 30000)
+    // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip poll
+    const interval = setInterval(() => {
+      if (document.hidden) return
+      void fetchData()
+    }, 30000)
     return () => clearInterval(interval)
   }, [])
 

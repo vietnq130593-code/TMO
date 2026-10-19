@@ -1212,6 +1212,7 @@ function TokenStreamProvider({ children }: { children: React.ReactNode }) {
     // (double data traffic for the same token stats).
     pollTimer = setInterval(async () => {
       if (sseActive) return // SSE is healthy — no need to poll
+      if (document.hidden) return // REQ-AUDIT FIX1 — tab ẩn: bỏ poll fallback
       try {
         const res = await fetch('/api/token-usage')
         if (res.ok) {
@@ -2649,7 +2650,8 @@ export default function Home() {
       } catch { /* ignore */ }
     }
     // Do NOT run immediately on mount — only on the interval
-    const interval = setInterval(recoveryPoll, 60000)
+    // REQ-AUDIT FIX1 — tab ẩn: skip poll phục hồi
+    const interval = setInterval(() => { if (document.hidden) return; void recoveryPoll() }, 60000)
     return () => clearInterval(interval)
   }, [fetchDocuments, activeTab])
 
@@ -2657,14 +2659,17 @@ export default function Home() {
   useEffect(() => {
     const refreshInterval = setInterval(() => {
       // FIX (perf): skip while the browser tab is hidden — this interval hits
-      // /api/query?action=stats (Neo4j Aura cloud round trips) + /api/health every
-      // 10s, even with the tab in the background. Polling resumes automatically
+      // /api/query?action=stats (Neo4j Aura cloud round trips) + /api/health, even
+      // with the tab in the background. Polling resumes automatically
       // when the tab becomes visible again (interval keeps running, just no-ops).
       if (typeof document !== 'undefined' && document.hidden) return
       fetchStats()
       fetchHealth()
       fetchEmbeddingStatus()
-    }, 10000) // Every 10 seconds — fast enough to see entity count changes during processing
+      // REQ-AUDIT FIX4 (2026-10-19): 10s → 30s — panel thống kê không cần nhịp
+      // 10s; giảm 66% round-trip Neo4j AuraDB cloud (/api/query?action=stats)
+      // khi tab hiển thị. Tab Documents vẫn giữ nhịp lite 10s riêng.
+    }, 30000)
     return () => clearInterval(refreshInterval)
   }, [fetchStats, fetchHealth, fetchEmbeddingStatus])
 
@@ -2695,6 +2700,7 @@ export default function Home() {
   useEffect(() => {
     if (activeTab !== 'documents') return
     const docRefreshInterval = setInterval(() => {
+      if (document.hidden) return // REQ-AUDIT FIX1 — tab ẩn: skip refresh lite
       fetchDocuments(false, undefined, { lite: true })
     }, 10000) // Every 10 seconds — lite mode for speed
     return () => clearInterval(docRefreshInterval)

@@ -611,7 +611,11 @@ export default function SelfDirectionModule() {
     queueMicrotask(() => {
       if (!cancelled) void fetchList()
     })
-    const interval = setInterval(poll, POLL_INTERVAL_MS)
+    // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip poll (4s — nhịp dày nhất hệ thống)
+    const interval = setInterval(() => {
+      if (document.hidden) return
+      void poll()
+    }, POLL_INTERVAL_MS)
     return () => {
       cancelled = true
       clearInterval(interval)

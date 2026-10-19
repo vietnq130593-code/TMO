@@ -9,6 +9,9 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+// REQ-AUDIT FIX2 (2026-10-19) — micro-cache GET + invalidate khi mutation.
+// Xem wrapper GET_impl bên dưới cho lý do TTL.
+import { withPollCache, invalidatePollCache } from '@/lib/poll-microcache'
 // R5 (2026-10-14): validateModel zen đi qua catalog merge (tĩnh + đồng bộ tự
 // động models.dev) — agent tạo với model free mới xuất hiện (chưa kịp sửa code
 // tĩnh) không bị chặn validation.
@@ -138,7 +141,7 @@ function validateDomain(domain: string): string | null {
 
 // ==================== GET — LIST AGENTS ====================
 
-export async function GET(request: NextRequest) {
+async function GET_impl(request: NextRequest) {
   return getAgentsHandler(request, 0)
 }
 
@@ -235,7 +238,17 @@ function healReasonOf(errMsg: string): string {
 
 // ==================== POST — CREATE AGENT ====================
 
+// REQ-AUDIT FIX2 (2026-10-19) — micro-cache GET: UI poll ?enabled=true 30s
+// (Smolab loadAgents) + nhiều panel gọi /api/agents. Key = full search
+// (team/enabled/id) → mọi biến thể tách bạch. TTL 40s ≈ 1.3× nhịp poll 30s
+// → ~50% gộp; POST/PUT/DELETE invalidate ngay — refetch sau tạo/sửa/xóa
+// thấy roster mới tức thì (không bị cache cũ giấu agent vừa tạo).
+export async function GET(request: NextRequest) {
+  return withPollCache(`ag|${request.nextUrl.search}`, 40_000, () => GET_impl(request))
+}
+
 export async function POST(request: NextRequest) {
+  invalidatePollCache('ag|') // REQ-AUDIT FIX2 — mutation: bỏ cache list
   try {
     const body = await request.json()
     const {
@@ -346,6 +359,7 @@ export async function POST(request: NextRequest) {
 // ==================== PUT — UPDATE AGENT ====================
 
 export async function PUT(request: NextRequest) {
+  invalidatePollCache('ag|') // REQ-AUDIT FIX2 — mutation: bỏ cache list
   try {
     const body = await request.json()
     const { id, name, description, instruction, domain, capable,
@@ -515,6 +529,7 @@ export async function PUT(request: NextRequest) {
 // ==================== DELETE — DELETE AGENT ====================
 
 export async function DELETE(request: NextRequest) {
+  invalidatePollCache('ag|') // REQ-AUDIT FIX2 — mutation: bỏ cache list
   try {
     const { searchParams } = new URL(request.url)
     const id = searchParams.get('id')

@@ -2779,7 +2779,11 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       } catch { setGatewayOnline(false) }
     }
     checkStatus()
-    const interval = setInterval(checkStatus, 15000)
+    // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip check gateway (pill tạm đứng)
+    const interval = setInterval(() => {
+      if (document.hidden) return
+      void checkStatus()
+    }, 15000)
     return () => clearInterval(interval)
   }, [gatewayStatusTick]) // 31-g: + tick → "Thử lại" (pill OFFLINE) poll lại ngay
 
@@ -2807,7 +2811,11 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       } catch {}
     }
     loadSessions()
-    const interval = setInterval(loadSessions, 30000) // Refresh every 30s
+    // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip (Refresh every 30s giữ nguyên nhịp)
+    const interval = setInterval(() => {
+      if (document.hidden) return
+      void loadSessions()
+    }, 30000) // Refresh every 30s
     return () => clearInterval(interval)
   }, [chatMode, selectedAgentId, selectedTeam, sessionsRefreshTick])
 
@@ -2834,7 +2842,11 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       }
     }
     loadAgents()
-    const interval = setInterval(loadAgents, 30000) // Refresh every 30s
+    // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip (Refresh every 30s giữ nguyên nhịp)
+    const interval = setInterval(() => {
+      if (document.hidden) return
+      void loadAgents()
+    }, 30000) // Refresh every 30s
     return () => clearInterval(interval)
   }, [])
 

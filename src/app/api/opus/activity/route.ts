@@ -17,12 +17,22 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+// REQ-AUDIT FIX2 (2026-10-19) — micro-cache GET: Opus beat poll 3s (auto) /
+// 8s (manual). TTL 5s: auto ≈50% gộp, manual không đổi (8s > TTL).
+import { withPollCache } from '@/lib/poll-microcache'
 import { getOpusSettings } from '@/lib/opus/pipeline'
 import { getAgentRuns } from '@/lib/agent-run-tracker'
 
 export const dynamic = 'force-dynamic'
 
+// REQ-AUDIT FIX2 — wrapper micro-cache (fingerprint chỉ để UI refresh delta —
+// 5s tuổi chấp nhận được; auto reviewer hoạt động server-side không phụ thuộc).
 export async function GET(request: NextRequest) {
+  const sid = request.nextUrl.searchParams.get('sessionId')
+  return withPollCache(`opa|${sid ?? ''}`, 5_000, () => GET_impl(request))
+}
+
+async function GET_impl(request: NextRequest) {
   try {
     const sessionId = request.nextUrl.searchParams.get('sessionId')
     if (!sessionId) {

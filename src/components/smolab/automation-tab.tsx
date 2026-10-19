@@ -316,6 +316,8 @@ export function AutomationTabContent() {
   // Scheduler auto-poll — triggers cron/task-flow execution every 30s
   useEffect(() => {
     const interval = setInterval(async () => {
+      // REQ-AUDIT FIX1 (2026-10-19) — tab ẩn: skip scheduler poll
+      if (document.hidden) return
       try {
         const res = await fetch('/api/openclaw/automation/scheduler')
         if (res.ok) {
