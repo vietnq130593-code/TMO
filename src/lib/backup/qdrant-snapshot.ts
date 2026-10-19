@@ -1,41 +1,54 @@
 /**
- * Qdrant Snapshot Backup/Restore → Cloudflare R2
+ * Qdrant Snapshot Backup/Restore → Cloudflare R2 — MULTI-COLLECTION
  *
- * Phase 3 SMOLAB Proposal 10.5
+ * Phase 3 SMOLAB Proposal 10.5 · BLUEPRINT-BACKUP-GATE P1/S1 (BUG2-304)
  *
  * Why this exists
  * ---------------
  * The existing /api/storage/db-backup endpoint snapshots the SQLite file to
  * R2, but SQLite only holds document processing STATE (jobs, rows, metadata).
  * The actual vector embeddings live in Qdrant. When the sandbox resets, the
- * Qdrant data directory is wiped → 1045 chunks vanish → GraphRAG queries
- * return nothing, even though SQLite was restored.
+ * Qdrant data directory is wiped → chunks vanish → GraphRAG queries return
+ * nothing, even though SQLite was restored.
  *
- * This module performs a FULL Qdrant backup by triggering Qdrant's native
- * snapshot feature (binary tarball), uploading the tarball to R2.
+ * BUG2-304 (P2, phát hiện W3-8c 44578f9): bản cũ chỉ snapshot đúng 1 collection
+ * (theopus_chunks) — theopus_documents / agent_memory / task_context /
+ * theopus_episodes mất vĩnh viễn sau reset. Bản này backup NAM collection theo
+ * env QDRANT_BACKUP_COLLECTIONS (mặc định 5 — xem getBackupCollections()).
  *
  * Snapshot workflow (Qdrant REST API v1.19):
  *   1. POST /collections/{name}/snapshots → 200 OK + {name, size, checksum} (synchronous)
  *   2. GET  /collections/{name}/snapshots/{name} → binary tar stream (POSIX tar)
  *   3. DELETE /collections/{name}/snapshots/{name} → cleanup after R2 upload
  *
- * Restore workflow:
- *   1. List R2 backups/qdrant/{YYYYMMDD}*.tar → pick latest match
+ * Restore workflow (per collection, theo policy restoreDecision):
+ *   1. findBackupKey(collection, date) — prefix per-collection; riêng chunks
+ *      fallback legacy root (tar cũ trước S1 vẫn restore được)
  *   2. Download to memory
- *   3. PUT /collections/{name}/snapshots/{name} (multipart/form-data)
+ *   3. POST /collections/{name}/snapshots/upload (multipart/form-data)
  *   4. Qdrant replaces the collection's contents from the snapshot
- *   5. GET /collections/{name} → verify pointCount matches
+ *   5. GET /collections/{name} → verify pointCount
  *
- * Snapshot format
- * ---------------
- * Qdrant snapshots are POSIX tar archives — NOT gzip-compressed. We upload
- * the raw tarball to R2 as `backups/qdrant/{YYYYMMDD-HHMMSS}.tar` (no .gz).
- *
- * R2 storage layout
+ * R2 storage layout (S1.1 — per-collection key)
  * -----------------
- *   backups/qdrant/{YYYYMMDD-HHMMSS}.tar  — versioned snapshot (history)
- *   backups/qdrant/latest.tar             — overwritten each run (used by
- *                                            restore when no date supplied)
+ *   backups/qdrant/<collection>/{YYYYMMDD-HHMMSS}.tar — versioned (history)
+ *   backups/qdrant/<collection>/latest.tar             — overwritten each run
+ *   backups/qdrant/{YYYYMMDD-HHMMSS}.tar               — LEGACY dual-write,
+ *   backups/qdrant/latest.tar                            chỉ theopus_chunks
+ *   (compat D0 §7.2 — tar cũ + curl cũ vẫn hoạt động; điều kiện gỡ dual-write:
+ *    ≥2 backup per-collection thành công + docs D0 §7.2 cập nhật; root keys cũ
+ *    KHÔNG xóa khỏi R2 — giữ làm đường hồi phục cuối.)
+ *
+ * Restore policy (S1.2 — hàm thuần restoreDecision, unit-test r124):
+ *   - theopus_chunks / theopus_documents (tĩnh)        → luôn REPLACE
+ *   - agent_memory / task_context / theopus_episodes (sống) → restoreIfEmpty:
+ *     chỉ REPLACE khi collection đang RỖNG — không bao giờ restore cũ đè
+ *     data mới. Lối thoát disaster-recovery: force=1 (route query param,
+ *     mặc định 0) — bỏ policy, REPLACE mọi collection trong scope + warning.
+ *
+ * Size guard (S1.1): QDRANT_BACKUP_MAX_POINTS (mặc định 5000) — collection
+ * sống vượt ngưỡng → skip collection đó trong lần backup đó + warn (không fail
+ * batch) — chặn tar phình vô hạn (episodes/agent_memory là dữ liệu tích lũy).
  *
  * @module backup/qdrant-snapshot
  */
@@ -60,9 +73,55 @@ function getChunksCollection(): string {
   return process.env.QDRANT_COLLECTION_CHUNKS || 'theopus_chunks'
 }
 
-/** R2 prefix for qdrant snapshots. */
+/** Documents collection name — matches src/lib/qdrant.ts COLLECTION_DOCUMENTS. */
+function getDocumentsCollection(): string {
+  return process.env.QDRANT_COLLECTION_DOCUMENTS || 'theopus_documents'
+}
+
+/**
+ * Danh sách collection được backup (S1.1).
+ * Mặc định 5 collection (blueprint §2-P1 v0.2):
+ *   - theopus_chunks     (corpus tĩnh — REPLACE an toàn)
+ *   - theopus_documents  (metadata ingestion — REPLACE an toàn nếu backup tươi)
+ *   - agent_memory       (sống — restoreIfEmpty)
+ *   - task_context       (sống nhẹ — restoreIfEmpty)
+ *   - theopus_episodes   (LỊCH SỬ không tái sinh được — restoreIfEmpty)
+ * KHÔNG backup theopus_communities — tái sinh bằng scripts/refresh-communities.ts
+ * (Leiden recompute). Override hoàn toàn bằng env QDRANT_BACKUP_COLLECTIONS
+ * (comma-separated).
+ */
+export function getBackupCollections(): string[] {
+  const raw = process.env.QDRANT_BACKUP_COLLECTIONS?.trim()
+  if (raw) {
+    return raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+  return [
+    getChunksCollection(),
+    getDocumentsCollection(),
+    'agent_memory',
+    'task_context',
+    'theopus_episodes',
+  ]
+}
+
+/** Size guard (S1.1) — collection vượt ngưỡng điểm → skip + warn, không fail batch. */
+export function getBackupMaxPoints(): number {
+  const n = Number(process.env.QDRANT_BACKUP_MAX_POINTS)
+  return Number.isFinite(n) && n > 0 ? n : 5000
+}
+
+/** R2 prefix cho qdrant snapshots. */
 const R2_PREFIX = 'backups/qdrant/'
+/** Legacy root keys (trước S1 — chỉ chunks) — D0 §7.2 compat, KHÔNG xóa. */
 const R2_LATEST_KEY = 'backups/qdrant/latest.tar'
+
+/** Per-collection prefix: backups/qdrant/<collection>/ */
+function collectionPrefix(collection: string): string {
+  return `${R2_PREFIX}${collection}/`
+}
 
 /** Max wait for snapshot creation (Qdrant v1.19 makes snapshots synchronously,
  *  so 5s should suffice even for 1045 chunks ~20MB. Generous 60s safety net). */
@@ -71,18 +130,48 @@ const SNAPSHOT_POLL_INTERVAL_MS = 1_000
 
 // ==================== TYPES ====================
 
+export interface QdrantCollectionBackupResult {
+  collection: string
+  /** ok = snapshot + upload thành công · skipped = guard/not-found (không fail batch) · error = thất bại */
+  status: 'ok' | 'skipped' | 'error'
+  r2Key?: string
+  sizeBytes?: number
+  collectionPoints?: number
+  snapshotName?: string
+  reason?: string
+}
+
 export interface QdrantBackupResult {
+  // ==== Legacy compat fields (= kết quả của theopus_chunks — route/UI cũ đọc) ====
   r2Key: string
   sizeBytes: number
   collectionPoints: number
   snapshotName: string
+  // ==== Multi-collection (S1.1) ====
+  collections: QdrantCollectionBackupResult[]
+}
+
+export interface QdrantCollectionRestoreResult {
+  collection: string
+  /** restored = đã REPLACE · skipped = policy chặn (data sống) · error = thất bại */
+  status: 'restored' | 'skipped' | 'error'
+  decision?: 'replace' | 'skip'
+  restoredPoints?: number
+  r2Key?: string
+  sizeBytes?: number
+  snapshotName?: string
+  reason?: string
 }
 
 export interface QdrantRestoreResult {
+  // ==== Legacy compat fields (= kết quả của theopus_chunks) ====
   restoredPoints: number
   sizeBytes: number
   r2Key: string
   snapshotName: string
+  // ==== Multi-collection (S1.2) ====
+  force?: boolean
+  collections: QdrantCollectionRestoreResult[]
 }
 
 interface QdrantSnapshotMeta {
@@ -109,50 +198,69 @@ function timestamp(): string {
   )
 }
 
-/**
- * Fetch the point count of the chunks collection directly from Qdrant.
- * Used as a sanity check before/after backup/restore.
- */
-export async function getChunksPointCount(): Promise<number> {
-  const url = `${getQdrantUrl()}/collections/${encodeURIComponent(getChunksCollection())}`
+/** Thông tin 1 collection: tồn tại + point count (phân biệt "chưa tạo" vs "rỗng"). */
+async function getCollectionInfo(
+  collection: string
+): Promise<{ exists: boolean; points: number }> {
+  const url = `${getQdrantUrl()}/collections/${encodeURIComponent(collection)}`
   try {
     const res = await fetch(url, { headers: authHeaders() })
-    if (!res.ok) return 0
+    if (res.status === 404) return { exists: false, points: 0 }
+    if (!res.ok) return { exists: false, points: 0 }
     const body = (await res.json()) as {
-      result?: {
-        points_count?: number
-        vectors_count?: number
-        pointsCount?: number
-      }
+      result?: { points_count?: number; vectors_count?: number; pointsCount?: number }
     }
     const r = body.result
-    if (!r) return 0
-    return r.points_count ?? r.vectors_count ?? r.pointsCount ?? 0
+    if (!r) return { exists: false, points: 0 }
+    return { exists: true, points: r.points_count ?? r.vectors_count ?? r.pointsCount ?? 0 }
   } catch {
-    return 0
+    return { exists: false, points: 0 }
   }
 }
 
-// ==================== BACKUP ====================
+/**
+ * Fetch the point count of a collection directly from Qdrant.
+ * Returns 0 nếu collection chưa tồn tại / lỗi (dùng cho policy restoreIfEmpty).
+ */
+export async function getCollectionPointCount(collection: string): Promise<number> {
+  const info = await getCollectionInfo(collection)
+  return info.points
+}
+
+/** Compat — point count của chunks collection (route + callers cũ). */
+export async function getChunksPointCount(): Promise<number> {
+  return getCollectionPointCount(getChunksCollection())
+}
+
+// ==================== RESTORE POLICY (S1.2 — pure, unit-test r124) ====================
 
 /**
- * Trigger a Qdrant snapshot, download the binary tar, upload to R2.
+ * Quyết định restore cho 1 collection — HÀM THUẦN (blueprint S1.2).
  *
- * @returns {r2Key, sizeBytes, collectionPoints, snapshotName}
+ * - force → 'replace' (disaster-recovery có chủ ý — data sống BỊ HỎNG nhưng
+ *   không rỗng thì policy skip sẽ chặn vĩnh viễn đường hồi phục).
+ * - chunks/documents (collection tĩnh) → luôn 'replace'.
+ * - collection sống (memory/task_context/episodes) → restoreIfEmpty:
+ *   'replace' chỉ khi đang RỖNG, ngược lại 'skip' (không bao giờ đè data mới).
  */
-export async function backupQdrantToR2(): Promise<QdrantBackupResult> {
+export function restoreDecision(
+  collection: string,
+  currentPoints: number,
+  force = false
+): 'replace' | 'skip' {
+  if (force) return 'replace'
+  const staticCollections = [getChunksCollection(), getDocumentsCollection()]
+  if (staticCollections.includes(collection)) return 'replace'
+  return currentPoints === 0 ? 'replace' : 'skip'
+}
+
+// ==================== SNAPSHOT PRIMITIVES (1 collection) ====================
+
+/** Trigger snapshot creation — trả về meta (create sync; poll fallback async). */
+async function createSnapshot(collection: string): Promise<QdrantSnapshotMeta> {
   const baseUrl = getQdrantUrl()
-  const collection = getChunksCollection()
   const snapshotUrl = `${baseUrl}/collections/${encodeURIComponent(collection)}/snapshots`
 
-  // 1. Capture pre-snapshot point count (used for verification + reporting)
-  const collectionPoints = await getChunksPointCount()
-  console.log(`[QdrantBackup] Pre-snapshot point count: ${collectionPoints}`)
-
-  // 2. Trigger snapshot creation (Qdrant v1.19 makes these synchronously,
-  //    so the response contains the new snapshot name immediately. We still
-  //    poll below in case a future Qdrant version moves to async creation).
-  console.log(`[QdrantBackup] POST ${snapshotUrl}`)
   const createRes = await fetch(snapshotUrl, {
     method: 'POST',
     headers: { ...authHeaders() },
@@ -169,21 +277,16 @@ export async function backupQdrantToR2(): Promise<QdrantBackupResult> {
   }
   let snapshotMeta: QdrantSnapshotMeta | undefined = createBody.result
 
-  // 3. If create returned no snapshot metadata (async path), poll the list
-  //    endpoint for up to 60s waiting for the new snapshot to appear.
+  // Create returned no meta (async path) → poll list endpoint up to 60s.
   if (!snapshotMeta) {
-    console.log('[QdrantBackup] Create returned no meta — polling list endpoint')
     const listUrl = `${baseUrl}/collections/${encodeURIComponent(collection)}/snapshots`
     const deadline = Date.now() + SNAPSHOT_WAIT_TIMEOUT_MS
     while (Date.now() < deadline) {
       const listRes = await fetch(listUrl, { headers: authHeaders() })
       if (listRes.ok) {
-        const listBody = (await listRes.json()) as {
-          result?: QdrantSnapshotMeta[]
-        }
+        const listBody = (await listRes.json()) as { result?: QdrantSnapshotMeta[] }
         const snapshots = listBody.result || []
         if (snapshots.length > 0) {
-          // Pick the newest by creation_time
           snapshotMeta = snapshots.sort((a, b) =>
             b.creation_time.localeCompare(a.creation_time)
           )[0]
@@ -196,169 +299,246 @@ export async function backupQdrantToR2(): Promise<QdrantBackupResult> {
       throw new Error('Qdrant snapshot creation timed out (60s) — no snapshot appeared')
     }
   }
+  return snapshotMeta
+}
 
-  const snapshotName = snapshotMeta.name
-  const reportedSize = snapshotMeta.size || 0
+/** Download snapshot binary (POSIX tar) về Buffer. */
+async function downloadSnapshot(
+  collection: string,
+  snapshotName: string
+): Promise<Buffer> {
+  const baseUrl = getQdrantUrl()
+  const downloadUrl = `${baseUrl}/collections/${encodeURIComponent(collection)}/snapshots/${encodeURIComponent(snapshotName)}`
+  const downloadRes = await fetch(downloadUrl, { headers: authHeaders() })
+  if (!downloadRes.ok || !downloadRes.body) {
+    const txt = await downloadRes.text().catch(() => '')
+    throw new Error(
+      `Qdrant snapshot download failed: HTTP ${downloadRes.status} ${txt.slice(0, 200)}`
+    )
+  }
+  const chunks: Buffer[] = []
+  // @ts-expect-error — ReadableStream types vary between Node/Web; both work here
+  for await (const chunk of downloadRes.body) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+  }
+  return Buffer.concat(chunks)
+}
+
+/** Dọn snapshot local trên Qdrant sau khi dùng xong (non-fatal). */
+async function deleteLocalSnapshot(collection: string, snapshotName: string): Promise<void> {
+  try {
+    const baseUrl = getQdrantUrl()
+    const delUrl = `${baseUrl}/collections/${encodeURIComponent(collection)}/snapshots/${encodeURIComponent(snapshotName)}`
+    const delRes = await fetch(delUrl, { method: 'DELETE', headers: authHeaders() })
+    if (delRes.ok) {
+      console.log(`[QdrantBackup] Cleaned up local snapshot: ${snapshotName}`)
+    } else {
+      console.warn(`[QdrantBackup] Snapshot cleanup failed: HTTP ${delRes.status} (non-fatal)`)
+    }
+  } catch (err) {
+    console.warn(
+      `[QdrantBackup] Snapshot cleanup error (non-fatal):`,
+      err instanceof Error ? err.message : String(err)
+    )
+  }
+}
+
+// ==================== BACKUP (S1.1 — multi-collection) ====================
+
+/** Backup 1 collection: snapshot → download → upload per-collection keys (+legacy chunks). */
+async function backupOneCollection(
+  collection: string,
+  maxPoints: number
+): Promise<QdrantCollectionBackupResult> {
+  // 0. Collection tồn tại? (chưa tạo → skip-graceful, KHÔNG fail batch)
+  const info = await getCollectionInfo(collection)
+  if (!info.exists) {
+    console.warn(`[QdrantBackup] ⚠ SKIP "${collection}" — collection không tồn tại trên Qdrant`)
+    return { collection, status: 'skipped', reason: 'collection không tồn tại' }
+  }
+
+  // 1. Size guard (S1.1) — chặn tar phình vô hạn cho collection sống.
+  if (info.points > maxPoints) {
+    console.warn(
+      `[QdrantBackup] ⚠ SKIP "${collection}" — ${info.points} điểm > guard ${maxPoints} (QDRANT_BACKUP_MAX_POINTS)`
+    )
+    return {
+      collection,
+      status: 'skipped',
+      reason: `vượt size guard: ${info.points} > ${maxPoints} điểm (QDRANT_BACKUP_MAX_POINTS)`,
+    }
+  }
+
+  console.log(`[QdrantBackup] === Collection "${collection}" (${info.points} points) ===`)
+
+  // 2. Snapshot + download
+  const meta = await createSnapshot(collection)
+  const snapshotName = meta.name
   console.log(
-    `[QdrantBackup] Snapshot created: ${snapshotName} (reported size: ${reportedSize} bytes)`
+    `[QdrantBackup] Snapshot created: ${snapshotName} (reported size: ${meta.size || 0} bytes)`
   )
 
   try {
-    // 4. Download the snapshot binary (POSIX tar archive)
-    const downloadUrl = `${baseUrl}/collections/${encodeURIComponent(collection)}/snapshots/${encodeURIComponent(snapshotName)}`
-    const downloadRes = await fetch(downloadUrl, { headers: authHeaders() })
-    if (!downloadRes.ok || !downloadRes.body) {
-      const txt = await downloadRes.text().catch(() => '')
-      throw new Error(
-        `Qdrant snapshot download failed: HTTP ${downloadRes.status} ${txt.slice(0, 200)}`
-      )
-    }
-    // Stream → Buffer (the snapshot is binary tar, ~20MB for 1045 chunks)
-    const chunks: Buffer[] = []
-    // @ts-expect-error — ReadableStream types vary between Node/Web; both work here
-    for await (const chunk of downloadRes.body) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
-    }
-    const buffer = Buffer.concat(chunks)
+    const buffer = await downloadSnapshot(collection, snapshotName)
     const sizeBytes = buffer.length
     console.log(
       `[QdrantBackup] Downloaded snapshot binary: ${sizeBytes} bytes (${(sizeBytes / 1024 / 1024).toFixed(2)} MB)`
     )
 
-    // 5. Upload to R2 at versioned path + overwrite "latest" pointer
+    // 3. Upload per-collection: versioned + latest pointer
     const ts = timestamp()
-    const versionedKey = `${R2_PREFIX}${ts}.tar`
-    const versionedResult = await uploadToR2(
-      versionedKey,
-      buffer,
-      'application/x-tar'
-    )
+    const prefix = collectionPrefix(collection)
+    const versionedKey = `${prefix}${ts}.tar`
+    const versionedResult = await uploadToR2(versionedKey, buffer, 'application/x-tar')
     if (!versionedResult.success) {
       throw new Error(`R2 upload failed (versioned): ${versionedResult.error}`)
     }
-
-    // Latest pointer (overwritten each run — used by restore-without-date)
-    const latestResult = await uploadToR2(
-      R2_LATEST_KEY,
-      buffer,
-      'application/x-tar'
-    )
+    const latestResult = await uploadToR2(`${prefix}latest.tar`, buffer, 'application/x-tar')
     if (!latestResult.success) {
-      // Non-fatal — versioned upload already succeeded
       console.warn(
-        `[QdrantBackup] Failed to update latest pointer (non-fatal): ${latestResult.error}`
+        `[QdrantBackup] Failed to update per-collection latest pointer (non-fatal): ${latestResult.error}`
       )
     }
+    console.log(`[QdrantBackup] Uploaded to R2: ${versionedKey} (${sizeBytes} bytes) + ${prefix}latest.tar`)
 
-    console.log(
-      `[QdrantBackup] Uploaded to R2: ${versionedKey} (${sizeBytes} bytes) + latest pointer`
-    )
+    // 4. LEGACY dual-write — chỉ theopus_chunks (D0 §7.2 compat; root keys cũ
+    //    KHÔNG xóa; gỡ dual-write khi ≥2 backup per-collection thành công +
+    //    docs D0 §7.2 cập nhật — blueprint §4-S1.1/§8-10).
+    if (collection === getChunksCollection()) {
+      const legacyVersioned = await uploadToR2(`${R2_PREFIX}${ts}.tar`, buffer, 'application/x-tar')
+      const legacyLatest = await uploadToR2(R2_LATEST_KEY, buffer, 'application/x-tar')
+      if (!legacyVersioned.success || !legacyLatest.success) {
+        console.warn(
+          `[QdrantBackup] Legacy dual-write (root keys) thất bại một phần (non-fatal): ${legacyVersioned.error ?? ''} ${legacyLatest.error ?? ''}`
+        )
+      } else {
+        console.log(`[QdrantBackup] Legacy dual-write OK: ${R2_PREFIX}${ts}.tar + ${R2_LATEST_KEY}`)
+      }
+    }
 
     return {
+      collection,
+      status: 'ok',
       r2Key: versionedKey,
       sizeBytes,
-      collectionPoints,
+      collectionPoints: info.points,
       snapshotName,
     }
   } finally {
-    // 6. Always try to delete the local Qdrant snapshot after upload (whether
-    //    R2 succeeded or failed — leaving stale snapshots wastes disk space
-    //    on the Qdrant storage backend).
-    try {
-      const delUrl = `${baseUrl}/collections/${encodeURIComponent(collection)}/snapshots/${encodeURIComponent(snapshotName)}`
-      const delRes = await fetch(delUrl, {
-        method: 'DELETE',
-        headers: authHeaders(),
-      })
-      if (delRes.ok) {
-        console.log(`[QdrantBackup] Cleaned up local snapshot: ${snapshotName}`)
-      } else {
-        console.warn(
-          `[QdrantBackup] Snapshot cleanup failed: HTTP ${delRes.status} (non-fatal)`
-        )
-      }
-    } catch (err) {
-      console.warn(
-        `[QdrantBackup] Snapshot cleanup error (non-fatal):`,
-        err instanceof Error ? err.message : String(err)
-      )
-    }
+    await deleteLocalSnapshot(collection, snapshotName)
   }
 }
 
-// ==================== RESTORE ====================
+/**
+ * Backup TOÀN BỘ collection trong getBackupCollections() → R2.
+ *
+ * Lỗi 1 collection (chưa tồn tại / vượt guard) → skip-graceful + log, KHÔNG fail
+ * batch. Riêng collection chunks gặp LỖI THẬT (Qdrant/R2 down) → throw để route
+ * báo 500 (giữ contract cũ của POST ?store=qdrant).
+ */
+export async function backupQdrantToR2(): Promise<QdrantBackupResult> {
+  const collections = getBackupCollections()
+  const maxPoints = getBackupMaxPoints()
+  console.log(`[QdrantBackup] Multi-collection backup: [${collections.join(', ')}] (guard ${maxPoints} điểm)`)
+
+  const results: QdrantCollectionBackupResult[] = []
+  for (const collection of collections) {
+    try {
+      results.push(await backupOneCollection(collection, maxPoints))
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[QdrantBackup] ✗ LỖI collection "${collection}": ${msg} (skip-graceful)`)
+      results.push({ collection, status: 'error', reason: msg })
+    }
+  }
+
+  // Legacy compat fields = kết quả chunks (contract cũ của route/UI).
+  const chunksRes = results.find((r) => r.collection === getChunksCollection())
+  if (chunksRes?.status === 'error') {
+    // Giữ contract cũ: chunks fail thật → throw (route ?store=qdrant trả 500).
+    throw new Error(`chunks backup failed: ${chunksRes.reason}`)
+  }
+
+  const ok = (r?: QdrantCollectionBackupResult) =>
+    r?.status === 'ok' ? r : undefined
+  const chunksOk = ok(chunksRes)
+  return {
+    r2Key: chunksOk?.r2Key ?? '',
+    sizeBytes: chunksOk?.sizeBytes ?? 0,
+    collectionPoints: chunksOk?.collectionPoints ?? 0,
+    snapshotName: chunksOk?.snapshotName ?? '',
+    collections: results,
+  }
+}
+
+// ==================== RESTORE (S1.2 — per-collection + policy + force) ====================
 
 /**
- * Find the R2 key for a backup matching the given date prefix.
+ * Tìm R2 key backup cho 1 collection.
  *
- * @param date - YYYYMMDD (e.g. "20260824"); finds newest `backups/qdrant/{date}*.tar`
- * @returns the matching R2 key, or null if none found
+ * Thứ tự: (1) key per-collection khớp date prefix; (2) date='latest' →
+ * per-collection latest.tar; (3) LEGACY fallback — chỉ theopus_chunks, tar cũ
+ * nằm ở root prefix (trước S1) — bỏ qua bước này là giết đường hồi phục 868
+ * chunks đã chứng minh (blueprint §8-1).
+ *
+ * @param date YYYYMMDD hoặc 'latest'
+ * @returns R2 key, hoặc null nếu không tìm thấy
  */
-async function findBackupKey(date: string): Promise<string | null> {
-  // Try exact prefix match first (files are named backups/qdrant/{YYYYMMDD-HHMMSS}.tar)
-  const list = await listR2Objects(R2_PREFIX, 500)
+export async function findBackupKey(
+  collection: string,
+  date: string
+): Promise<string | null> {
+  // (1) per-collection prefix
+  const prefix = collectionPrefix(collection)
+  const list = await listR2Objects(prefix, 500)
   if (!list.success) {
     throw new Error(`R2 list failed: ${list.error}`)
   }
-
   const matches = list.objects
     .filter((o) => {
       const name = o.key.split('/').pop() || ''
       return name.startsWith(`${date}-`) && name.endsWith('.tar')
     })
     .sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime())
-
   if (matches.length > 0) return matches[0].key
 
-  // If no dated match, fall back to "latest" pointer (only when date == 'latest'
-  // OR caller supplied an empty date and we're being lenient).
-  if (date === 'latest') return R2_LATEST_KEY
+  // (2) latest pointer per-collection
+  if (date === 'latest') {
+    const latestKey = `${prefix}latest.tar`
+    if (list.objects.some((o) => o.key === latestKey)) return latestKey
+  }
+
+  // (3) LEGACY root fallback — chỉ chunks (tar cũ trước S1)
+  if (collection === getChunksCollection()) {
+    const rootList = await listR2Objects(R2_PREFIX, 500)
+    if (!rootList.success) {
+      throw new Error(`R2 list failed: ${rootList.error}`)
+    }
+    const rootMatches = rootList.objects
+      .filter((o) => {
+        const parts = o.key.split('/')
+        // Chỉ nhận key root: backups/qdrant/<file>.tar (3 segment) — per-collection có 4
+        if (parts.length !== 3 || !o.key.endsWith('.tar')) return false
+        const name = parts[2] || ''
+        return date === 'latest' ? name === 'latest.tar' : name.startsWith(`${date}-`)
+      })
+      .sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime())
+    if (rootMatches.length > 0) return rootMatches[0].key
+  }
 
   return null
 }
 
-/**
- * Download a snapshot from R2 and restore it to Qdrant.
- *
- * Restore is destructive — Qdrant's snapshot restore REPLACES the collection
- * contents with the snapshot's contents. Caller must ensure they intend to
- * overwrite.
- *
- * @param date - YYYYMMDD; matches newest `backups/qdrant/{date}*.tar`.
- *               Use "latest" to pull the latest pointer (no date filter).
- */
-export async function restoreQdrantFromR2(
-  date: string
-): Promise<QdrantRestoreResult> {
+/** Upload tar vào Qdrant (multipart) → đợi restore xong → trả point count sau restore. */
+async function restoreTarToCollection(
+  collection: string,
+  buffer: Buffer,
+  r2Key: string
+): Promise<number> {
   const baseUrl = getQdrantUrl()
-  const collection = getChunksCollection()
-
-  // 1. Resolve R2 key for the date
-  const r2Key = await findBackupKey(date)
-  if (!r2Key) {
-    throw new Error(
-      `No Qdrant backup found matching date prefix "${date}" in R2 prefix "${R2_PREFIX}"`
-    )
-  }
-  console.log(`[QdrantRestore] Using R2 key: ${r2Key}`)
-
-  // 2. Download binary tar from R2
-  const dl = await downloadFromR2(r2Key)
-  if (!dl.success || !dl.buffer) {
-    throw new Error(`R2 download failed: ${dl.error}`)
-  }
-  const buffer = dl.buffer
-  const sizeBytes = dl.size || buffer.length
-  console.log(
-    `[QdrantRestore] Downloaded ${sizeBytes} bytes (${(sizeBytes / 1024 / 1024).toFixed(2)} MB)`
-  )
-
-  // 3. Upload to Qdrant — this triggers a restore.
-  //    Qdrant 1.19 restore-from-upload endpoint is POST /collections/{name}/snapshots/upload
-  //    (multipart/form-data, field "snapshot" = binary tar). The older
-  //    PUT /collections/{name}/snapshots/{name} form returns 404 on 1.19.
-  //    Use a synthetic FormData-like multipart body since we want to avoid
-  //    FormData runtime quirks across Node/Bun.
+  // Qdrant 1.19 restore-from-upload: POST /collections/{name}/snapshots/upload
+  // (multipart/form-data, field "snapshot" = binary tar). Synthetic multipart
+  // body để tránh FormData runtime quirks Node/Bun.
   const boundary = `----theopus-restore-${Date.now()}`
   const filename = r2Key.split('/').pop() || 'snapshot.tar'
   const partHeader =
@@ -389,26 +569,19 @@ export async function restoreQdrantFromR2(
       `Qdrant snapshot upload failed: HTTP ${uploadRes.status} ${txt.slice(0, 300)}`
     )
   }
-  console.log(`[QdrantRestore] Snapshot uploaded to Qdrant`)
+  console.log(`[QdrantRestore] Snapshot uploaded to Qdrant (${collection})`)
 
-  // 4. Poll collection point count — Qdrant restores asynchronously.
-  //    Wait up to 60s for the count to grow.
-  console.log('[QdrantRestore] Waiting for collection to be repopulated...')
-  const preCount = await getChunksPointCount()
+  // Poll point count — Qdrant restores asynchronously (wait up to 60s).
+  console.log(`[QdrantRestore] Waiting for collection "${collection}" to be repopulated...`)
   const deadline = Date.now() + SNAPSHOT_WAIT_TIMEOUT_MS
-  let postCount = preCount
+  let postCount = 0
   while (Date.now() < deadline) {
-    postCount = await getChunksPointCount()
+    postCount = await getCollectionPointCount(collection)
     if (postCount > 0) break
     await new Promise((r) => setTimeout(r, SNAPSHOT_POLL_INTERVAL_MS))
   }
-  console.log(
-    `[QdrantRestore] Post-restore point count: ${postCount} (was ${preCount} pre-restore)`
-  )
 
-  // 5. Cleanup: list + delete any snapshots the upload left in Qdrant local storage
-  //    (the /snapshots/upload recover flow may register the uploaded tar as a
-  //    collection snapshot — remove it so it doesn't waste disk).
+  // Cleanup: xóa snapshot local mà upload có thể để lại (non-fatal).
   try {
     const listUrl = `${baseUrl}/collections/${encodeURIComponent(collection)}/snapshots`
     const listRes = await fetch(listUrl, { headers: authHeaders() })
@@ -425,31 +598,126 @@ export async function restoreQdrantFromR2(
     // non-fatal
   }
 
+  return postCount
+}
+
+/**
+ * Restore NHIỀU collection từ R2 theo policy restoreDecision (S1.2).
+ *
+ * @param date YYYYMMDD hoặc 'latest'
+ * @param opts.force   bỏ policy — REPLACE mọi collection trong scope (disaster-
+ *                     recovery; warning ghi đè điểm sống). Mặc định false.
+ * @param opts.collections  override danh sách collection (mặc định getBackupCollections())
+ *
+ * Contract cũ giữ nguyên: chunks gặp lỗi thật (no backup / Qdrant down) → throw
+ * (route ?store=qdrant trả 500 như trước). Collection khác lỗi → nằm trong
+ * collections[] với status 'error' (batch vẫn tiếp tục).
+ */
+export async function restoreQdrantFromR2(
+  date: string,
+  opts: { force?: boolean; collections?: string[] } = {}
+): Promise<QdrantRestoreResult> {
+  const force = opts.force === true
+  const list = opts.collections?.length ? opts.collections : getBackupCollections()
+  console.log(
+    `[QdrantRestore] Multi-collection restore: [${list.join(', ')}] date=${date}${force ? ' FORCE=1 (bỏ policy)' : ''}`
+  )
+
+  const perCollection: QdrantCollectionRestoreResult[] = []
+  for (const collection of list) {
+    const currentPoints = await getCollectionPointCount(collection)
+    const decision = restoreDecision(collection, currentPoints, force)
+
+    if (decision === 'skip') {
+      const reason = `còn ${currentPoints} điểm đang sống — policy restoreIfEmpty chặn (dùng force=1 để ghi đè có chủ ý)`
+      console.log(`[QdrantRestore] ⊘ SKIP "${collection}" — ${reason}`)
+      perCollection.push({ collection, status: 'skipped', decision, reason })
+      continue
+    }
+
+    if (force && currentPoints > 0) {
+      console.warn(
+        `[QdrantRestore] ⚠ FORCE restore — ghi đè ${currentPoints} điểm đang sống của "${collection}"`
+      )
+    }
+
+    try {
+      const r2Key = await findBackupKey(collection, date)
+      if (!r2Key) {
+        throw new Error(
+          `No Qdrant backup found for collection "${collection}" matching date "${date}"`
+        )
+      }
+      console.log(`[QdrantRestore] Using R2 key: ${r2Key}`)
+
+      const dl = await downloadFromR2(r2Key)
+      if (!dl.success || !dl.buffer) {
+        throw new Error(`R2 download failed: ${dl.error}`)
+      }
+      const buffer = dl.buffer
+      const sizeBytes = dl.size || buffer.length
+      console.log(
+        `[QdrantRestore] Downloaded ${sizeBytes} bytes (${(sizeBytes / 1024 / 1024).toFixed(2)} MB)`
+      )
+
+      const restoredPoints = await restoreTarToCollection(collection, buffer, r2Key)
+      console.log(
+        `[QdrantRestore] ✓ "${collection}" restored: ${restoredPoints} points (was ${currentPoints} pre-restore)`
+      )
+      perCollection.push({
+        collection,
+        status: 'restored',
+        decision,
+        restoredPoints,
+        r2Key,
+        sizeBytes,
+        snapshotName: r2Key.split('/').pop() || 'snapshot.tar',
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.error(`[QdrantRestore] ✗ LỖI collection "${collection}": ${msg}`)
+      perCollection.push({ collection, status: 'error', decision, reason: msg })
+    }
+  }
+
+  // Contract cũ: chunks lỗi thật → throw (route trả 500 — operator curl biết ngay).
+  const chunksEntry = perCollection.find((e) => e.collection === getChunksCollection())
+  if (chunksEntry?.status === 'error') {
+    throw new Error(chunksEntry.reason)
+  }
+
+  const chunksRestored: QdrantCollectionRestoreResult | undefined =
+    chunksEntry?.status === 'restored' ? chunksEntry : undefined
   return {
-    restoredPoints: postCount,
-    sizeBytes,
-    r2Key,
-    snapshotName: filename,
+    restoredPoints: chunksRestored?.restoredPoints ?? 0,
+    sizeBytes: chunksRestored?.sizeBytes ?? 0,
+    r2Key: chunksRestored?.r2Key ?? '',
+    snapshotName: chunksRestored?.snapshotName ?? '',
+    force,
+    collections: perCollection,
   }
 }
 
 // ==================== LIST (for GET endpoint) ====================
 
+export interface QdrantBackupEntry {
+  key: string
+  name: string
+  date: string | null
+  sizeBytes: number
+  lastModified: string
+  /** S1.2 — collection mà key này thuộc về (root key = legacy chunks). */
+  collection: string
+}
+
 /**
- * List recent Qdrant backups stored in R2.
+ * List recent Qdrant backups stored in R2 (flat, sort mới nhất trước).
+ * Mỗi entry có field `collection` (parse từ key; key root 3-segment = legacy
+ * chunks) — GET snapshot-full dùng để group byCollection (blueprint S1.2).
  *
  * @param limit - max results (default 10)
- * @returns array of {key, name, date, sizeBytes, lastModified}
  */
-export async function listQdrantBackups(limit: number = 10): Promise<
-  Array<{
-    key: string
-    name: string
-    date: string | null
-    sizeBytes: number
-    lastModified: string
-  }>
-> {
+export async function listQdrantBackups(limit: number = 10): Promise<QdrantBackupEntry[]> {
   const list = await listR2Objects(R2_PREFIX, 500)
   if (!list.success) return []
 
@@ -459,7 +727,10 @@ export async function listQdrantBackups(limit: number = 10): Promise<
     .slice(0, limit)
     .map((o) => {
       const name = o.key.split('/').pop() || o.key
-      // Extract YYYYMMDD from filename pattern "{YYYYMMDD-HHMMSS}.tar"
+      const parts = o.key.split('/')
+      // parts = ['backups','qdrant','<file>'] (root/legacy → chunks) hoặc
+      // ['backups','qdrant','<collection>','<file>'] (per-collection)
+      const collection = parts.length >= 4 ? parts[2] : getChunksCollection()
       const m = name.match(/(\d{8})-\d{6}\.tar$/)
       return {
         key: o.key,
@@ -467,6 +738,7 @@ export async function listQdrantBackups(limit: number = 10): Promise<
         date: m ? m[1] : null,
         sizeBytes: o.size,
         lastModified: o.lastModified.toISOString(),
+        collection,
       }
     })
 }

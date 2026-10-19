@@ -6,10 +6,13 @@
  *   - Workflow pause/resume integration
  */
 
-// vitest may not be installed; skip tests if not available
-// @ts-ignore - vitest may not be installed
-const vitest = await import('vitest').catch(() => null)
-const { describe, it, expect, vi, beforeEach } = (vitest || {}) as any
+// BUG2-305 (S2 BLUEPRINT-BACKUP-GATE): bản cũ guard `await import('vitest')`
+// (vitest KHÔNG được cài → null → describe undefined). Chạy thường thì bun
+// inject global describe nên vô tình pass, nhưng dưới `bun test --coverage`
+// instrumentation làm TLA dynamic import hỏng → "describe is not a function"
+// → stage coverage FAIL cả file. Repo chỉ chạy bun test (quality-gate) → import
+// trực tiếp bun:test như mọi test file khác (93 file precedent).
+import { describe, it, expect, beforeEach } from 'bun:test'
 import { createProgressReporter } from '../progress-reporter'
 import type { StepProgressInput } from '../types'
 // ==================== PROGRESS REPORTER TESTS ====================

@@ -42,6 +42,13 @@ Tokens: 9.4k sent, 160 received.
   magic — response có `verify` field; log `[DB-Backup] Verify PASS`.
 - **Restore drill trước release lớn**: `bun scripts/restore-drill.ts` — tải bản latest về
   /tmp, `PRAGMA integrity_check` + đếm bảng + đối chiếu row, KHÔNG đụng DB chạy.
+- **Checklist phát hành (S5 BLUEPRINT-BACKUP-GATE)**: `bun scripts/check-branch-protection.mjs`
+  — kiểm branch protection TẤT CẢ remote push (mirror + origin, 2 tài khoản GitHub),
+  PAT redact, báo cáo per-repo; warn-only mặc định, `--strict` trước release lớn
+  (exit 1 nếu repo nào chưa bật — chặn phát hành). Backup Qdrant giờ là
+  multi-collection (5 collection mặc định, env QDRANT_BACKUP_COLLECTIONS) — key
+  per-collection `backups/qdrant/<collection>/latest.tar`, chunks vẫn dual-write
+  root legacy; restore theo policy restoreIfEmpty, `force=1` chỉ cho disaster-recovery.
 - **Path DB không bao giờ đoán**: route hỏi `PRAGMA database_list` + mismatch guard từ
   chối khi app mở nhầm DB (env-leak trap). Nếu thấy lỗi "DB path mismatch" → kiểm tra
   env shell `DATABASE_URL` (chạy qua `pm2-start.sh` đã unset đúng).

@@ -13,24 +13,49 @@
  *   4. tests       — bun test trên DB TEST CÔ LẬP              (không đụng db/custom.db!)
  *                    (fresh schema qua `prisma db push` vào file SQLite riêng,
  *                     rồi chạy bun test với DATABASE_URL ghi đè)
- *   5. build       — bunx next build với distDir riêng (.next-qa)
+ *   4b. coverage    — S2 OPT-IN (KHÔNG chạy mặc định — thí điểm đo full-suite
+ *                    +109% thời gian, blueprint §8-6): bun test --coverage +
+ *                    parse lcov (LF/LH) → FAIL nếu tụt >1,0đ% dưới baseline
+ *                    tests/coverage-baseline.json (ratchet không bar — baseline
+ *                    chỉ cập nhật CHỦ Ý). Chạy: --stage=coverage
+ *   5. smoke       — S3: contract read-only thật (chỉ GET — 0 mutation, bài học
+ *                    Task 54). Probe /api/health tối đa 3 lần × 2s → không
+ *                    reachable → SKIP (reason "app không chạy" — CI mặc định
+ *                    SKIP, local có pm2 sẽ PASS — không FAIL giả, không PASS giả)
+ *   6. build       — bunx next build với distDir riêng (.next-qa)
  *                    (build THỬ — không đụng .next của dev server đang chạy)
  *
  * Usage:
- *   bun scripts/quality-gate.mjs                  # full gate (5 stage)
+ *   bun scripts/quality-gate.mjs                  # full gate (KHÔNG coverage — opt-in)
  *   bun scripts/quality-gate.mjs --skip-build     # bỏ stage build
  *   bun scripts/quality-gate.mjs --quick          # chỉ type_check + lint
  *   bun scripts/quality-gate.mjs --stage=tests    # chạy stage cụ thể (comma-separated)
+ *   bun scripts/quality-gate.mjs --stage=coverage # S2 opt-in: coverage ratchet
+ *   bun scripts/quality-gate.mjs --stage=coverage --coverage-init
+ *                                                  # S2: khởi tạo baseline lần đầu
+ *   bun scripts/quality-gate.mjs --stage=coverage --coverage-update-baseline
+ *                                                  # S2: nâng/hạ baseline CHỦ Ý
+ *                                                  #     (hạ → BẮT BUỘC entry Bug_v2)
  *   node scripts/quality-gate.mjs                 # chạy bằng node cũng OK (chỉ dùng API chuẩn)
  *
  * Env:
  *   TMO_GATE_SKIP_BUILD=1       — tương tự --skip-build
+ *   TMO_REQUIRE_BUILD=1         — S4: skip build bị TÍNH FAIL — flag ngược chiều,
+ *                                 dùng khi cần kết luận "build-được" từ lần chạy
+ *                                 này (CI GitHub luôn set =1)
  *   TMO_BUILD_DIST_DIR=<dir>    — distDir của build thử (mặc định .next-qa)
+ *   TMO_SMOKE_BASE_URL=<url>    — base URL probe smoke (mặc định http://localhost:3000)
+ *   QDRANT_BACKUP_COLLECTIONS   — (S1) override danh sách collection backup
  *
  * Local override file `.quality-gate.local` (gitignored, mỗi máy tự cấu hình):
  *   skipBuild=true              — máy yếu / dev server đang chạy → bỏ build thử
  *                                 (GitHub Actions vẫn chạy full gate nên push
  *                                  không bao giờ lọt mà không qua build)
+ *
+ * Verdict (S4 — gate chỉ kết luận những gì nó đo):
+ *   - Build PASS đủ → "PASS đủ N/N stage — được phép push/merge."
+ *   - Build SKIP    → "PASS có SKIP" + dòng vàng "BUILD CHƯA CHẠY (skip local)
+ *     — CI GitHub sẽ chạy; KHÔNG kết luận build-được từ lần chạy này."
  *
  * Git hooks (scripts/hooks/) và GitHub Actions (.github/workflows/quality-gate.yml)
  * đều gọi script này → 1 nguồn sự thật duy nhất.
@@ -39,6 +64,16 @@
 import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
+import {
+  COVERAGE_DIR,
+  LCOV_FILE,
+  BASELINE_PATH,
+  parseLcovTotals,
+  coveragePct,
+  evaluateRatchet,
+  readBaseline,
+  baselineJsonContent,
+} from './coverage-ratchet.mjs'
 
 const ROOT = path.resolve(import.meta.dir, '..')
 const GATE = '\x1b[35m[TMO QUALITY GATE]\x1b[0m'
@@ -57,6 +92,9 @@ const stageFilter = stageArg ? stageArg.slice(8).split(',').map((s) => s.trim())
 
 const skipBuildFlag = hasFlag('--skip-build') || process.env.TMO_GATE_SKIP_BUILD === '1'
 const quickFlag = hasFlag('--quick')
+// S2 — coverage baseline chủ ý (không tự trượt)
+const coverageInitFlag = hasFlag('--coverage-init')
+const coverageUpdateFlag = hasFlag('--coverage-update-baseline')
 
 // .quality-gate.local — per-machine override (gitignored)
 const localConfigPath = path.join(ROOT, '.quality-gate.local')
@@ -68,6 +106,11 @@ if (fs.existsSync(localConfigPath)) {
   }
 }
 const skipBuild = skipBuildFlag || localConfig.skipBuild === 'true'
+
+// S4 — TMO_REQUIRE_BUILD=1: skip build bị tính FAIL (flag ngược chiều precedent
+// TMO_GATE_SKIP_BUILD). CI luôn set =1 (belt-and-braces — .quality-gate.local
+// gitignored + untracked nên CI đã luôn full gate; khai báo tường minh chống tương lai).
+const requireBuild = process.env.TMO_REQUIRE_BUILD === '1'
 
 // ---------------------------------------------------------------------------
 // Runner helper
@@ -105,6 +148,9 @@ function runStage(name, { cmd, args: cmdArgs, env = {}, timeoutMs = 15 * 60_000 
 const TEST_DB = path.join(ROOT, 'db', '.quality-gate-test.db')
 const TEST_DB_URL = `file:${TEST_DB}`
 const BUILD_DIST_DIR = process.env.TMO_BUILD_DIST_DIR || '.next-qa'
+const COVERAGE_DIR_ABS = path.join(ROOT, COVERAGE_DIR)
+const BASELINE_FILE_ABS = path.join(ROOT, BASELINE_PATH)
+const SMOKE_BASE_URL = process.env.TMO_SMOKE_BASE_URL || 'http://localhost:3000'
 // r60 (C6 — chặn leak jsonl TEST-* vào agent-runs/ THẬT, lặp lại >=4 lần ở các
 // phiên 58-59: test units gọi startAgentRun/endAgentRun ghi trail jsonl vào
 // RUN_TRAILS_DIR (mặc định <repo>/agent-runs). Env TMO_AGENT_RUNS_DIR (được
@@ -116,6 +162,64 @@ function rmQuiet(p) {
   for (const suffix of ['', '-wal', '-shm', '-journal']) {
     try { fs.rmSync(p + suffix, { force: true }) } catch { /* ignore */ }
   }
+}
+
+function rmDirQuiet(p) {
+  try { fs.rmSync(p, { recursive: true, force: true }) } catch { /* ignore */ }
+}
+
+// ---------------------------------------------------------------------------
+// S2 — coverage ratchet (gọi SAU khi bun test PASS; pure logic ở coverage-ratchet.mjs)
+// ---------------------------------------------------------------------------
+function evaluateCoverageAfterTests(testsResult) {
+  const lcovFile = path.join(COVERAGE_DIR_ABS, LCOV_FILE)
+  if (!fs.existsSync(lcovFile)) {
+    console.log(`${GATE} ${YELLOW(`⚠ Không tìm thấy lcov (${lcovFile}) — bỏ qua ratchet` )}`)
+    return testsResult
+  }
+  const totals = parseLcovTotals(fs.readFileSync(lcovFile, 'utf-8'))
+  const pct = coveragePct(totals)
+  const baseline = readBaseline(fs, BASELINE_FILE_ABS)
+
+  // Init / update chủ ý — ghi baseline, KHÔNG phán judgement lần này.
+  if (coverageInitFlag || coverageUpdateFlag) {
+    if (pct === null) {
+      console.log(`${GATE} ${YELLOW('⚠ lcov không đo được dòng nào (LF=0) — không ghi baseline')}`)
+      return testsResult
+    }
+    if (coverageUpdateFlag && baseline && pct < baseline.pct) {
+      console.log(
+        `${GATE} ${RED(BOLD(`⚠ HẠ baseline ${baseline.pct}% → ${pct}% — BẮT BUỘC entry Bug_v2 ghi lý do (quy tắc S2, không tự trượt)`))}`
+      )
+    }
+    fs.writeFileSync(BASELINE_FILE_ABS, baselineJsonContent({ pct, lh: totals.lh, lf: totals.lf }))
+    console.log(
+      `${GATE} 📊 Coverage baseline ${coverageInitFlag ? 'KHỞI TẠO' : 'CẬP NHẬT CHỦ Ý'}: ${pct}% (LF ${totals.lf} / LH ${totals.lh}) → ${BASELINE_PATH}`
+    )
+    return testsResult
+  }
+
+  const verdict = evaluateRatchet(pct, baseline ? baseline.pct : null)
+  console.log(`${GATE} 📊 Coverage: ${verdict.message}`)
+  if (verdict.status === 'fail') {
+    return { ...testsResult, status: 'FAIL', reason: verdict.message }
+  }
+  return testsResult
+}
+
+// ---------------------------------------------------------------------------
+// S3 — smoke probe: /api/health tối đa 3 lần × 2s (chống SKIP giả khi next dev
+// đang recompile — cold đo 640-722ms nhưng route nặng hơn; blueprint §4-S3)
+// ---------------------------------------------------------------------------
+async function probeSmokeApp(base) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(2000) })
+      if (res.ok) return true
+    } catch { /* thử lại */ }
+    if (attempt < 3) await new Promise((r) => setTimeout(r, 1000))
+  }
+  return false
 }
 
 const stages = [
@@ -162,8 +266,13 @@ const stages = [
         return { name: 'tests', status: 'FAIL', durationMs: push.durationMs, reason: 'prisma db push (test DB) thất bại' }
       }
       try {
+        // S2 v.final — coverage TÁCH sang stage riêng (opt-in): thí điểm đo
+        // full-suite +109% thời gian (67s → 140s, đo 2026-10-19) — vượt ngưỡng
+        // +15% của blueprint §8-6 → KHÔNG bật mặc định (không im lặng — summary
+        // in hướng dẫn chạy). Stage tests giữ nguyên hành vi cũ (2036/0 precedent).
         return runStage('tests', {
-          cmd: 'bun', args: ['test'],
+          cmd: 'bun',
+          args: ['test'],
           // r60 (C6): TMO_AGENT_RUNS_DIR → jsonl TEST-* ghi sang /tmp tạm,
           // KHÔNG rơi vào agent-runs/ thật của repo (watcher mission lọc
           // TEST-* nhưng rác vẫn xâm nhập đĩa + hậu kiểm phải dọn tay).
@@ -177,13 +286,83 @@ const stages = [
     },
   },
   {
+    name: 'coverage',
+    desc: 'S2 coverage ratchet — bun test --coverage + lcov + baseline (OPT-IN — thí điểm +109% thời gian, §8-6)',
+    // Opt-in: KHÔNG chạy trong full gate mặc định — chỉ qua --stage=coverage
+    // (hoặc liệt kê tường minh). Không im lặng: summary in hướng dẫn.
+    default: false,
+    run: () => {
+      rmQuiet(TEST_DB)
+      const push = runStage('coverage:prepare-db', {
+        cmd: 'bunx',
+        args: ['prisma', 'db', 'push', '--skip-generate'],
+        env: { DATABASE_URL: TEST_DB_URL },
+        timeoutMs: 5 * 60_000,
+      })
+      if (push.status !== 'PASS') {
+        return { name: 'coverage', status: 'FAIL', durationMs: push.durationMs, reason: 'prisma db push (test DB) thất bại' }
+      }
+      try {
+        // Coverage fresh mỗi lần chạy (bun --coverage chỉ đếm file được import
+        // bởi test — import-only; xem coverage-ratchet.mjs header).
+        rmDirQuiet(COVERAGE_DIR_ABS)
+        const testsResult = runStage('coverage', {
+          cmd: 'bun',
+          args: [
+            'test',
+            '--coverage',
+            // bun 1.3.14: KHÔNG nhận 'lcov,text' comma — phải 2 flag riêng
+            '--coverage-reporter=text',
+            '--coverage-reporter=lcov',
+            `--coverage-dir=${COVERAGE_DIR}`,
+          ],
+          env: { DATABASE_URL: TEST_DB_URL, TMO_AGENT_RUNS_DIR: TEST_RUNS_DIR },
+          timeoutMs: 10 * 60_000,
+        })
+        if (testsResult.status !== 'PASS') {
+          return { ...testsResult, name: 'coverage' }
+        }
+        return evaluateCoverageAfterTests({ ...testsResult, name: 'coverage' })
+      } finally {
+        rmQuiet(TEST_DB)
+        try { fs.rmSync(TEST_RUNS_DIR, { recursive: true, force: true }) } catch { /* ignore */ }
+      }
+    },
+  },
+  {
+    name: 'smoke',
+    desc: 'S3 smoke contract read-only (chỉ GET — probe /api/health 3×2s, app không chạy → SKIP)',
+    run: async () => {
+      const reachable = await probeSmokeApp(SMOKE_BASE_URL)
+      if (!reachable) {
+        console.log(
+          `\n${GATE} ${YELLOW('⊘ SKIP smoke')} — app không chạy tại ${SMOKE_BASE_URL} ` +
+            `(probe /api/health 3 lần × 2s không reachable; CI mặc định SKIP — local có pm2 sẽ PASS)`
+        )
+        return { name: 'smoke', status: 'SKIP', durationMs: 0, reason: 'app không chạy (probe 3×2s)' }
+      }
+      return runStage('smoke', {
+        cmd: 'bun', args: ['test', 'tests/smoke'],
+        env: { TMO_SMOKE_STAGE: '1', TMO_SMOKE_BASE_URL: SMOKE_BASE_URL },
+        timeoutMs: 3 * 60_000,
+      })
+    },
+  },
+  {
     name: 'build',
     desc: `Build thử (next build → ${BUILD_DIST_DIR}, không đụng .next của dev server)`,
-    skip: skipBuild,
-    skipReason: skipBuildFlag || process.env.TMO_GATE_SKIP_BUILD === '1'
-      ? 'bỏ qua theo --skip-build / TMO_GATE_SKIP_BUILD=1'
-      : 'bỏ qua theo .quality-gate.local (skipBuild=true)',
+    skip: skipBuild && !requireBuild,
+    skipReason: requireBuild
+      ? '—'
+      : skipBuildFlag || process.env.TMO_GATE_SKIP_BUILD === '1'
+        ? 'bỏ qua theo --skip-build / TMO_GATE_SKIP_BUILD=1'
+        : 'bỏ qua theo .quality-gate.local (skipBuild=true)',
     run: () => {
+      if (skipBuild && requireBuild) {
+        console.log(
+          `\n${GATE} ${YELLOW('TMO_REQUIRE_BUILD=1 — bỏ qua lệnh skip, build SẼ chạy (yêu cầu kết luận build-được từ lần chạy này)')}`
+        )
+      }
       try {
         return runStage('build', {
           cmd: 'bunx', args: ['next', 'build'],
@@ -201,7 +380,10 @@ const stages = [
 // ---------------------------------------------------------------------------
 // Chọn stage theo filter
 // ---------------------------------------------------------------------------
-let selected = stages
+// Mặc định: mọi stage trừ stage opt-in (default:false — hiện chỉ 'coverage',
+// thí điểm +109% thời gian §8-6). --stage=<tên> chọn tường minh được CẢ stage
+// opt-in. --quick giữ hành vi cũ (type_check + lint).
+let selected = stages.filter((s) => s.default !== false)
 if (quickFlag) {
   selected = stages.filter((s) => s.name === 'type_check' || s.name === 'lint')
 } else if (stageFilter) {
@@ -214,7 +396,7 @@ if (quickFlag) {
 }
 
 // ---------------------------------------------------------------------------
-// Chạy gate
+// Chạy gate (smoke stage là async — await mọi stage cho đồng nhất)
 // ---------------------------------------------------------------------------
 console.log(`${GATE} ${BOLD('Bắt đầu — TMO Quality Gate')}`)
 console.log(`${GATE} Repo: ${ROOT}`)
@@ -228,7 +410,7 @@ for (const stage of selected) {
     results.push({ name: stage.name, status: 'SKIP', durationMs: 0 })
     continue
   }
-  results.push(stage.run())
+  results.push(await stage.run())
 }
 
 // ---------------------------------------------------------------------------
@@ -250,5 +432,29 @@ if (failed.length > 0) {
   process.exit(1)
 }
 
-console.log(`${GATE} ${GREEN(BOLD(`PASS toàn bộ (${totalSecs}s) — được phép push/merge.`))}`)
+// S2 — KHÔNG IM LẶNG (blueprint §8-6): coverage ratchet là opt-in vì thí điểm
+// đo full-suite +109% thời gian (67s → 140s, 2026-10-19) — summary luôn nhắc
+// đường chạy chủ ý để tầng này không bị quên lãng.
+if (!selected.some((s) => s.name === 'coverage')) {
+  console.log(
+    `${GATE} ℹ Coverage ratchet (S2) KHÔNG chạy lần này (opt-in — thí điểm +109% thời gian full-suite).` +
+      ` Chạy chủ ý: bun scripts/quality-gate.mjs --stage=coverage`
+  )
+}
+
+// S4 — verdict phân biệt "PASS đủ build" vs "PASS thiếu build" (gate chỉ kết
+// luận những gì nó đo; mọi skip phải in rõ ở verdict).
+const skipped = results.filter((r) => r.status === 'SKIP')
+const buildSkipped = skipped.some((r) => r.name === 'build')
+if (skipped.length > 0) {
+  console.log(
+    `${GATE} ${GREEN(BOLD(`PASS ${results.length - skipped.length}/${results.length} stage (${totalSecs}s) — có ${skipped.length} stage SKIP (${skipped.map((r) => r.name).join(', ')}).`))}`
+  )
+} else {
+  console.log(`${GATE} ${GREEN(BOLD(`PASS đủ ${results.length}/${results.length} stage (${totalSecs}s) — được phép push/merge.`))}`)
+}
+if (buildSkipped) {
+  console.log(`${GATE} ${YELLOW(BOLD('⚠ BUILD CHƯA CHẠY (skip local) — CI GitHub sẽ chạy; KHÔNG kết luận build-được từ lần chạy này.'))}`)
+  console.log(`${GATE} ${YELLOW('   Tái hiện full gate có build: TMO_REQUIRE_BUILD=1 bun scripts/quality-gate.mjs')}`)
+}
 process.exit(0)

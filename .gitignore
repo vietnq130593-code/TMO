@@ -12,6 +12,8 @@ node_modules
 
 # testing
 /coverage
+# S2 (BLUEPRINT-BACKUP-GATE) — output bun --coverage của stage tests (lcov)
+.quality-gate-coverage/
 
 # next.js
 /.next/
@@ -324,3 +326,15 @@ scratch/r24*.png
 # reset 3 lần — script mất theo reset thì không tái chạy backfill/nghiệm thu
 # S1 trên dữ liệu thật được (kèm 6 entity run bằng chứng run_1792386145100_1).
 !/scripts/backfill-agent-entities.ts
+# NGOẠI LỆ (S1.3 BLUEPRINT-BACKUP-GATE): backfill theopus_documents 9 điểm từ
+# knowledge/*.TXT sau reset #3 (BUG2-304 — R2 cũ chỉ backup chunks; SQLite
+# Document=0). Idempotent (id deterministic doc-shd-<slug>). Mất script theo
+# box reset = mất đường tái tạo documents (pattern BUG2-290).
+!/scripts/backfill-documents-qdrant.ts
+# NGOẠI LỆ (S2/S3/S4 BLUEPRINT-BACKUP-GATE): coverage ratchet pure logic —
+# import bởi quality-gate.mjs (tracked) + unit test r125; tách file để test
+# import được mà không kích hoạt gate.
+!/scripts/coverage-ratchet.mjs
+# NGOẠI LỆ (S5 BLUEPRINT-BACKUP-GATE): check branch protection đa remote
+# (mirror + origin — 2 tài khoản GitHub) — PAT redact, warn-only/--strict.
+!/scripts/check-branch-protection.mjs

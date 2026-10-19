@@ -30,20 +30,25 @@
  * - Combined "store=all" runs both sequentially — total ~30s typical, but
  *   allow generous curl --max-time (300s) for safety.
  *
- * R2 STORAGE LAYOUT
- * -----------------
- *   backups/qdrant/{YYYYMMDD-HHMMSS}.tar      — versioned (history)
- *   backups/qdrant/latest.tar                 — overwritten each run
+ * R2 STORAGE LAYOUT (S1 — multi-collection, blueprint BACKUP-GATE P1)
+ * -------------------------------------------------------------
+ *   backups/qdrant/<collection>/{YYYYMMDD-HHMMSS}.tar — versioned (history)
+ *   backups/qdrant/<collection>/latest.tar             — overwritten each run
+ *   backups/qdrant/{YYYYMMDD-HHMMSS}.tar               — LEGACY dual-write
+ *   backups/qdrant/latest.tar                            (chỉ theopus_chunks)
  *   backups/neo4j/{YYYYMMDD-HHMMSS}.cypher.gz — versioned (history)
  *   backups/neo4j/latest.cypher.gz            — overwritten each run
  *
- * Restore: POST /api/storage/restore-full?store={qdrant|neo4j|all}&date=YYYYMMDD
+ * Restore: POST /api/storage/restore-full?store={qdrant|neo4j|all}&date=YYYYMMDD[&force=1]
  */
 import { NextResponse } from 'next/server'
 import {
   backupQdrantToR2,
   listQdrantBackups,
   getChunksPointCount,
+  getCollectionPointCount,
+  getBackupCollections,
+  type QdrantBackupEntry,
 } from '@/lib/backup/qdrant-snapshot'
 import {
   backupNeo4jToR2,
@@ -63,6 +68,16 @@ interface BackupResult {
   sizeBytes: number
   collectionPoints?: number
   snapshotName?: string
+  /** S1.1 — kết quả per-collection (5 collection mặc định). */
+  collections?: Array<{
+    collection: string
+    status: 'ok' | 'skipped' | 'error'
+    r2Key?: string
+    sizeBytes?: number
+    collectionPoints?: number
+    snapshotName?: string
+    reason?: string
+  }>
   rawCypherBytes?: number
   nodeCount?: number
   relCount?: number
@@ -154,16 +169,18 @@ export async function POST(request: Request) {
 }
 
 /**
- * GET: list recent backups in R2 (10 most recent per store + current
- * collection point count for sanity check).
+ * GET: list recent backups in R2 (10 mới nhất per store cho compat UI +
+ * grouping byCollection + point count per-collection — S1.2).
  */
 export async function GET() {
   const startedAt = new Date().toISOString()
 
-  const [qdrantBackups, neo4jBackups, currentChunksCount] = await Promise.all([
-    listQdrantBackups(10).catch((err) => ({
+  // Lấy rộng (200) để group byCollection đủ ý nghĩa — flat list cho UI cũ vẫn
+  // cắt 10 như trước (compat trường `qdrantBackups`).
+  const [allQdrantBackups, neo4jBackups, currentChunksCount] = await Promise.all([
+    listQdrantBackups(200).catch((err) => ({
       error: err instanceof Error ? err.message : String(err),
-      items: [],
+      items: [] as QdrantBackupEntry[],
     })),
     listNeo4jBackups(10).catch((err) => ({
       error: err instanceof Error ? err.message : String(err),
@@ -172,32 +189,57 @@ export async function GET() {
     getChunksPointCount().catch(() => 0),
   ])
 
+  // S1.2 — byCollection: group theo field `collection` (mỗi collection tối đa
+  // 10 key mới nhất). Root keys (legacy, trước S1) gom dưới nhãn theopus_chunks.
+  const byCollection: Record<string, QdrantBackupEntry[]> = {}
+  if (Array.isArray(allQdrantBackups)) {
+    for (const entry of allQdrantBackups) {
+      const list = (byCollection[entry.collection] ??= [])
+      if (list.length < 10) list.push(entry)
+    }
+  }
+
+  // S1.2 — point count từng collection trong scope backup (map per-collection;
+  // trường cũ `currentQdrantPoints` vẫn = chunks cho compat UI/docs cũ).
+  const currentQdrantPointsByCollection: Record<string, number> = {}
+  for (const collection of getBackupCollections()) {
+    currentQdrantPointsByCollection[collection] = await getCollectionPointCount(collection).catch(
+      () => 0
+    )
+  }
+
   return NextResponse.json({
     status: 'ok',
     timestamp: startedAt,
     currentQdrantPoints: currentChunksCount,
-    qdrantBackups: Array.isArray(qdrantBackups)
-      ? qdrantBackups
+    currentQdrantPointsByCollection,
+    qdrantBackups: Array.isArray(allQdrantBackups)
+      ? allQdrantBackups.slice(0, 10)
       : [],
-    qdrantBackupsError: !Array.isArray(qdrantBackups) ? qdrantBackups.error : undefined,
+    byCollection,
+    qdrantBackupsError: !Array.isArray(allQdrantBackups)
+      ? (allQdrantBackups as { error?: string }).error
+      : undefined,
     neo4jBackups: Array.isArray(neo4jBackups)
       ? neo4jBackups
       : [],
     neo4jBackupsError: !Array.isArray(neo4jBackups) ? neo4jBackups.error : undefined,
     r2Storage: {
       qdrantPrefix: 'backups/qdrant/',
+      qdrantPerCollectionPrefix: 'backups/qdrant/<collection>/',
       neo4jPrefix: 'backups/neo4j/',
       latest: {
         qdrant: 'backups/qdrant/latest.tar',
+        qdrantPerCollection: 'backups/qdrant/<collection>/latest.tar',
         neo4j: 'backups/neo4j/latest.cypher.gz',
       },
     },
     endpoints: {
-      'POST ?store=qdrant': 'Snapshot Qdrant chunks → R2 binary tar',
+      'POST ?store=qdrant': 'Snapshot Qdrant (5 collection mặc định) → R2 binary tar',
       'POST ?store=neo4j': 'Snapshot Neo4j graph → R2 gzipped cypher',
       'POST ?store=all': 'Both (default)',
-      'POST /api/storage/restore-full?store={...}&date=YYYYMMDD':
-        'Restore from R2 (date prefix match)',
+      'POST /api/storage/restore-full?store={...}&date=YYYYMMDD[&force=1]':
+        'Restore from R2 (date prefix match; force=1 bỏ policy restoreIfEmpty)',
     },
   })
 }

@@ -1,10 +1,12 @@
 # TMO QUALITY GATE — CI pipeline (GitHub Actions)
 #
-# Chạy FULL gate (type_check → lint → tests → build thử) trên MỌI push lên main
-# và mọi pull_request vào main. Đây là lớp enforcement bên phía GitHub — dù
-# local có bỏ hook (--no-verify), commit đỏ vẫn bị đánh dấu ở đây.
+# Chạy FULL gate (type_check → lint → tests(+coverage ratchet) → smoke → build
+# thử) trên MỌI push lên main và mọi pull_request vào main. Đây là lớp
+# enforcement bên phía GitHub — dù local có bỏ hook (--no-verify), commit đỏ
+# vẫn bị đánh dấu ở đây.
 #
-# Bật chế độ chặn hẳn tại GitHub (khuyến nghị, làm 1 lần bằng tay):
+# Bật chế độ chặn hẳn tại GitHub (khuyến nghị, làm 1 lần bằng tay — kiểm tra
+# đã bật chưa: `bun scripts/check-branch-protection.mjs` — S5, đa remote):
 #   Repo → Settings → Branches → Add branch protection rule cho `main`:
 #     ✔ Require status checks to pass before merging → chọn job `quality-gate`
 #     ✔ Require branches to be up to date before merging
@@ -13,6 +15,10 @@
 # - Không cần .env trên CI: tests stage tự tạo DB SQLite cô lập
 #   (db/.quality-gate-test.db) qua prisma db push; build không đụng DB.
 # - Build thử ghi ra .next-qa (TMO_BUILD_DIST_DIR) — không đổi hành vi gì khác.
+# - TMO_REQUIRE_BUILD=1 (S4): CI không bao giờ được skip build — nếu có ai
+#   thêm cơ chế skip trên CI, gate sẽ FAIL thay vì PASS giả. (.quality-gate.local
+#   gitignored + untracked nên CI đã luôn full gate — khai báo tường minh chống
+#   tương lai.)
 
 name: Quality Gate
 
@@ -43,8 +49,10 @@ jobs:
         run: bun install --frozen-lockfile
         # postinstall tự chạy `prisma generate`
 
-      - name: Run Quality Gate (type_check → lint → tests → build)
+      - name: Run Quality Gate (type_check → lint → tests → smoke → build)
         run: bun scripts/quality-gate.mjs
         env:
           NEXT_TELEMETRY_DISABLED: '1'
           CI: 'true'
+          # S4 — CI không bao giờ được skip build (skip → FAIL, không PASS giả)
+          TMO_REQUIRE_BUILD: '1'

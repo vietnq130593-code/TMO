@@ -1,0 +1,7 @@
+{
+  "_note": "Coverage ratchet baseline (BLUEPRINT-BACKUP-GATE S2) — CHỈ cập nhật chủ ý qua --coverage-init / --coverage-update-baseline; hạ baseline bắt buộc entry Bug_v2. Giới hạn: bun coverage chỉ đếm file được import bởi test (import-only).",
+  "pct": 37.12,
+  "lh": 28342,
+  "lf": 76346,
+  "updatedAt": "2026-10-19T20:47:31.742Z"
+}

@@ -19,13 +19,24 @@
  * Query params:
  *   store = "qdrant" | "neo4j" | "all" (default "all")
  *   date  = YYYYMMDD — required (matches newest backup with that date prefix
- *          in backups/qdrant/{YYYYMMDD}*.tar OR backups/neo4j/{YYYYMMDD}*.cypher.gz).
+ *          in backups/qdrant/<collection>/{YYYYMMDD}*.tar OR legacy root
+ *          backups/qdrant/{YYYYMMDD}*.tar for theopus_chunks).
  *          Pass "latest" to use the latest pointer (overwritten each backup run).
+ *   force = "1" — S1.2 disaster-recovery: bỏ policy restoreIfEmpty, REPLACE
+ *          mọi collection trong scope (kể cả collection sống đang có data —
+ *          warning ghi đè được log). Mặc định 0 (không truyền = theo policy).
  *
  * Response shape:
  *   {
  *     date, store, startedAt, completedAt, status: 'completed',
- *     qdrant: { restoredPoints, sizeBytes, r2Key, snapshotName },
+ *     qdrant: {
+ *       // legacy compat (= theopus_chunks)
+ *       restoredPoints, sizeBytes, r2Key, snapshotName,
+ *       // S1.2 multi-collection + policy
+ *       force: boolean,
+ *       collections: Array<{ collection, status: 'restored'|'skipped'|'error',
+ *                            decision, restoredPoints?, r2Key?, reason? }>
+ *     },
  *     neo4j:  { restoredNodes, restoredRels, sizeBytes, r2Key, statementsExecuted, statementsFailed }
  *   }
  *
@@ -57,12 +68,27 @@ interface RestoreResult {
   snapshotName?: string
   statementsExecuted?: number
   statementsFailed?: number
+  /** S1.2 — multi-collection + policy per-collection. */
+  force?: boolean
+  collections?: Array<{
+    collection: string
+    status: 'restored' | 'skipped' | 'error'
+    decision?: 'replace' | 'skip'
+    restoredPoints?: number
+    r2Key?: string
+    sizeBytes?: number
+    snapshotName?: string
+    reason?: string
+  }>
 }
 
 export async function POST(request: Request) {
   const url = new URL(request.url)
   const storeParam = (url.searchParams.get('store') || 'all') as Store
   const date = url.searchParams.get('date')
+  // S1.2 — force=1: disaster-recovery có chủ ý (data sống hỏng nhưng KHÔNG
+  // rỗng). Mặc định 0 → policy restoreIfEmpty chặn ghi đè data sống.
+  const force = url.searchParams.get('force') === '1'
 
   if (!date) {
     return NextResponse.json(
@@ -88,7 +114,7 @@ export async function POST(request: Request) {
   try {
     if (storeParam === 'qdrant' || storeParam === 'all') {
       try {
-        results.qdrant = (await restoreQdrantFromR2(date)) as RestoreResult
+        results.qdrant = (await restoreQdrantFromR2(date, { force })) as RestoreResult
       } catch (err) {
         results.qdrant = {
           error: err instanceof Error ? err.message : String(err),
