@@ -40,9 +40,13 @@ const chatRoute = read('src/app/api/openclaw/chat/route.ts')
 const engine = read('src/lib/code-team/workflow-engine.ts')
 
 describe('r130 A — softmax NIM trong llm.ts', () => {
+  // PIN UPDATE r131 (OBS-1 2026-10-20): maybeApplySoftmaxNimPolicy đổi trả về
+  // string → {model, applied} (call site cần biết policy có áp dụng để ghi Q);
+  // NVIDIA_AGENT_MODELS.slice() → filter loại ứng viên bị circuit-breaker block.
   test('A1. maybeApplySoftmaxNimPolicy tồn tại + gọi trong NIM branch', () => {
-    expect(llm).toMatch(/async function maybeApplySoftmaxNimPolicy\(configuredNimModel: string, options\?: LLMCallOptions\)/)
-    expect(llm).toContain('const nimModel = await maybeApplySoftmaxNimPolicy(model, options)')
+    expect(llm).toMatch(/async function maybeApplySoftmaxNimPolicy\(\s*configuredNimModel: string,\s*options\?: LLMCallOptions,\s*\): Promise<\{ model: string; applied: boolean \}>/)
+    expect(llm).toContain('const nimPolicy = await maybeApplySoftmaxNimPolicy(model, options)')
+    expect(llm).toContain('const nimModel = nimPolicy.model')
     // callModelWithKeyRotation + taskLabel + log/ERROR đều dùng nimModel (model thật)
     expect(llm).toContain("{ taskLabel: `agent-nim:${nimModel}` }")
     expect(llm).toContain('Agent dùng NIM ${nimModel} ✓')
@@ -61,7 +65,7 @@ describe('r130 A — softmax NIM trong llm.ts', () => {
     expect(llm).toContain('const advice = await getQAdvice(stateKey, candidates)')
     expect(llm).toContain('softmaxPolicy(scores, getTuningNumber(\'runtime_model_tau\'))')
     expect(llm).toContain('pickIndexBySeed(probs, seed)')
-    expect(llm).toContain('NVIDIA_AGENT_MODELS.slice()')
+    expect(llm).toContain("const candidates = NVIDIA_AGENT_MODELS.filter(m => !isModelHardBlocked(m).blocked)")
   })
 
   test('A4. LLMCallOptions có explicitModelChoice + zen path cũng tôn trọng', () => {

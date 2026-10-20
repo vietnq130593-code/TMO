@@ -4792,45 +4792,119 @@ async function maybeApplySoftmaxModelPolicy(configuredZenModel: string, options?
  * Pilotscope: π_Q thuần — KHÔNG trộn Brain-C mixture (kill-switch 2 lớp như
  * zen sẽ wire sau khi pilot có dữ liệu Q ≠ 0).
  * Fail-open mọi tầng — không bao giờ làm hỏng call vì policy lỗi.
+ *
+ * OBS-1 (2026-10-20 — giao thức quan sát, phiên quan sát run opus_rev_mvgfjoxn_xgez25):
+ *   - Trả về {model, applied} thay vì string — call site cần biết policy có
+ *     THỰC SỰ áp dụng (đi qua hết các guard tường minh) để ghi QEntry kết quả;
+ *   - Ứng viên bị circuit-breaker block (isModelHardBlocked — Task 22) bị LOẠI
+ *     khỏi vòng chọn. Bằng chứng: review 08:37-08:42 — softmax pick
+ *     glm-5.3-flash (Q≡0 uniform + seed tất định hash(sessionId, cycle=0)
+ *     bất biến theo từng session) → model hang NIM 0 bytes → 2×150s timeout
+ *     burn → verdict FALLBACK; breaker block glm 10 phút nhưng softmax VẪN
+ *     pick glm ở call kế (không nhìn breaker) → vòng lặp fail lặp lại.
  */
-async function maybeApplySoftmaxNimPolicy(configuredNimModel: string, options?: LLMCallOptions): Promise<string> {
-  if (getTuningEnum('runtime_model_policy') !== 'softmax') return configuredNimModel
+async function maybeApplySoftmaxNimPolicy(
+  configuredNimModel: string,
+  options?: LLMCallOptions,
+): Promise<{ model: string; applied: boolean }> {
+  if (getTuningEnum('runtime_model_policy') !== 'softmax') return { model: configuredNimModel, applied: false }
   if (options?.explicitModelChoice === true) {
     console.log(`[LLM] softmax-nim model=${configuredNimModel} p=1.00 reason=caller-đánh-dấu-lựa-chọn-tường-minh — giữ nguyên`)
-    return configuredNimModel
+    return { model: configuredNimModel, applied: false }
   }
   if (await hasExplicitModelOverride(options?.agentName)) {
     console.log(`[LLM] softmax-nim model=${configuredNimModel} p=1.00 reason=agent-có-override-tường-minh — giữ nguyên`)
-    return configuredNimModel
+    return { model: configuredNimModel, applied: false }
   }
   // Research team: user chọn model qua chat (ALS override đang hoạt động) →
   // tôn trọng (model-override-context là module THUẦN node:async_hooks —
   // import tĩnh không tạo circular).
   if (currentResearchModelOverride()?.model) {
     console.log(`[LLM] softmax-nim model=${configuredNimModel} p=1.00 reason=research-chat-override — giữ nguyên`)
-    return configuredNimModel
+    return { model: configuredNimModel, applied: false }
   }
   try {
     const { getQAdvice, softmaxPolicy, deterministicSeed, pickIndexBySeed, agentRuntimeStateKey } = await import('@/lib/learning/q-table')
-    const candidates = NVIDIA_AGENT_MODELS.slice()
-    if (candidates.length <= 1) return configuredNimModel
+    // OBS-1: ứng viên = model KHÔNG bị circuit-breaker block (hang/429 gần đây)
+    const blocked = NVIDIA_AGENT_MODELS.filter(m => isModelHardBlocked(m).blocked)
+    const candidates = NVIDIA_AGENT_MODELS.filter(m => !isModelHardBlocked(m).blocked)
+    if (blocked.length > 0) {
+      console.log(`[LLM] softmax-nim loại ${blocked.length} ứng viên bị circuit-breaker block: ${blocked.join(', ')}`)
+    }
+    if (candidates.length === 0) return { model: configuredNimModel, applied: false }
+    if (candidates.length === 1) {
+      console.log(`[LLM] softmax-nim model=${candidates[0]} p=1.00 reason=duy-nhất-ứng-viên-không-bị-block`)
+      return { model: candidates[0], applied: true }
+    }
     const stateKey = agentRuntimeStateKey()
     const advice = await getQAdvice(stateKey, candidates)
     const qByAction = new Map(advice.map(a => [a.action, a.q]))
     const scores = candidates.map(c => qByAction.get(c) ?? 0)
     const probs = softmaxPolicy(scores, getTuningNumber('runtime_model_tau'))
+    // OBS-1b: dấu vân tay Q vào seed — BẮT BUỘC để thoát "vùng kẹt tất định".
+    // Bằng chứng toán học phiên quan sát 2026-10-20: seed hash('Opus','0')
+    // = 409499169 → r=0.0954; glm-5.3-flash (index 0, model stall theo nội
+    // dung prompt review) có vùng tích lũy 0.214 > r → pick glm; fail →
+    // Q=-0.1 → vùng co còn 0.201 nhưng VẪN > r → pick glm LẠI — phải fail
+    // ~9 lần (9×300s burn) vùng mới co dưới r. Seed cũ KHÔNG phụ thuộc Q →
+    // cùng seed + Q đổi = vẫn cùng vùng vị trí → kẹt. Đưa Q vào seed: Q đổi
+    // (học từ fail/thành công) → gieo lại xúc xắc → thoát sau ~1-2 vòng.
+    // Tính tái lập §P6-M3 giữ nguyên: cùng (input, Q-state) → cùng pick —
+    // replay đúng Q-trajectory thì pick sequence lặp lại y hệt.
     const seed = deterministicSeed(
       String(options?.sessionId ?? options?.agentName ?? 'anon'),
       String(options?.qPolicyCycle ?? 0),
+      `q=${scores.map(s => s.toFixed(3)).join(',')}`,
     )
     const idx = pickIndexBySeed(probs, seed)
-    if (idx < 0) return configuredNimModel
+    if (idx < 0) return { model: configuredNimModel, applied: false }
     const picked = candidates[idx]
     console.log(`[LLM] softmax-nim model=${picked} q=${scores[idx].toFixed(2)} p=${probs[idx].toFixed(2)} τ=${getTuningNumber('runtime_model_tau')} ${candidates.length}-ứng-viên seed=${seed}${picked !== configuredNimModel ? ` (thay ${configuredNimModel})` : ''}`)
-    return picked
+    return { model: picked, applied: true }
   } catch (err) {
     console.warn('[LLM] softmax-nim policy failed (fail-open → model cấu hình):', err instanceof Error ? err.message : String(err))
-    return configuredNimModel
+    return { model: configuredNimModel, applied: false }
+  }
+}
+
+/**
+ * OBS-1 (2026-10-20 — giao thức quan sát): phần thưởng Q cho kết quả 1 call
+ * NIM do softmax chọn — nguồn học TRỰC TIẾP của policy. Trước OBS-1: kết quả
+ * call (thành công/thất bại/latency) KHÔNG BAO GIỜ ghi Q → Q≡0 mãi mãi →
+ * seed tất định pick CÙNG một model mỗi session; model hang = kẹt vĩnh viễn
+ * (bằng chứng opus_rev_mvgfjoxn_xgez25: 300s burn, 0 token, verdict FALLBACK).
+ * Thang [-1, 1): fail hạ tầng = -1 (tránh mạnh — đối xứng reward âm salvage
+ * crash alerts.ts); thành công = 1/(1+phút) — nhanh ≈1 (nemotron đo thật
+ * 1.4s), 25s ≈0.71 (review nemotron khoẻ), 99s ≈0.38 (glm-5.3), 252s ≈0.19
+ * (deepseek-v4.1-flash đo thật prompt tầm thường — thành công nhưng chậm
+ * đáng ghi là trải nghiệm kém, không phải trải nghiệm tốt).
+ */
+export function softmaxNimOutcomeReward(ok: boolean, latencyMs: number): number {
+  if (!ok) return -1
+  const latencyMin = Math.max(0, latencyMs) / 60_000
+  return 1 / (1 + latencyMin)
+}
+
+/**
+ * OBS-1: ghi QEntry kết quả call softmax-picked — fire-and-forget, fail-open
+ * tuyệt đối (learning side-channel — KHÔNG BAO GIỜ làm hỏng call chính).
+ * State key = agentRuntimeStateKey() ĐỐI XỨNG với lúc pick (state tổng hợp
+ * mode-agent-tier-1 không phụ thuộc ALS → pick và outcome luôn cùng state).
+ */
+async function recordSoftmaxNimQOutcome(
+  model: string,
+  result: Pick<LLMResult, 'content' | 'error' | 'tool_calls'> | null,
+  latencyMs: number,
+): Promise<void> {
+  try {
+    const ok = Boolean(result && (result.content || (result.tool_calls && result.tool_calls.length > 0)))
+    const reward = softmaxNimOutcomeReward(ok, latencyMs)
+    const { updateQ, agentRuntimeStateKey } = await import('@/lib/learning/q-table')
+    const stateKey = agentRuntimeStateKey()
+    await updateQ(stateKey, model, reward, stateKey)
+    console.log(`[LLM] softmax-nim q-learn model=${model} reward=${reward.toFixed(2)} (${ok ? 'OK' : 'FAIL'} ${(latencyMs / 1000).toFixed(1)}s) → Q(${stateKey})`)
+  } catch (err) {
+    console.warn('[LLM] softmax-nim q-learn lỗi (fail-open):', err instanceof Error ? err.message : String(err))
   }
 }
 
@@ -6273,7 +6347,12 @@ export async function callLLMForAgent(
   if (NVIDIA_AGENT_MODELS.includes(model)) {
     // SOFTMAX-PILOT (2026-10-20): policy on + không có lựa chọn tường minh →
     // softmax chọn model khởi đầu trong NVIDIA_AGENT_MODELS theo Q(s,a).
-    const nimModel = await maybeApplySoftmaxNimPolicy(model, options)
+    // OBS-1 (2026-10-20 — giao thức quan sát): (a) ứng viên bị circuit-breaker
+    // block bị loại khỏi vòng chọn; (b) kết quả call (OK/FAIL + latency) ghi
+    // ngược QEntry → policy HỌC từ trải nghiệm thật thay vì Q≡0 mãi mãi.
+    const nimPolicy = await maybeApplySoftmaxNimPolicy(model, options)
+    const nimModel = nimPolicy.model
+    const nimT0 = Date.now()
     const nimResult = await callModelWithKeyRotation(
       nimModel,
       prompt,
@@ -6281,6 +6360,9 @@ export async function callLLMForAgent(
       options,
       { taskLabel: `agent-nim:${nimModel}` },
     )
+    // OBS-1: Q feedback chỉ khi policy áp dụng (lựa chọn là của policy — lựa
+    // chọn của user thì kết quả không nói gì về policy) — fire-and-forget.
+    if (nimPolicy.applied) void recordSoftmaxNimQOutcome(nimModel, nimResult, Date.now() - nimT0)
     if (nimResult && (nimResult.content || (nimResult.tool_calls && nimResult.tool_calls.length > 0))) {
       const tcCount = nimResult.tool_calls?.length ?? 0
       console.log(`[LLM] Agent dùng NIM ${nimModel} ✓ (${tcCount} tool_calls, ${nimResult.tokensUsed ?? 0} tokens)${options?.agentName ? ` — agent: ${options.agentName}` : ''}`)

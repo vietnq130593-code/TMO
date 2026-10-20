@@ -508,9 +508,16 @@ export async function runOpusReview(
     }
 
     // ━━ F36 FIX: đóng in-memory tracker run ━━
+    // OBS-1 (2026-10-20 — giao thức quan sát): stopReason phân biệt review
+    // FALLBACK (llm.error hạ tầng / parse fail → verdict an toàn nhưng
+    // KHÔNG phải review thật) với review hoàn chỉnh. Trước đây mọi review
+    // fallback ghi 'completed'+'complete' — AgentRunRecord che mất thất bại
+    // (bằng chứng opus_rev_mvgfjoxn_xgez25: 300s burn timeout, 0 token,
+    // verdict FALLBACK vẫn ghi 'completed' — rubric D1.3 không thấy để phân
+    // tích gốc rễ). endAgentRun(sessionId, runId, status, summary?, tokens?, stopReason?).
     try {
       if (trackerRunId) {
-        endAgentRun(sessionId, trackerRunId, failed ? 'error' : 'done')
+        endAgentRun(sessionId, trackerRunId, failed ? 'error' : 'done', undefined, undefined, usedFallback ? 'fallback' : undefined)
       }
     } catch (err) {
       console.warn('[Opus][reviewer] endAgentRun (tracker) lỗi (fail-open):', err instanceof Error ? err.message : String(err))
