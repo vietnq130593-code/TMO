@@ -21,6 +21,9 @@
 
 import { db } from '@/lib/db'
 import { AGENT_PRIMARY_MODEL } from '@/lib/llm'
+// FIX TEAM-MODEL-1 (2026-10-20): model user chọn (team research) ưu tiên trước
+// AgentProfile DB — ALS context, fail-open (xem model-override-context.ts).
+import { currentResearchModelOverride } from './model-override-context'
 
 // ===== AGENT DEFINITION INTERFACE =====
 
@@ -719,6 +722,14 @@ export const RESEARCH_FALLBACK_BRAIN = {
 export async function resolveResearchBrain(
   name: string,
 ): Promise<{ provider: string; model: string }> {
+  // FIX TEAM-MODEL-1 (2026-10-20): model user chọn ở dropdown model indicator
+  // (team research mode) — route wrap flow trong ALS context; ưu tiên TRƯỚC
+  // DB AgentProfile (user chọn phiên này thắng profile mặc định). Fail-open:
+  // không có context → xuống DB như cũ.
+  const chatOverride = currentResearchModelOverride()
+  if (chatOverride?.model) {
+    return { provider: chatOverride.provider || 'nvidia', model: chatOverride.model }
+  }
   try {
     const agent = await db.agentProfile.findFirst({
       where: { name, enabled: true },

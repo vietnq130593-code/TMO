@@ -45,6 +45,9 @@ import { kingFullLifecycle } from '@/lib/research-team/king/engine'
 import type { KingLifecycleEvent } from '@/lib/research-team/king/engine'
 import { submitProposal, approveProposal, rejectProposal } from '@/lib/research-team/proposal/store'
 import { decodeProposal } from '@/lib/research-team/types'
+// FIX TEAM-MODEL-1 (2026-10-20): model user chọn (team research) wrap flow qua
+// ALS — mọi resolveResearchBrain của flow thấy override trước AgentProfile DB.
+import { withResearchModelOverride } from '@/lib/research-team/model-override-context'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 300
@@ -248,7 +251,26 @@ export async function POST(request: NextRequest) {
   const encoder = new TextEncoder()
   let isClosed = false
 
-  const stream = new ReadableStream({
+  // FIX TEAM-MODEL-1 (2026-10-20 — user report "khi chọn team thì không thể chọn
+  // model như khi chọn agent độc lập"): model user chọn ở dropdown model indicator
+  // (team research) → áp cho TOÀN BỘ flow (classify/king/g1/g2/g3/tournament...
+  // qua ALS — resolveResearchBrain thấy override TRƯỚC AgentProfile DB).
+  // Validate mirror code-team route: id chỉ nhận [A-Za-z0-9._/-]; sai format →
+  // warn + bỏ qua (fail-open — model sai không chặn flow).
+  const moRaw = (body as Record<string, unknown>).modelOverride
+  const poRaw = (body as Record<string, unknown>).providerOverride
+  let modelOv: { model: string; provider: string } | undefined
+  if (typeof moRaw === 'string' && moRaw.trim() && /^[A-Za-z0-9._\/-]{1,120}$/.test(moRaw.trim())) {
+    modelOv = {
+      model: moRaw.trim(),
+      provider: typeof poRaw === 'string' && /^[a-z]{2,20}$/.test(poRaw.trim()) ? poRaw.trim() : 'nvidia',
+    }
+    console.log(`[ResearchWorkflowAPI] TEAM-MODEL-1 override: flow chạy trên ${modelOv.provider}/${modelOv.model}`)
+  } else if (typeof moRaw === 'string' && moRaw.trim()) {
+    console.warn(`[ResearchWorkflowAPI] modelOverride "${moRaw.slice(0, 40)}" sai format — bỏ qua (dùng model sẵn từng agent)`)
+  }
+
+  const buildStream = () => new ReadableStream({
     async start(controller) {
       const emit = (event: Record<string, unknown>) => {
         persistTeamEvent(sessionId, event)
@@ -589,6 +611,14 @@ export async function POST(request: NextRequest) {
       console.log(`[ResearchWorkflowAPI] Client disconnected for session ${sessionId} — pipeline tiếp tục nền (events đã persist DB)`)
     },
   })
+
+  // FIX TEAM-MODEL-1: construct stream TRONG ALS context — start() được gọi
+  // ngay trong constructor (WHATWG streams) nên nằm trong context; mọi await
+  // chain bên trong start kế thừa → resolveResearchBrain thấy override.
+  // Không có override → buildStream() thẳng (behavior cũ 100%).
+  const stream = modelOv
+    ? await withResearchModelOverride(modelOv, async () => buildStream())
+    : buildStream()
 
   return new Response(stream, {
     headers: {

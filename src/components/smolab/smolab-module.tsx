@@ -4451,8 +4451,12 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         body.teamMode = 'multi'
         const tl = smolabAgents.find((a: any) => a.team === selectedTeam && a.position === 'TL' && a.enabled)
         if (tl) {
-          body.model = tl.model
-          body.provider = tl.provider
+          // FIX TEAM-MODEL-1: model phiên = dropdown chọn (khởi đầu = TL model
+          // set lúc bấm chọn team) — mirror nhánh single mode ở trên.
+          const effModel = selectedModel || tl.model
+          const chosenOpt = zenModelOptions.find((m: any) => m.id === effModel)
+          body.model = effModel
+          body.provider = chosenOpt?.provider ?? (effModel.includes('/') ? 'nvidia' : tl.provider)
           body.title = `Team ${selectedTeam === 'code' ? 'Code' : 'Research'}`
           body.agentProfileId = tl.id
         }
@@ -4688,6 +4692,18 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         sessionId,
         userRequest: text,
         teamName: selectedTeam || undefined,
+      }
+      // FIX TEAM-MODEL-1 (2026-10-20): user đổi model qua dropdown (khác model
+      // TL) → override cho TOÀN BỘ agents tham gia workflow này (session scope,
+      // KHÔNG đổi AgentProfile DB). Provider suy từ model — mirror khối gửi chat
+      // single mode. Bỏ qua khi trùng model TL (= chưa đổi gì).
+      if (selectedTeam) {
+        const tl = smolabAgents.find((a: any) => a.team === selectedTeam && a.position === 'TL' && a.enabled)
+        if (tl && selectedModel && selectedModel !== tl.model) {
+          const chosenOpt = zenModelOptions.find(m => m.id === selectedModel)
+          workflowBody.modelOverride = selectedModel
+          workflowBody.providerOverride = chosenOpt?.provider ?? (selectedModel.includes('/') ? 'nvidia' : 'zen')
+        }
       }
       // Phase 3: Pass pre-computed routing from TL Assessment if available
       if (routing) {
@@ -5185,7 +5201,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         }, 600)
       }
     }
-  }, [messages, currentSessionId, setCurrentSessionId, setMessages, setInput, setIsLoading, selectedTeam, loadSessionTail])
+  }, [messages, currentSessionId, setCurrentSessionId, setMessages, setInput, setIsLoading, selectedTeam, loadSessionTail, smolabAgents, selectedModel, zenModelOptions])
 
   // ===== RESEARCH TEAM WORKFLOW (Task 19 — user request 2026-09-03) =====
   // Chat Smolab ↔ Team Research (mirror startWorkflow của team code): MỌI
@@ -5242,12 +5258,19 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       const res = await fetch('/api/research-team/workflow', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: chatMessages,
-          sessionId,
-          userRequest: text,
-          teamName: 'research',
-        }),
+        body: JSON.stringify((() => {
+          // FIX TEAM-MODEL-1 (2026-10-20): mirror code team — user đổi model qua
+          // dropdown (khác model TL research) → override cho workflow research
+          // này (session scope, KHÔNG đổi AgentProfile DB).
+          const rb: Record<string, unknown> = { messages: chatMessages, sessionId, userRequest: text, teamName: 'research' }
+          const rtl = smolabAgents.find((a: any) => a.team === 'research' && a.position === 'TL' && a.enabled)
+          if (rtl && selectedModel && selectedModel !== rtl.model) {
+            const chosenOpt = zenModelOptions.find(m => m.id === selectedModel)
+            rb.modelOverride = selectedModel
+            rb.providerOverride = chosenOpt?.provider ?? (selectedModel.includes('/') ? 'nvidia' : 'zen')
+          }
+          return rb
+        })()),
         signal: controller.signal,
       })
 
@@ -5386,7 +5409,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       timedOutRef.current = false
       setIsLoading(inFlightChatsRef.current.has(currentSessionIdRef.current))
     }
-  }, [messages, currentSessionId, setCurrentSessionId, setMessages, setInput, setIsLoading])
+  }, [messages, currentSessionId, setCurrentSessionId, setMessages, setInput, setIsLoading, smolabAgents, selectedModel, zenModelOptions])
 
   // ===== r73 (mục 2 user) — UPLOAD TỆP ĐÍNH KÈM (nút "+") =====
   // Tối đa 4 tệp/lượt chọn (hardcode client; server tự chặn size/mime).
@@ -5705,11 +5728,18 @@ ${manifest}` : rawText
           chatBody.agentMaxTokens = tl.maxTokens
           chatBody.agentProfileId = tl.id
           chatBody.agentProfileName = tl.name
-          chatBody.agentProvider = tl.provider
-          chatBody.agentModel = tl.model
+          // FIX TEAM-MODEL-1 (2026-10-20): mirror single mode — model HIỆU DỤNG
+          // = dropdown chọn (khởi đầu = model TL, set lúc bấm chọn team); đổi
+          // qua dropdown → GHI ĐÈ TL profile cho phiên chat này. Provider suy
+          // từ MODEL được chọn (heuristic dự phòng: id "org/name" = NIM, id
+          // trần = zen) — không theo profile TL (mirror comment R19 single).
+          const effModel = selectedModel || tl.model
+          const chosenOpt = zenModelOptions.find(m => m.id === effModel)
+          chatBody.agentProvider = chosenOpt?.provider ?? (effModel.includes('/') ? 'nvidia' : tl.provider)
+          chatBody.agentModel = effModel
           chatBody.teamMode = 'multi'
           chatBody.teamName = selectedTeam
-          chatBody.model = tl.model
+          chatBody.model = effModel
         }
       }
 
@@ -6470,7 +6500,15 @@ ${manifest}` : rawText
                     {showTeamSelect && (
                       <div data-dropdown-menu onClick={(e) => e.stopPropagation()} className="absolute top-full left-0 right-0 mt-1 z-50 bg-slate-950/95 border border-amber-400/50">
                         <button
-                          onClick={() => { setSelectedTeam('code'); setShowTeamSelect(false) }}
+                          onClick={() => {
+                            setSelectedTeam('code')
+                            setShowTeamSelect(false)
+                            // FIX TEAM-MODEL-1 (2026-10-20): chọn team → set model
+                            // khởi đầu = model TL (mirror single mode chọn agent set
+                            // model agent) — user đổi tiếp qua dropdown model indicator.
+                            const tl = smolabAgents.find((a: any) => a.team === 'code' && a.position === 'TL' && a.enabled)
+                            if (tl) setSelectedModel(tl.model)
+                          }}
                           className={`w-full text-left px-3 py-2 text-xs hover:bg-amber-500/10 transition-colors ${selectedTeam === 'code' ? 'text-amber-400' : 'text-stone-300'}`}
                         >
                           💻 Code
@@ -6482,7 +6520,13 @@ ${manifest}` : rawText
                           </div>
                         </button>
                         <button
-                          onClick={() => { setSelectedTeam('research'); setShowTeamSelect(false) }}
+                          onClick={() => {
+                            setSelectedTeam('research')
+                            setShowTeamSelect(false)
+                            // FIX TEAM-MODEL-1: mirror nút team code ở trên.
+                            const tl = smolabAgents.find((a: any) => a.team === 'research' && a.position === 'TL' && a.enabled)
+                            if (tl) setSelectedModel(tl.model)
+                          }}
                           className={`w-full text-left px-3 py-2 text-xs hover:bg-amber-500/10 transition-colors ${selectedTeam === 'research' ? 'text-amber-400' : 'text-stone-300'}`}
                         >
                           🔬 Research
@@ -6659,14 +6703,20 @@ ${manifest}` : rawText
                   : null
                 const shown = agent || tl
                 if (!shown) return null
-                const overridden = !!(agent && selectedModel && selectedModel !== agent.model)
-                // R19 (2026-10-15 — user report "không thể chọn model trong khung
-                // chat"): trước đây canPick chỉ cho provider 'zen' — mọi agent
-                // chuyển sang nvidia từ R16/R17 → nút DISABLED hoàn toàn. Giờ
-                // mở cho cả zen lẫn nvidia (cả 2 provider VALID_PROVIDERS).
-                // Model chọn ghi đè phiên chat; provider gửi đi được suy từ
-                // MODEL (xem khối gửi chat — không theo profile agent).
-                const canPick = chatMode === 'single' && (shown.provider === 'zen' || shown.provider === 'nvidia')
+                // FIX TEAM-MODEL-1 (2026-10-20 — user report "khi đổi sang chọn
+                // team thì không thể chọn model như khi chọn agent độc lập,
+                // chỉ có model thiết lập sẵn"): trước đây canPick =
+                // chatMode === 'single' && ... → team mode KHÔNG bao giờ cho
+                // chọn model (engine tự dùng AgentProfile model sẵn). Giờ mở
+                // cho CẢ single (agent) lẫn multi (team — shown = TL). Model
+                // khởi đầu = model TL (set lúc bấm chọn team); user đổi qua
+                // dropdown → GHI ĐÈ cho phiên — KHÔNG đổi AgentProfile DB
+                // (giữ nguyên semantic single mode R19).
+                const overridden = !!(shown && selectedModel && selectedModel !== shown.model)
+                // R19 (2026-10-15): provider nào cũng được chọn (zen lẫn nvidia
+                // — VALID_PROVIDERS). Provider gửi đi được suy từ MODEL (xem
+                // khối gửi chat — không theo profile agent).
+                const canPick = shown.provider === 'zen' || shown.provider === 'nvidia'
                 const zenModels = zenModelOptions
                 // R19 — item render dùng chung cho 2 nhóm (OpenCode free /
                 // NVIDIA NIM) — tách hàm để dropdown hiện section header rõ ràng.
@@ -6796,10 +6846,10 @@ ${manifest}` : rawText
                       <span className="flex items-center gap-1.5 flex-wrap">
                         <span>
                           {chatMode === 'single' ? '🤖' : '👥'} Model:{' '}
-                          <span className="text-cyan-300">{chatMode === 'single' ? (selectedModel || shown.model) : shown.model}</span>
+                          <span className="text-cyan-300">{selectedModel || shown.model}</span>
                         </span>
                         {overridden && (
-                          <span className="text-[10px] px-1 py-px bg-amber-500/15 text-amber-300 border border-amber-400/40" title={`Model mặc định của agent: ${agent!.model}`}>
+                          <span className="text-[10px] px-1 py-px bg-amber-500/15 text-amber-300 border border-amber-400/40" title={`Model mặc định: ${shown.model}`}>
                             ⚡ ghi đè
                           </span>
                         )}

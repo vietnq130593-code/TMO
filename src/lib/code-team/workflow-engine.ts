@@ -498,6 +498,28 @@ export interface WorkflowConfig {
    *  still happen. This is the recommended behavior for long-running workflows.
    *  Default: true */
   continueOnDisconnect?: boolean
+  /** FIX TEAM-MODEL-1 (2026-10-20 — user report "khi chọn team thì không thể chọn
+   *  model như khi chọn agent độc lập"): model user chọn trong dropdown model
+   *  indicator của khung chat (team mode) — override model của TOÀN BỘ agents
+   *  tham gia workflow này. Session scope — KHÔNG đổi AgentProfile DB. Bỏ qua
+   *  khi undefined (user không đổi gì → dùng model sẵn của từng agent). */
+  modelOverride?: string
+  /** Provider tương ứng của modelOverride (suy từ catalog id tại client —
+   *  'org/name' = nvidia NIM, id trần = zen). Bắt buộc kèm modelOverride. */
+  providerOverride?: string
+}
+
+/**
+ * FIX TEAM-MODEL-1 (2026-10-20): áp model override lên agent đã resolve —
+ *  thuần hàm (spread + thay model/provider, giữ nguyên temperature/instruction/
+ *  tools... từ AgentProfile). Trả nguyên agent khi không có override (ov rỗng).
+ *  Chấp nhận cả WorkflowConfig lẫn {model, provider} thuần — đọc qua .modelOverride
+ *  nên 2 dạng tương đương (runWorkflow lưu sẵn vào ctx.modelOverride cho các
+ *  helper ngoài scope config: runPipeline / runTLCheckpointVerify).
+ */
+function applyModelOverride<T extends { provider: string; model: string }>(agent: T, ov?: { modelOverride?: string; providerOverride?: string }): T {
+  if (!ov?.modelOverride || !agent) return agent
+  return { ...agent, model: ov.modelOverride, provider: ov.providerOverride || agent.provider }
 }
 
 /** Cached resolved agents for the current workflow run
@@ -687,6 +709,10 @@ export interface WorkflowContext {
   layer9HintsInjected?: number
   /** ROUND-37 V3.1: số lesson episodic đã inject qua PRE-ACT trong run */
   episodicBrainInjected?: number
+  /** FIX TEAM-MODEL-1 (2026-10-20): model user chọn (team mode) — sao chép từ
+   *  WorkflowConfig lúc runWorkflow khởi tạo; runPipeline/runTLCheckpointVerify
+   *  nằm ngoài scope config nhưng có ctx → đọc từ đây. */
+  modelOverride?: { modelOverride?: string; providerOverride?: string }
 }
 
 // ==================== LAYER 9 P1.2 + P1.3 — ERROR TAXONOMY & PATTERN PERSISTENCE ====================
@@ -930,6 +956,11 @@ export async function runWorkflow(
   // Per-workflow context — each workflow run has its own cache
   const ctx: WorkflowContext = {
     resolvedAgentsCache: new Map(),
+    // FIX TEAM-MODEL-1 (2026-10-20): sao chép override từ config vào ctx —
+    // runPipeline/runTLCheckpointVerify ngoài scope config đọc từ ctx.modelOverride.
+    modelOverride: config?.modelOverride
+      ? { modelOverride: config.modelOverride, providerOverride: config.providerOverride }
+      : undefined,
   }
 
   // Load enabled skills once for the entire workflow run — cached in ctx.skillsContext
@@ -1049,7 +1080,7 @@ export async function runWorkflow(
     // If TL is missing from DB, lazy seed from hardcoded definition
     if (isAborted()) { console.log('[Workflow] Aborted before agent resolution'); return }
 
-    const tlResolved = await resolveAgent('TL')
+    const tlResolved = applyModelOverride(await resolveAgent('TL'), ctx.modelOverride)
     ctx.resolvedAgentsCache.set('TL', tlResolved)
 
     if (tlResolved.source === 'missing') {
@@ -1511,7 +1542,7 @@ async function runPipeline(
 
   // Cache resolved agents for use in runAgentStep
   for (const [position, agent] of resolutionResult.agents) {
-    ctx.resolvedAgentsCache.set(position, agent)
+    ctx.resolvedAgentsCache.set(position, applyModelOverride(agent, ctx.modelOverride))
   }
 
   for (let i = 0; i < pipeline.length; i++) {
@@ -3636,7 +3667,7 @@ async function runTLCheckpointVerify(
   const ruleBasedDecision = verifyWorklog(latestWorklog, spec)
 
   // Then, ask TL to verify using LLM for nuanced decision
-  const agentDef = ctx.resolvedAgentsCache.get('TL') || await resolveAgent('TL')
+  const agentDef = applyModelOverride(ctx.resolvedAgentsCache.get('TL') || await resolveAgent('TL'), ctx.modelOverride)
 
   emit({
     type: 'agent_start',
@@ -4147,6 +4178,8 @@ export async function createMinimalWorkflowContext(opts?: {
 }): Promise<WorkflowContext> {
   const ctx: WorkflowContext = {
     resolvedAgentsCache: new Map(),
+    // FIX TEAM-MODEL-1: resumeWorkflow KHÔNG nhận modelOverride (resume chạy
+    // tiếp workflow cũ — model từng agent giữ nguyên như lúc workflow chạy).
   }
   if (!opts?.skipSkills) {
     try {

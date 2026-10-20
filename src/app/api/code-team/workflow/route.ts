@@ -290,7 +290,7 @@ function persistTeamEvent(sessionId: string, event: Record<string, unknown>) {
 }
 
 export async function POST(request: NextRequest) {
-  let body: { messages?: Array<{ role: string; content: string }>; sessionId?: string; userRequest?: string; routing?: Record<string, unknown>; continueOnDisconnect?: boolean; teamName?: string }
+  let body: { messages?: Array<{ role: string; content: string }>; sessionId?: string; userRequest?: string; routing?: Record<string, unknown>; continueOnDisconnect?: boolean; teamName?: string; modelOverride?: string; providerOverride?: string }
 
   try {
     body = await request.json()
@@ -302,6 +302,26 @@ export async function POST(request: NextRequest) {
   }
 
   const { messages = [], sessionId, userRequest, routing: rawRouting, teamName } = body
+
+  // FIX TEAM-MODEL-1 (2026-10-20): model user chọn ở dropdown model indicator
+  // (team mode) → override cho toàn bộ agents của workflow. Validate chặt: id
+  // model chỉ nhận [A-Za-z0-9._/-] (đúng dạng catalog: 'z-ai/glm-5.3-flash',
+  // 'space-bunny-free'...) — sai format → warn + BỎ QUA (graceful, không 400:
+  // model sai không nên chặn toàn bộ workflow).
+  let modelOverride: string | undefined
+  let providerOverride: string | undefined
+  if (typeof body.modelOverride === 'string' && body.modelOverride.trim()) {
+    const mo = body.modelOverride.trim()
+    if (!/^[A-Za-z0-9._\/-]{1,120}$/.test(mo)) {
+      console.warn(`[WorkflowAPI] modelOverride "${mo.slice(0, 40)}" sai format — bỏ qua (dùng model sẵn từng agent)`)
+    } else {
+      modelOverride = mo
+      providerOverride = typeof body.providerOverride === 'string' && /^[a-z]{2,20}$/.test(body.providerOverride.trim())
+        ? body.providerOverride.trim()
+        : undefined
+      console.log(`[WorkflowAPI] TEAM-MODEL-1 override: toàn bộ agents workflow chạy trên ${providerOverride ?? '(provider cũ)'}/${mo}`)
+    }
+  }
 
   // TOMBSTONE GUARD (fix review 2026-09-08 — HIGH): user đã xóa session này →
   // từ chối workflow mới. Trước đây POST workflow upsert agentSession KHÔNG
@@ -460,7 +480,7 @@ export async function POST(request: NextRequest) {
           { messages, sessionId, userRequest, routing },
           emit,
           abortController.signal,
-          { continueOnDisconnect }
+          { continueOnDisconnect, modelOverride, providerOverride }
         )
       } catch (err) {
         if (!isClosed) {
