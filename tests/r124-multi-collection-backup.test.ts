@@ -81,11 +81,23 @@ describe('R124 A · source-scan — multi-collection backup/restore (qdrant-snap
     expect(src).toContain('`${prefix}${ts}.tar`')
   })
 
-  test('A4: legacy dual-write root keys CHỈ theopus_chunks (D0 §7.2 compat)', () => {
+  test('A4: legacy dual-write root keys ĐÃ GỠ (điều kiện ≥2 backup/collection đạt 2026-10-20) — backup KHÔNG ghi root key mới, fallback findBackupKey VẪN còn', () => {
     const src = read(lib)
-    expect(src).toContain('R2_LATEST_KEY')
-    // dual-write chỉ trong nhánh chunks
-    expect(src).toMatch(/collection === getChunksCollection\(\)[\s\S]{0,200}R2_LATEST_KEY|R2_LATEST_KEY[\s\S]{0,200}collection === getChunksCollection\(\)/)
+    // Const legacy latest đã xóa khỏi module (không còn ghi mới root key)
+    expect(src).not.toContain("const R2_LATEST_KEY = 'backups/qdrant/latest.tar'")
+    // Marker ghi nhận việc gỡ (audit trail trong source)
+    expect(src).toContain('dual-write ĐÃ GỠ')
+    // Backup path (backupOneCollection) KHÔNG còn upload root keys — tách vùng
+    // code từ marker BACKUP đến marker RESTORE để không bắt nhầm findBackupKey
+    const backupSection = src.slice(
+      src.indexOf('BACKUP (S1.1'),
+      src.indexOf('RESTORE', src.indexOf('BACKUP (S1.1'))
+    )
+    expect(backupSection).not.toContain('R2_LATEST_KEY')
+    expect(backupSection).not.toMatch(/uploadToR2\(`\$\{R2_PREFIX\}\$\{ts\}\.tar/)
+    // findBackupKey (ngoài vùng backup) vẫn giữ legacy root fallback cho chunks
+    // — đường hồi phục tar cũ trước S1 KHÔNG bị gỡ theo (A7 bắt chi tiết)
+    expect(src).toMatch(/LEGACY root fallback[\s\S]{0,200}getChunksCollection\(\)/)
   })
 
   test('A5: policy restoreIfEmpty — nhánh thuần currentPoints === 0', () => {

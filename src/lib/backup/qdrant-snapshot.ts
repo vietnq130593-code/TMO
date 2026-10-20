@@ -33,11 +33,11 @@
  * -----------------
  *   backups/qdrant/<collection>/{YYYYMMDD-HHMMSS}.tar — versioned (history)
  *   backups/qdrant/<collection>/latest.tar             — overwritten each run
- *   backups/qdrant/{YYYYMMDD-HHMMSS}.tar               — LEGACY dual-write,
- *   backups/qdrant/latest.tar                            chỉ theopus_chunks
- *   (compat D0 §7.2 — tar cũ + curl cũ vẫn hoạt động; điều kiện gỡ dual-write:
- *    ≥2 backup per-collection thành công + docs D0 §7.2 cập nhật; root keys cũ
- *    KHÔNG xóa khỏi R2 — giữ làm đường hồi phục cuối.)
+ *   backups/qdrant/{YYYYMMDD-HHMMSS}.tar + latest.tar  — LEGACY root keys (chỉ
+ *   chunks) — KHÔNG còn được ghi mới (dual-write đã gỡ 2026-10-20 sau khi đạt
+ *   điều kiện ≥2 backup per-collection thành công + docs D0 §7.2 cập nhật);
+ *   root keys cũ GIỮ LẠI trong R2 vĩnh viễn — findBackupKey vẫn fallback về
+ *   root cho chunks (tar cũ trước S1 vẫn restore được).
  *
  * Restore policy (S1.2 — hàm thuần restoreDecision, unit-test r124):
  *   - theopus_chunks / theopus_documents (tĩnh)        → luôn REPLACE
@@ -115,8 +115,6 @@ export function getBackupMaxPoints(): number {
 
 /** R2 prefix cho qdrant snapshots. */
 const R2_PREFIX = 'backups/qdrant/'
-/** Legacy root keys (trước S1 — chỉ chunks) — D0 §7.2 compat, KHÔNG xóa. */
-const R2_LATEST_KEY = 'backups/qdrant/latest.tar'
 
 /** Per-collection prefix: backups/qdrant/<collection>/ */
 function collectionPrefix(collection: string): string {
@@ -345,7 +343,7 @@ async function deleteLocalSnapshot(collection: string, snapshotName: string): Pr
 
 // ==================== BACKUP (S1.1 — multi-collection) ====================
 
-/** Backup 1 collection: snapshot → download → upload per-collection keys (+legacy chunks). */
+/** Backup 1 collection: snapshot → download → upload per-collection keys. */
 async function backupOneCollection(
   collection: string,
   maxPoints: number
@@ -401,20 +399,10 @@ async function backupOneCollection(
     }
     console.log(`[QdrantBackup] Uploaded to R2: ${versionedKey} (${sizeBytes} bytes) + ${prefix}latest.tar`)
 
-    // 4. LEGACY dual-write — chỉ theopus_chunks (D0 §7.2 compat; root keys cũ
-    //    KHÔNG xóa; gỡ dual-write khi ≥2 backup per-collection thành công +
-    //    docs D0 §7.2 cập nhật — blueprint §4-S1.1/§8-10).
-    if (collection === getChunksCollection()) {
-      const legacyVersioned = await uploadToR2(`${R2_PREFIX}${ts}.tar`, buffer, 'application/x-tar')
-      const legacyLatest = await uploadToR2(R2_LATEST_KEY, buffer, 'application/x-tar')
-      if (!legacyVersioned.success || !legacyLatest.success) {
-        console.warn(
-          `[QdrantBackup] Legacy dual-write (root keys) thất bại một phần (non-fatal): ${legacyVersioned.error ?? ''} ${legacyLatest.error ?? ''}`
-        )
-      } else {
-        console.log(`[QdrantBackup] Legacy dual-write OK: ${R2_PREFIX}${ts}.tar + ${R2_LATEST_KEY}`)
-      }
-    }
+    // 4. LEGACY dual-write ĐÃ GỠ (2026-10-20) — điều kiện blueprint §4-S1.1 đạt:
+    //    ≥2 backup per-collection thành công (verify GET snapshot-full byCollection)
+    //    + docs D0 §7.2 cập nhật curl mới. Root keys cũ KHÔNG xóa khỏi R2;
+    //    findBackupKey vẫn fallback root cho chunks (đường hồi 868 chunks).
 
     return {
       collection,

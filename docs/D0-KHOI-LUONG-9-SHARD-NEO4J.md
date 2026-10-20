@@ -301,13 +301,27 @@ kill vô hình giữa các tool call — pm2 là chỗ đứng đúng cho driver
 
 ### 7.2 · Vận hành cho reset sau này
 
+> **Cập nhật 2026-10-20 (BLUEPRINT-BACKUP-GATE S1 — BUG2-304 fix):** backup giờ là
+> **multi-collection (5 collection)**, key per-collection `backups/qdrant/<collection>/{YYYYMMDD-HHMMSS}.tar`
+> + `latest.tar`. Tar legacy root cũ (chỉ chunks, trước S1) **vẫn restore được** qua
+> fallback tự động — dual-write root đã gỡ sau khi đủ ≥2 backup per-collection.
+
 ```bash
-# 1) Backup Qdrant → R2 (tar ~1-3s cho 868 chunks):
+# 1) Backup Qdrant → R2 — 5 collection (chunks/documents/agent_memory/task_context/
+#    episodes), ~10s; collection sống vượt 5000 điểm tự skip + warn (QDRANT_BACKUP_MAX_POINTS):
 curl -X POST 'http://localhost:3000/api/storage/snapshot-full?store=qdrant' --max-time 300
 # 2) Backup SQLite (để cron 03:00 VN tự lo, hoặc chủ động):
 curl -X POST 'http://localhost:3000/api/storage/db-backup' --max-time 600
-# 3) Khi sandbox reset: restore từ R2 (giây) thay vì re-ingest (giờ):
+# 3) Kiểm tra backup có gì (GET — grouping byCollection + point count live từng collection):
+curl -s http://localhost:3000/api/storage/snapshot-full | python3 -m json.tool | head -40
+# 4) Khi sandbox reset: restore từ R2 (giây) thay vì re-ingest (giờ) — mặc định
+#    chunks/documents REPLACE; collection sống (agent_memory/task_context/episodes)
+#    chỉ restore khi ĐANG RỖNG (không đè data mới):
 curl -X POST 'http://localhost:3000/api/storage/restore-full?store=qdrant' --max-time 300
+# 4b) Restore ngày cụ thể (YYYYMMDD) hoặc disaster-recovery force (bỏ policy,
+#     REPLACE mọi collection — chỉ dùng khi data sống bị hỏng, không phải rỗng):
+curl -X POST 'http://localhost:3000/api/storage/restore-full?store=qdrant&date=20261018' --max-time 300
+curl -X POST 'http://localhost:3000/api/storage/restore-full?store=qdrant&force=1' --max-time 300
 ```
 
 ### 7.3 · Hậu D0 R39 (16:20-17:00 UTC 2026-10-18) — user duyệt "1 đến 3"
