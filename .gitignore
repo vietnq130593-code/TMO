@@ -338,3 +338,10 @@ scratch/r24*.png
 # NGOẠI LỆ (S5 BLUEPRINT-BACKUP-GATE): check branch protection đa remote
 # (mirror + origin — 2 tài khoản GitHub) — PAT redact, warn-only/--strict.
 !/scripts/check-branch-protection.mjs
+
+# OBSERVE-PROTOCOL-1 (2026-10-20): artifacts runtime của monitor quan sát live
+# (scripts/observe-live.sh chạy dưới pm2 observe-live) — bằng chứng phiên quan
+# sát giữ trên đĩa, KHÔNG track (tái sinh bằng cách chạy lại script).
+.observe-state/
+observation-live.jsonl
+observation-live.md

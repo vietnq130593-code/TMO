@@ -44,7 +44,7 @@
  */
 
 import { callLLMForAgent, verdictBudget } from '@/lib/llm'
-import { findBalancedJson } from '@/lib/code-team/find-balanced-json'
+import { findBalancedJson, stripReasoningBlocks } from '@/lib/code-team/find-balanced-json'
 
 // Task 20 (2026-09-03): outer timeout của evaluator — phải ≥ worst-case chuỗi
 // fallback NVIDIA (~460s khi 3 lõi đầu hang; prober sẽ trip breaker cho lõi
@@ -86,7 +86,11 @@ Output DUY NHẤT một dòng JSON hợp lệ (KHÔNG markdown fence, KHÔNG gi�
 /** Parse verdict — chống markdown fence + text thừa (mirror parseEvalVerdict) */
 function parseEvaluation(raw: string): DelegationEvaluation | null {
   try {
-    const text = raw.replace(/```(?:json)?/g, '')
+    // F3 (OBS P3 — user duyệt fix F1-F6 2026-10-20): cắt khối reasoning lồng
+    // trong content trước khi tìm JSON — bằng chứng: call ✓ 6,380 tokens nhưng
+    // parse NULL (“trọng tài chưa chấm”) vì prose suy luận quanh JSON làm
+    // findBalancedJson nhặt nhầm vùng mở.
+    const text = stripReasoningBlocks(raw.replace(/```(?:json)?/g, ''))
     const jsonStr = findBalancedJson(text, 'pass')
     if (!jsonStr) return null
     const obj = JSON.parse(jsonStr) as Record<string, unknown>
@@ -231,7 +235,9 @@ SUB-AGENT KẾT THÚC BỞI: ${endedBy}
         // Việt + JSON syntax ≈ 1400+ chars bị truncate ở 700 → JSON hỏng →
         // null (rơi fail-open W2). 1200 ≈ parity goal-loop evaluator.
         // EXECUTION-EFFICIENCY S3.1: model-aware — reasoning model đốt budget
-        // cho suy luận (P3 starvation) → 4× khi model là reasoning (4.800).
+        // cho suy luận (P3 starvation) → 6× khi model là reasoning (7.200 —
+        // F3 nâng từ 4×: 4.800 quan sát thấy VẪN cạn “reasoning 15K chars
+        // chưa kịp viết trả lời”).
         maxTokens: verdictBudget(model, 1200),
         abortCheck,
       }),

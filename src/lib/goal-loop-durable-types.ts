@@ -271,7 +271,12 @@ export const GOAL_LOOP_RESUME_MAX_AGE_MS = Math.max(0, intEnvWithDefault('GOAL_L
  */
 export const GOAL_LOOP_STALL_WARN_MS = intEnvWithDefault('GOAL_LOOP_STALL_WARN_MS', 900000)
 /** Số lần requeue tối đa cho 1 job sau crash (chết vĩnh viễn → failed) */
-export const GOAL_LOOP_MAX_ATTEMPTS = Math.max(1, intEnvWithDefault('GOAL_LOOP_MAX_ATTEMPTS', 2))
+// F6 (OBS P7 — user duyệt fix F1-F6 2026-10-20): default 2 → 5 — môi trường
+// sống có 153 restarts pm2 (MemWatchdog self-exit + reaper sandbox RSS) → 2
+// attempts cạn sau 2 lần restart hạ tầng, job user chết "mồ côi" dù việc còn
+// đang chạy tốt (bằng chứng 2 job cmvgdo1er…/cmvg25p2a…). 5 cho job đủ hơi
+// sống qua chuỗi restart ngắn; .env ghi đè khi cần.
+export const GOAL_LOOP_MAX_ATTEMPTS = Math.max(1, intEnvWithDefault('GOAL_LOOP_MAX_ATTEMPTS', 5))
 /** Throttle ghi checkpoint vào DB (ms) — tránh ghi 50k chars mỗi vòng liên tục */
 export const GOAL_LOOP_CHECKPOINT_MIN_INTERVAL_MS = Math.max(0, intEnvWithDefault('GOAL_LOOP_CHECKPOINT_MIN_INTERVAL_MS', 3000))
 /** Throttle ghi heartbeat (ms) */

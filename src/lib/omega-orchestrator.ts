@@ -40,7 +40,7 @@
 
 import { db } from '@/lib/db'
 import { callLLMForAgent, verdictBudget } from '@/lib/llm'
-import { findBalancedJson } from '@/lib/code-team/find-balanced-json'
+import { findBalancedJson, stripReasoningBlocks } from '@/lib/code-team/find-balanced-json'
 import {
   PROVIDER_MODELS,
   VALID_PROVIDERS,
@@ -255,8 +255,10 @@ Phân tích và đưa ra giải pháp tốt nhất (JSON).`
         // 1.100 cạn → JSON cụt/null → auto-escalate trả rỗng (P3). Brain model
         // đọc từ DB qua resolveOmegaBrain (FB-EE-B-R1-05 fix comment: hiện
         // nemotron-550b — verdictBudget matching theo family nên sống cho cả
-        // hai). Reasoning → 4.000 (S3.1), thường giữ 1.100.
-        maxTokens: verdictBudget(brain.model, CONSULT_MAX_TOKENS, 4_000),
+        // hai). Reasoning → 6.000 (F3 nâng từ 4.000 — OBS P3: consult softmax
+        // re-pick glm-5.3 đốt 1.100→2.200 vẫn cụt reasoning 9.6-15K chars;
+        // cộng guard anti-starvation tại llm.ts khi model phục vụ ≠ cấu hình).
+        maxTokens: verdictBudget(brain.model, CONSULT_MAX_TOKENS, 6_000),
         abortCheck,
       }),
       CONSULT_TIMEOUT_MS,
@@ -272,7 +274,8 @@ Phân tích và đưa ra giải pháp tốt nhất (JSON).`
     // Parse JSON verdict (chống markdown fence)
     let advisory: OmegaAdvisory | null = null
     try {
-      const text = result.content.replace(/```(?:json)?/g, '')
+      // F3 (OBS P3): cắt khối reasoning lồng trong content trước khi tìm JSON
+      const text = stripReasoningBlocks(result.content.replace(/```(?:json)?/g, ''))
       const jsonStr = findBalancedJson(text, 'diagnosis') || findBalancedJson(text, 'recommendation')
       if (jsonStr) {
         const obj = JSON.parse(jsonStr) as Record<string, unknown>

@@ -3910,9 +3910,14 @@ async function executeToolImpl(
             // delegationArtifacts (goal-loop) + fallback deterministic (S8).
             subRunId: outcome.subRunId,
             error: outcome.error,
+            // F1 (OBS P1 — user duyệt fix F1-F6 2026-10-20): hint nêu rõ endedBy
+            // THẬT thay vì generic "Delegate thất bại" — bằng chứng job Omega
+            // cmvghpzbv…kn6dj1: parent nhận generic → hiểu "chưa có gì" → tự làm
+            // lại từ đầu + đổ lỗi delegation, trong khi report/evidence phần ĐÃ
+            // làm vẫn trả về đầy đủ. Hint mới chỉ đường đọc report + gaps.
             hint: outcome.success
               ? undefined
-              : 'Delegate thất bại — bạn có thể tự làm trực tiếp bằng tools của mình, hoặc delegate lại agent khác.',
+              : `Delegate kết thúc bởi "${outcome.endedBy}"${outcome.error ? ` — lỗi: ${String(outcome.error).slice(0, 160)}` : ''}. Báo cáo + bằng chứng phần ĐÃ làm nằm trong "report"/"evidence" dưới đây — ĐỌC trước khi hành động: phần còn thiếu xem "evaluation.gaps" (nếu trọng tài chấm) rồi giao lại ĐÚNG phần đó (kèm gaps) hoặc tự làm tiếp bằng tools của mình; tránh làm lại từ đầu những gì đã xong.`,
           }
         } catch (err) {
           result = { success: false, error: `delegate_task lỗi: ${err instanceof Error ? err.message : String(err)}` }

@@ -91,3 +91,20 @@ export function findBalancedJson(text: string, requiredKey: string): string | nu
 
   return null
 }
+
+/**
+ * F3 (OBS P3 — user duyệt fix F1-F6 2026-10-20): cắt khối reasoning mà model
+ * lồng vào CONTENT trước khi parse verdict JSON. Bằng chứng (phiên quan sát
+ * OBSERVE-PROTOCOL-1): trọng tài delegation call ✓ 6,380 tokens nhưng parse
+ * NULL — model reasoning viết suy luận dài trong content quanh JSON; các dấu
+ * '{' rác/không cân bằng trong prose suy luận làm findBalancedJson (đi ngược
+ * từ key về brace mở) nhặt nhầm vùng → JSON.parse fail → "trọng tài chưa
+ * chấm". Chỉ cắt khối ĐÃ ĐÓNG (an toàn: JSON nằm sau khối think đóng vẫn được
+ * tìm thấy bình thường); text không có khối reasoning → trả NGUYÊN VẸN.
+ * Pure function — không throw.
+ */
+export function stripReasoningBlocks(text: string): string {
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/<reasoning>[\s\S]*?<\/reasoning>/gi, '')
+}

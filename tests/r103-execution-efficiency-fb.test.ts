@@ -7,9 +7,12 @@
  *      model-string ngắn 'glm-5.3-flash' phải match (bản trước entry có prefix
  *      'z-ai/glm-5.3-flash' → short name match=false → verdictBudget trả base
  *      → S3.1 tắt âm thầm).
- *   B. FB-EE-B-R1-04 + S3.1 — verdictBudget: reasoning 4× base; override 0 bị
+ *   B. FB-EE-B-R1-04 + S3.1 — verdictBudget: reasoning ×base; override 0 bị
  *      BỎ (bản trước 0 ?? base*4 → Math.max(0, base) = base — S3.1 tắt ngầm);
  *      NaN → 0 (không rò NaN xuống LLM call).
+ *      [PIN UPDATE F3 2026-10-20 — OBS P3, user duyệt fix F1-F6: multiplier
+ *      4× → 6× — 4.800 quan sát thấy VẪN cạn “reasoning 15K chars chưa kịp
+ *      viết trả lời”. Chi tiết: tests/r134-verdict-budget-f3.test.ts]
  *   C. FB-EE-B-R1-01 (consumer side) — buildDelegationOutcomeThought render
  *      dòng 📌 context_recall khi tool result có subRunId (delegate_task) và
  *      subRef từng item (dispatch_agents_parallel). Trước fix: KHÔNG đường
@@ -60,19 +63,19 @@ describe('FB-EE-R1 · isReasoningModel matching 2 chiều (B-R1-02)', () => {
 
 // ============ B. verdictBudget — guard + 4× reasoning (FB-EE-B-R1-04) ============
 describe('FB-EE-R1 · verdictBudget guard (B-R1-04)', () => {
-  test('reasoning model → 4× base (S3.1: 2000 → 8000)', () => {
-    expect(verdictBudget('z-ai/glm-5.3-flash', 2000)).toBe(8000)
-    expect(verdictBudget('glm-5.3-flash', 2000)).toBe(8000) // short name — trước fix trả 2000
+  test('reasoning model → 6× base (F3 PIN UPDATE: 2000 → 12000; trước F3 ×4 = 8000)', () => {
+    expect(verdictBudget('z-ai/glm-5.3-flash', 2000)).toBe(12000)
+    expect(verdictBudget('glm-5.3-flash', 2000)).toBe(12000) // short name — trước fix trả 2000
   })
   test('model thường → base nguyên', () => {
     expect(verdictBudget('nvidia/nemotron-3-ultra-550b-a55b', 2000)).toBe(2000)
     expect(verdictBudget(null, 2000)).toBe(2000)
   })
-  test('override dương được tôn trọng (consult 1100 → 4000)', () => {
-    expect(verdictBudget('z-ai/glm-5.3-flash', 1100, 4000)).toBe(4000)
+  test('override dương được tôn trọng (consult 1100 → 6000 theo F3)', () => {
+    expect(verdictBudget('z-ai/glm-5.3-flash', 1100, 6000)).toBe(6000)
   })
-  test('override 0 bị BỎ — rơi về 4× base (bản trước: 0 ?? base*4 → max(0,base) = base — S3.1 tắt ngầm)', () => {
-    expect(verdictBudget('z-ai/glm-5.3-flash', 1100, 0)).toBe(4400)
+  test('override 0 bị BỎ — rơi về 6× base (F3) (bản trước: 0 ?? base*4 → max(0,base) = base — S3.1 tắt ngầm)', () => {
+    expect(verdictBudget('z-ai/glm-5.3-flash', 1100, 0)).toBe(6600)
   })
   test('NaN base → 0 (bản trước trả NaN rò xuống LLM call)', () => {
     expect(verdictBudget('z-ai/glm-5.3-flash', Number.NaN)).toBe(0)

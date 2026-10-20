@@ -483,10 +483,12 @@ export function isReasoningModel(model: string | null | undefined): boolean {
 /**
  * S3.1 — budget model-aware cho các đường CHẤM ĐIỂM/TỔNG KẾT (evaluator chu kỳ,
  * trọng tài delegation, consult Omega, final report). Reasoning model →
- * 4× base (vượt hẳn lớp ×2 nội bộ R25 mà quan sát R41-OBSV1 cho thấy vẫn cạn:
- * 4.000 không đủ → 8.000 cho evaluator); model thường → base (không đổi hành
- * vi). reasoningTokens cho phép caller ghi đè mức reasoning riêng (vd consult
- * 1.100 → 4.000 theo blueprint S3.1).
+ * 6× base (F3 — OBS P3, user duyệt fix F1-F6 2026-10-20: nâng từ 4× — bằng
+ * chứng quan sát: 1.200→4.800 VẪN cạn “reasoning 15K chars chưa kịp viết
+ * trả lời”, consult 1.100→2.200 reasoning 9.6-15K chars → JSON verdict cụt,
+ * trọng tài “chưa chấm”); model thường → base (không đổi hành vi).
+ * reasoningTokens cho phép caller ghi đè mức reasoning riêng (vd consult
+ * 1.100 → 6.000 theo F3).
  */
 export function verdictBudget(model: string | null | undefined, baseTokens: number, reasoningTokens?: number): number {
   // FB-EE-B-R1-04 (fixbug EE vòng R1): guard đầu vào — NaN → 0 (không truyền
@@ -498,9 +500,26 @@ export function verdictBudget(model: string | null | undefined, baseTokens: numb
   if (!isReasoningModel(model)) return Math.floor(baseTokens)
   const reasoning = Number.isFinite(reasoningTokens) && (reasoningTokens as number) > 0
     ? (reasoningTokens as number)
-    : baseTokens * 4
+    : baseTokens * 6
   return Math.max(Math.floor(reasoning), Math.floor(baseTokens))
 }
+
+/**
+ * F3 (OBS P3 — user duyệt fix F1-F6 2026-10-20): sàn max_tokens cho model
+ * REASONING trên đường NIM khi caller truyền budget NHỎ. Bằng chứng mismatch:
+ * consult Omega tính verdictBudget theo model CẤU HÌNH (brain=nemotron →
+ * 1.100) nhưng softmax re-pick glm-5.3 (reasoning) → reasoning đốt sạch
+ * 1.100 → length_exceeded 1.100→2.200 (R25 retry ×2) vẫn cụt → JSON verdict
+ * null. Caller không thể biết trước model softmax sẽ chọn → guard đặt tại
+ * TẦNG PHỤC VỤ: model reasoning + maxTokens dương nhỏ hơn sàn → nâng lên sàn
+ * (mirror anti-starvation đường Zen: effort max/xhigh + max_tokens nhỏ → bỏ
+ * giới hạn output). Env NIM_REASONING_MIN_OUTPUT_TOKENS (mặc định 6.000,
+ * floor 1.000).
+ */
+const NIM_REASONING_MIN_OUTPUT_TOKENS = Math.max(
+  1_000,
+  parseInt(process.env.NIM_REASONING_MIN_OUTPUT_TOKENS || '6000', 10) || 6_000,
+)
 
 /**
  * SLOW-NIM-MODEL TIMEOUT RIÊNG (khái quát hóa KIMI_K3_TIMEOUT_MS cũ — user
@@ -3863,11 +3882,17 @@ export async function callLLMSlot(
  * lặp lại suốt budget 15 phút → terminal spam 429 "ngay cả khi không làm
  * việc với các agent" (agents đã trả lời xong từ lâu).
  *
- * CHÍNH SÁCH (2026-11-30): utility nền KHÔNG dùng lõi NIM (NIM dễ 429 kéo dài
- * với tác vụ nền dài — chỉ dành embed + extraction + kimi-k3 agent tạm thời).
- * Utility route qua chuỗi Zen (UTILITY_ZEN_MODEL, mặc định space-bunny-free).
+ * CHÍNH SÁCH (2026-11-30 → F4 2026-10-20): utility nền trước đây chỉ dùng
+ * chuỗi Zen (UTILITY_ZEN_MODEL) — chính sách đó LỖI THỜI vì Zen chết toàn bộ
+ * (space-bunny-free 410 Gone / minimax-m3.1-flash 403 — probe 2026-10-20):
+ * 100% utility call fail-open âm thầm (memory-extraction / writeback /
+ * context-compression — bằng chứng job Omega cmvghpzbv…kn6dj1: episode
+ * FAILURE không trích xuất được lesson). F4 (OBS P5 — user duyệt fix
+ * F1-F6): NIM nemotron-550b (model khoẻ nhất đo thật 0.7-1.4s, non-reasoning
+ * không starve budget nhỏ của caller) là PRIMARY; Zen HTTP → CLI chỉ còn
+ * fallback (nếu hồi sinh). Override qua env UTILITY_NIM_MODEL.
  * Lịch sử: trước đây dùng chuỗi extraction NIM nemotron→gpt-oss (directive
- * 2026-09-06) — gpt-oss đã EOL 410, NIM giờ ưu tiên cho extraction chính.
+ * 2026-09-06) — gpt-oss đã EOL 410.
  */
 export async function callUtilityLLM(
   prompt: string,
@@ -3879,7 +3904,31 @@ export async function callUtilityLLM(
 
   console.log(`[LLM] Utility core Task: ${taskLabel}, Prompt: ${prompt.slice(0, 80)}...`)
 
-  // ===== OPENCODE ZEN UTILITY PATH (FIX 2026-09-25 — E2E tool audit) =====
+  // abortCheck (nếu caller truyền) — F4 chuyển LÊN TRƯỚC (bỏ phí cả chuỗi NIM)
+  if (options?.abortCheck && options.abortCheck()) {
+    return {
+      content: '',
+      provider: 'none',
+      model: 'none',
+      error: `Utility "${taskLabel}" aborted by caller`,
+    }
+  }
+
+  // ===== F4 (OBS P5 — user duyệt fix F1-F6 2026-10-20): NIM UTILITY PRIMARY =====
+  const utilNimModel = process.env.UTILITY_NIM_MODEL || NEMOTRON_550B_NIM_ID
+  try {
+    const nim = await callModelWithKeyRotation(utilNimModel, prompt, systemPrompt, options, { taskLabel: `utility-nim:${taskLabel}` })
+    if (nim && nim.content) {
+      console.log(`[LLM] Utility-core dùng NIM ${utilNimModel} ✓ (${nim.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
+      return nim
+    }
+    console.warn(`[LLM] Utility-core NIM ${utilNimModel} thất bại — thử Zen (fallback F4): ${String(nim?.error || 'null result').slice(0, 120)}`)
+  } catch (nimErr) {
+    console.warn(`[LLM] Utility-core NIM ${utilNimModel} throw — thử Zen (fallback F4): ${nimErr instanceof Error ? nimErr.message : String(nimErr)}`)
+  }
+
+  // ===== OPENCODE ZEN UTILITY FALLBACK (FIX 2026-09-25 — E2E tool audit;
+  // F4 2026-10-20 đổi vai trò: PRIMARY → FALLBACK khi Zen chết toàn bộ) =====
   // Trước đây chỉ có NIM (key chết) → goal-loop-context-compression /
   // memory-extraction / writeback-extraction mỗi lần đốt ~60s chờ cooldown
   // NIM rồi fail-open. Route qua Zen HTTP → OpenCode CLI như callLLM.
@@ -3890,9 +3939,7 @@ export async function callUtilityLLM(
   // utility call rơi xuống failover. Cộng thêm failover chạy effort=max (map
   // mặc định) kèm maxTokens nhỏ của caller (compression 700) → reasoning nuốt
   // hết budget → content rỗng → TOÀN BỘ utility LLM fail-open âm thầm
-  // (compression LLM 0/15 thành công — heuristic cứu). Giờ: model chính =
-  // space-bunny + effort='low' (tác vụ cơ khí — verified: prompt 120k chars,
-  // reasoning chỉ 88 tokens, digest đủ dùng, nhanh gấp ~2-4x effort max).
+  // (compression LLM 0/15 thành công — heuristic cứu).
   // Override qua env UTILITY_ZEN_MODEL (đặt model khác nếu policy Zen đổi).
   if (isZenConfigured() && !options?.skipZenUtility) {
     const utilModel = process.env.UTILITY_ZEN_MODEL || 'space-bunny-free'
@@ -3933,10 +3980,10 @@ export async function callUtilityLLM(
       console.log(`[LLM] Utility-core dùng OpenCode CLI ${utilModel} ✓ (${cliResult.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
       return cliResult
     }
-    // R19 (2026-10-15 — user directive bỏ model fallback): model utility fail
-    // cả HTTP + CLI → trả lỗi NGAY (bỏ ZEN FAILOVER + NIM RESCUE cũ) — caller
-    // fail-open như thiết kế, KHÔNG âm thầm đổi model.
-    console.warn(`[LLM] Utility-core "${taskLabel}": model ${utilModel} thất bại (HTTP + CLI — không fallback R19) — caller sẽ fail-open: ${String(zen?.error || cliResult?.error || 'unknown').slice(0, 150)}`)
+    // R19 (2026-10-15 — user directive bỏ model fallback): KHÔNG fallback
+    // model thứ 3. F4: đến đây nghĩa là NIM primary + Zen HTTP + CLI đều
+    // thất bại → trả lỗi NGAY — caller fail-open như thiết kế.
+    console.warn(`[LLM] Utility-core "${taskLabel}": NIM ${utilNimModel} + Zen ${utilModel} đều thất bại (không fallback R19) — caller sẽ fail-open: ${String(zen?.error || cliResult?.error || 'unknown').slice(0, 150)}`)
     // OBS-V3 H7 (R34) — nguồn LLM utility chết (tiền lệ: Zen 403 FreeTierError
     // làm utility cores fail-open âm thầm R32) → thành sự kiện model.failover
     emitModelFailoverObs({
@@ -3948,36 +3995,28 @@ export async function callUtilityLLM(
     })
     return {
       content: '',
-      provider: 'zen',
-      model: utilModel,
-      error: `Utility-core "${taskLabel}" thất bại (model ${utilModel} HTTP + CLI — không tự fallback R19): ${String(zen?.error || cliResult?.error || 'unknown').slice(0, 300)}`,
+      provider: 'nvidia',
+      model: utilNimModel,
+      error: `Utility-core "${taskLabel}" thất bại (NIM ${utilNimModel} + Zen ${utilModel} HTTP/CLI — không fallback thêm R19): ${String(zen?.error || cliResult?.error || 'unknown').slice(0, 300)}`,
     }
   }
 
-  // abortCheck (nếu caller truyền)
-  if (options?.abortCheck && options.abortCheck()) {
-    return {
-      content: '',
-      provider: 'none',
-      model: 'none',
-      error: `Utility "${taskLabel}" aborted by caller`,
-    }
-  }
-
-  // Zen chưa cấu hình — trả lỗi rõ ràng (utility là fail-open: caller tự bỏ qua)
-  console.warn(`[LLM] Utility "${taskLabel}": Zen chưa cấu hình — NIM đã gỡ (Task 33)`)
+  // F4: NIM primary thất bại + Zen chưa cấu hình → lỗi rõ ràng (utility là
+  // fail-open: caller tự bỏ qua)
+  console.warn(`[LLM] Utility "${taskLabel}": NIM ${utilNimModel} thất bại + Zen chưa cấu hình — caller fail-open`)
   return {
     content: '',
-    provider: 'none',
-    model: 'none',
-    error: 'OpenCode Zen chưa cấu hình (set ZEN_API_KEY_1/2 trong .env) — utility không còn đường NIM (Task 33)',
+    provider: 'nvidia',
+    model: utilNimModel,
+    error: `Utility "${taskLabel}" thất bại (NIM ${utilNimModel} + Zen chưa cấu hình — không fallback thêm R19)`,
   }
 }
 
 /**
- * Legacy LLM call — giờ route qua OPENCODE ZEN (Task 33 — NIM đã gỡ khỏi
- * tác vụ agents/utility; NIM chỉ còn lõi embed). Chuỗi: (model override nếu
- * có) → Zen HTTP → OpenCode CLI → ZEN FAILOVER space-bunny → error.
+ * Legacy LLM call — F4 (2026-10-20): route qua lõi utility NIM-primary CHUNG
+ * với callUtilityLLM (NIM nemotron → Zen HTTP → OpenCode CLI → error — chi
+ * tiết + bằng chứng xem callUtilityLLM). Model override (options.model) giữ
+ * nguyên ưu tiên — dùng cho eval harness (judges không được đổi model).
  * Use this for non-extraction tasks (chat queries, classification, health checks).
  */
 export async function callLLM(
@@ -4010,64 +4049,13 @@ export async function callLLM(
     }
   }
 
-  // ===== OPENCODE ZEN UTILITY PATH (FIX 2026-09-25 — E2E tool audit) =====
-  // decompose_task/summarize/synthesize và các utility callLLM() trước đây chỉ có
-  // đường NIM (key placeholder chết) → mất ~60s rồi trả content rỗng
-  // ("LLM did not return valid JSON" / summary:""). Giờ route qua Zen HTTP →
-  // OpenCode CLI (cùng chuỗi callLLMForAgent dùng).
-  // TASK 55 (2026-09-28): model utility mặc định ĐỔI nemotron-3.5-lightning-free →
-  // space-bunny-free + effort 'low' — xem giải thích đầy đủ ở callUtilityLLM
-  // (nemotron 403 vĩnh viễn; failover effort=max + maxTokens nhỏ = rỗng).
-  // Override qua env UTILITY_ZEN_MODEL. skipZenUtility: caller đã thử zen xong.
-  if (isZenConfigured() && !options?.skipZenUtility) {
-    const utilModel = process.env.UTILITY_ZEN_MODEL || 'space-bunny-free'
-    // USER DIRECTIVE 2026-09-28: bỏ ép effort 'low' của Task 55 — space-bunny
-    // LUÔN max effort; chống reasoning starvation do callZenProvider đảm nhiệm
-    // (bỏ max_tokens khi effort max/xhigh). Override qua env UTILITY_ZEN_MODEL.
-    // skipZenUtility: caller đã thử zen xong.
-    const utilOptions: LLMCallOptions = {
-      ...options,
-    }
-    let zen = await callZenProvider(prompt, systemPrompt, utilModel, utilOptions, `utility:${taskLabel}`)
-    // ROUND-7: retry empty-response/5xx 1 lần — mirror utility-core + agent path
-    // (reasoning starvation từng giết 15/15 compression call — TASK 55).
-    if (zen && !zen.content
-        && /HTTP 5\d\d|Zen empty response/i.test(zen.error ?? '')) {
-      const isEmptyResponse = /Zen empty response/i.test(zen.error ?? '')
-      const retryOpts = isEmptyResponse && !utilOptions?.reasoningEffort
-        ? { ...utilOptions, reasoningEffort: 'high' }
-        : utilOptions
-      console.warn(`[LLM] Utility Zen ${utilModel} ${isEmptyResponse ? 'reasoning starvation (0 content)' : 'HTTP 5xx'} (lần 1) — retry 1 lần${isEmptyResponse ? ' effort→high' : ' key kế'} — task: ${taskLabel}: ${String(zen.error).slice(0, 100)}`)
-      zen = await callZenProvider(prompt, systemPrompt, utilModel, retryOpts, `utility-retry:${taskLabel}`)
-    }
-    if (zen && zen.content) {
-      console.log(`[LLM] Utility dùng Zen ${utilModel} ✓ (${zen.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
-      return zen
-    }
-    console.warn(`[LLM] Utility Zen HTTP ${utilModel} thất bại — thử OpenCode CLI: ${(zen?.error || 'unknown').slice(0, 100)}`)
-    const cliResult = await callOpenCodeCLIProvider(prompt, systemPrompt, utilModel, utilOptions, `utility:${taskLabel}`)
-    if (cliResult && cliResult.content) {
-      console.log(`[LLM] Utility dùng OpenCode CLI ${utilModel} ✓ (${cliResult.tokensUsed ?? 0} tokens) — task: ${taskLabel}`)
-      return cliResult
-    }
-    // R19 (2026-10-15 — user directive bỏ model fallback): bỏ ZEN FAILOVER +
-    // NIM RESCUE cũ — model fail cả HTTP + CLI → trả lỗi NGAY kèm nguyên nhân.
-    console.warn(`[LLM] Utility "${taskLabel}": model ${utilModel} thất bại (HTTP + CLI — không fallback R19): ${String(zen?.error || cliResult?.error || 'unknown').slice(0, 150)}`)
-    return {
-      content: '',
-      provider: 'zen',
-      model: utilModel,
-      error: `Utility "${taskLabel}" thất bại (model ${utilModel} HTTP + CLI — không tự fallback R19): ${String(zen?.error || cliResult?.error || 'unknown').slice(0, 300)}`,
-    }
-  }
-
-  // Zen chưa cấu hình (không có ZEN_API_KEY nào) — trả lỗi rõ ràng
-  return {
-    content: '',
-    provider: 'none',
-    model: 'none',
-    error: 'OpenCode Zen chưa cấu hình (set ZEN_API_KEY_1/2 trong .env) — NIM đã ngừng dùng cho LLM (Task 33), chỉ còn vai trò lõi embed',
-  }
+  // ===== F4 (OBS P5 — 2026-10-20): utility path dùng chung lõi NIM-primary
+  // với callUtilityLLM (NIM → Zen HTTP → CLI → error). decompose_task /
+  // summarize / synthesize / classification legacy trước đây chỉ có đường
+  // Zen space-bunny-free — Zen chết toàn bộ (410/403) → fail-open âm thầm.
+  // skipZenUtility được tôn trọng (caller đã tự thử Zen xong);
+  // abortCheck được callUtilityLLM kiểm tra ngay đầu chuỗi.
+  return callUtilityLLM(prompt, systemPrompt, task, options)
 }
 
 // ==================== AGENT-SPECIFIC CALL (Phase 3) ====================
@@ -6352,12 +6340,21 @@ export async function callLLMForAgent(
     // ngược QEntry → policy HỌC từ trải nghiệm thật thay vì Q≡0 mãi mãi.
     const nimPolicy = await maybeApplySoftmaxNimPolicy(model, options)
     const nimModel = nimPolicy.model
+    // F3: mismatch budget — model cấu hình (caller tính verdictBudget theo nó)
+    // có thể KHÁC model softmax thực phục vụ → model reasoning nhận budget
+    // tính cho model thường → starvation (length_exceeded, JSON cụt). Nâng
+    // lên sàn anti-starvation — log ghi rõ nguồn gốc sự chênh lệch.
+    let nimOptions = options
+    if (isReasoningModel(nimModel) && options?.maxTokens && options.maxTokens > 0 && options.maxTokens < NIM_REASONING_MIN_OUTPUT_TOKENS) {
+      nimOptions = { ...options, maxTokens: NIM_REASONING_MIN_OUTPUT_TOKENS }
+      console.warn(`[LLM] anti-starvation (F3): model phục vụ ${nimModel} là reasoning nhưng maxTokens=${options.maxTokens} (caller tính theo model cấu hình "${model}") → nâng lên ${NIM_REASONING_MIN_OUTPUT_TOKENS} — reasoning đốt chung pool max_tokens trước khi viết trả lời`)
+    }
     const nimT0 = Date.now()
     const nimResult = await callModelWithKeyRotation(
       nimModel,
       prompt,
       systemPrompt,
-      options,
+      nimOptions,
       { taskLabel: `agent-nim:${nimModel}` },
     )
     // OBS-1: Q feedback chỉ khi policy áp dụng (lựa chọn là của policy — lựa

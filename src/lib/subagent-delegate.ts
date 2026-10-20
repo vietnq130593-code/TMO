@@ -44,7 +44,10 @@
  *     thiếu, không phải tín hiệu tự làm thay).
  *   · iteration_limit → success GIỮ true (partial work IS delivered — kèm
  *     report wrap-up + evidence); evaluation.pass=false + gaps chỉ thị phần
- *     chưa xong để parent giao lại.
+ *     chưa xong để parent giao lại. F1 (OBS P1 2026-10-20): token_budget cùng
+ *     semantics delivery này — hết token vẫn ĐÃ trả report + evidence dùng
+ *     được (mirror iteration_limit/stall_brake; timeout/error/cancelled giữ
+ *     false — run không trọn vẹn).
  *   · W2 (fail-open transparency): evaluator null (lỗi/timeout/JSON hỏng) →
  *     outcome.evaluationMissing=true + ghi chú ⚠ trong report — parent biết
  *     kết quả CHƯA được trọng tài xác nhận (fail-open giữ nguyên design).
@@ -1854,8 +1857,19 @@ async function runSubAgentForProfileInner(params: {
     // chỉ đang quay vòng — wrap-up tổng hợp là đúng semantics (mirror iteration_limit)
     const needWrapUp = state.forceWrapUp || state.endedBy === 'iteration_limit' || state.endedBy === 'stall_brake' || state.endedBy === 'token_budget' || state.endedBy === 'timeout' || (state.endedBy === 'error' && (state.lastContent || evidence.length > 0))
 
-    // CI-1: token budget = 0 (unlimited) → luôn cho wrap-up (không so với 0 + 5k)
-    if (needWrapUp && !isCancelled() && !timedOut && (SUBAGENT_TOKEN_BUDGET === 0 || tokensUsed < SUBAGENT_TOKEN_BUDGET + 5_000)) {
+    // CI-1: token budget = 0 (unlimited) → luôn cho wrap-up (không so với 0 + 5k).
+    // F1 (OBS P1 — user duyệt fix F1-F6 2026-10-20): nới grace wrap-up. Bằng
+    // chứng ALISTA (job Omega cmvghpzbv…kn6dj1): 83,865 tokens ≥ budget 45,000
+    // + 5,000 → wrap-up BỊ SKIP → report không nén, parent nhận bản thô dài.
+    // Nới 2 lớp: (a) grace +40% budget; (b) CÓ evidence/lastContent → LUÔN
+    // wrap-up (bằng chứng trong tay đáng 900 tokens tổng kết — chìa khóa
+    // context isolation). Chỉ skip khi KHÔNG có gì để tổng kết VÀ vượt 1.4×.
+    const wrapUpWorthIt = SUBAGENT_TOKEN_BUDGET === 0
+      || tokensUsed < SUBAGENT_TOKEN_BUDGET + 5_000
+      || tokensUsed < SUBAGENT_TOKEN_BUDGET * 1.4
+      || evidence.length > 0
+      || !!(state.lastContent || '').trim()
+    if (needWrapUp && !isCancelled() && !timedOut && wrapUpWorthIt) {
       // 1 call ép tổng kết ngắn — parent nhận báo cáo cô đọng thay vì
       // lastContent dài (đây là chìa khóa context isolation).
       try {
@@ -1925,14 +1939,22 @@ async function runSubAgentForProfileInner(params: {
     //     thị phần chưa xong để parent RE-DELEGATE remainder (không còn bị
     //     ép false như bản cũ :918-921 — chính là vòng lặp reinforcement
     //     chống-delegate mà Task G phát hiện).
-    //   · timeout/token_budget/error/cancelled → false (run không trọn vẹn —
-    //     parent nhận report/evidence + hint giao lại kèm gaps).
+    //   · token_budget → PARTIAL WORK IS DELIVERED = true — F1 (OBS P1, user
+    //     duyệt fix F1-F6 2026-10-20): mirror iteration_limit. Bằng chứng
+    //     ALISTA: 84K tokens công sức, endedBy=token_budget, report PARTIAL
+    //     conf 0.70 + evidence đầy đủ NHƯNG success=false → parent (Omega)
+    //     nhận ✗ generic → đổ lỗi delegation + không truy hồi findings —
+    //     vòng reinforcement chống-delegate Task G LẶP LẠI cho token_budget.
+    //     Chất lượng phần chưa xong vẫn do evaluation.pass/gaps phán — tách bạch.
+    //   · timeout/error/cancelled → false (run không trọn vẹn — parent nhận
+    //     report/evidence + hint giao lại kèm gaps).
     // Chất lượng kết quả nằm ở outcome.evaluation (pass/gaps) — tách bạch.
     const deliveredUsableResults = successfulToolCalls > 0 || report.trim().length > 0
     const outcome: SubAgentOutcome = {
       // r60 (A3) — stall_brake cùng semantics delivery với iteration_limit:
       // kết quả dùng được vẫn trả về parent (evaluation.pass/gaps phản ánh phần chưa xong)
-      success: (state.endedBy === 'concluded' || state.endedBy === 'iteration_limit' || state.endedBy === 'stall_brake') && deliveredUsableResults,
+      // F1: token_budget gia nhập cùng nhóm (xem comment IMP-1 phía trên)
+      success: (state.endedBy === 'concluded' || state.endedBy === 'iteration_limit' || state.endedBy === 'stall_brake' || state.endedBy === 'token_budget') && deliveredUsableResults,
       agent: profile.name,
       position: '-',
       report,

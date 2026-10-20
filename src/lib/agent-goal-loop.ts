@@ -78,7 +78,7 @@ import {
 // TASK 43 — Agent Event Bus: emit sự kiện vòng đời run lên bus hợp nhất
 // (GET /api/agent-events) — fail-open tuyệt đối bên trong emit (try/catch).
 import { emitAgentEvent } from '@/lib/agent-event-bus'
-import { findBalancedJson } from '@/lib/code-team/find-balanced-json'
+import { findBalancedJson, stripReasoningBlocks } from '@/lib/code-team/find-balanced-json'
 import {
   startAgentRun,
   endAgentRun,
@@ -1586,7 +1586,9 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): P
  * (2026-10-27 phiên 4) export cho test — parse debtReadiness/debtBlockedReason */
 export function parseEvalVerdict(raw: string): EvalVerdict | null {
   try {
-    const text = raw.replace(/```(?:json)?/g, '')
+    // F3 (OBS P3): cắt khối reasoning lồng trong content trước khi tìm JSON —
+    // '{' rác trong prose suy luận làm findBalancedJson nhặt nhầm vùng mở.
+    const text = stripReasoningBlocks(raw.replace(/```(?:json)?/g, ''))
     const jsonStr = findBalancedJson(text, 'complete')
     if (!jsonStr) return null
     const obj = JSON.parse(jsonStr) as Record<string, unknown>
@@ -2141,7 +2143,8 @@ ${evidenceBlock}
     // hết max_tokens 2000 cho suy luận, KHÔNG còn chỗ trả JSON verdict (R41-
     // OBSV1: kể cả ×2 nội bộ llm.ts R25 = 4.000 vẫn cạn) → null; (b) circuit
     // breaker mở 600s → chu kỳ 4-6 "(evaluator LLM lỗi)" gần như trắng.
-    // S3.1: budget model-aware — reasoning model → 8.000 (4× base).
+    // S3.1: budget model-aware — reasoning model → 12.000 (6× base — F3
+    // nâng từ 4×: 8.000 quan sát thấy VẪN cạn với reasoning 15K chars).
     // S3.2: ladder đa model — attempt 1 model agent; fail (null/empty/starve)
     // → attempt 2 KHÁC provider theo chính sách R39 (nemotron-550b — lõi
     // extraction ổn định, chậm 13s nhưng breaker riêng); fail nữa → null như
@@ -4096,53 +4099,90 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         '\n\n📝 NHẮC TRƯỚC KHI HÀNH ĐỘNG: (1) task từ 2 bước trở lên → gọi todo_write (đường CLI: tmo_todo) lập kế hoạch TRƯỚC, xong việc nào đánh dấu completed việc đó; (2) câu trả lời/báo cáo cho người đọc: văn xuôi tiếng Việt sạch, markdown TỐI THIỂU — không bọc nhấn mạnh bằng **, không bọc từ ngữ bằng dấu ` hay dấu nháy đơn — nhấn mạnh bằng CHỮ IN HOA, liệt kê bằng gạch đầu dòng "- ".'
 
       let result: Awaited<ReturnType<typeof callLLMForAgent>> | null = null
+      // F2 (OBS P2 — user duyệt fix F1-F6 2026-10-20): main call pin model job
+      // (explicitModelChoice) bị circuit-breaker block / hang NIM → trước đây
+      // chu kỳ bị ĐỐT TRẮNG ("chu kỳ N kết thúc (error, 0 tool calls)" — chu kỳ
+      // 2-3 job Omega cmvghpzbv…kn6dj1 mất trắng khi glm-5.3-flash breaker mở:
+      // evaluator S3.2 + final-report S3.3 đều CÓ ladder, RIÊNG main call thì
+      // không). LADDER 1 lần mirror S3.2/S3.3: attempt 1 = model job (giữ nguyên
+      // — indicator honesty); fail (throw / error-result) → attempt 2 = model
+      // khoẻ KHÁC HỌ (nemotron-550b; đổi deepseek nếu agent đã là nemotron).
+      // result.model luôn là model THỰC phục vụ (credit assignment W2 + log
+      // "explicit-but-blocked" ghi rõ lý do đổi — không phá chỉ-thị-không-nói-dối).
+      const attemptMainCall = (provider: string, model: string) => runWithBatchHeartbeat(() => withTimeout(
+        callLLMForAgent(formattedPrompt, { provider, model }, fullSystemPrompt, {
+          agentId,
+          agentName,
+          sessionId: agentSessionId,
+          // P6-M3: seed softmax "hash(sessionId, cycle)" — chu kỳ nào chọn
+          // model nấy, retry cùng chu kỳ ra cùng lựa chọn (chạy lại được)
+          qPolicyCycle: cyclesAttempted,
+          // SOFTMAX-PILOT (2026-10-20): model job = lựa chọn user thấy ở
+          // indicator chat → ĐÁNH DẤU tường minh — softmax không re-pick
+          // (chỉ evaluator/workflow/opus chạy trên profile mặc định mới
+          // eligible — giữ chỉ-thị-không-nói-dối là ưu tiên tuyệt đối).
+          explicitModelChoice: true,
+          // 2026-10-20 TASK 20: truyền runId → env TMO_RUN_ID cho CLI spawn
+          // → bridge tmo_todo gắn todo ĐÚNG run (TODO block chu kỳ sau)
+          runId: runId ?? null,
+          temperature: agentTemperature,
+          maxTokens: agentMaxTokens,
+          // TASK 39 — NATIVE FC: truyền schema tools qua API → model emit
+          // tool_calls chuẩn (không phải đoán text protocol). Goal-loop xử
+          // lý result.tool_calls ở hybrid bridge bên dưới (ưu tiên native,
+          // fallback parseToolCallsFromOutput cho provider không FC).
+          // TASK D (2026-10-30): skipNativeTools theo env
+          // TMO_GOAL_LOOP_NATIVE_TOOLS — '0' (mặc định) → callZenProvider
+          // KHÔNG đính kèm body.tools (dead weight với model bỏ qua native
+          // FC — tiết kiệm ~7k tok/vòng); '1' → hành vi TASK 39 như cũ.
+          ...(nativeToolSchemas.length > 0 ? {
+            tools: nativeToolSchemas,
+            tool_choice: 'auto' as const,
+            skipNativeTools: !goalLoopNativeToolsEnabled,
+          } : {}),
+          abortCheck: isCancelled,
+        }),
+        LLM_TIMEOUT_MS,
+        `Agent LLM (chu kỳ ${cycle})`,
+      ))
+      const mainCallLadderModel = agentModel === NEMOTRON_550B_NIM_ID ? DEEPSEEK_V41_FLASH_NIM_ID : NEMOTRON_550B_NIM_ID
+      const mainCallUsable = (r: Awaited<ReturnType<typeof callLLMForAgent>> | null): boolean =>
+        !!(r && (r.content || (r.tool_calls && r.tool_calls.length > 0) || (r.executed_tool_calls && r.executed_tool_calls.length > 0)))
       try {
         // r60 (A5) — HEARTBEAT TRONG LLM CALL DÀI: callLLMForAgent có thể treo
         // 5-21' (rate-limit xoay key) — heartbeatAt đứng im cả quãng → watcher
         // báo stale giả (bằng chứng r59 …9k3kp8: 💤 stale dù job sống). Bọc
         // runWithBatchHeartbeat để tín hiệu sống cứ đập 30s/lần xuyên suốt await.
-        result = await runWithBatchHeartbeat(() => withTimeout(
-          callLLMForAgent(formattedPrompt, { provider: agentProvider, model: agentModel }, fullSystemPrompt, {
-            agentId,
-            agentName,
-            sessionId: agentSessionId,
-            // P6-M3: seed softmax "hash(sessionId, cycle)" — chu kỳ nào chọn
-            // model nấy, retry cùng chu kỳ ra cùng lựa chọn (chạy lại được)
-            qPolicyCycle: cyclesAttempted,
-            // SOFTMAX-PILOT (2026-10-20): model job = lựa chọn user thấy ở
-            // indicator chat → ĐÁNH DẤU tường minh — softmax không re-pick
-            // (chỉ evaluator/workflow/opus chạy trên profile mặc định mới
-            // eligible — giữ chỉ-thị-không-nói-dối là ưu tiên tuyệt đối).
-            explicitModelChoice: true,
-            // 2026-10-20 TASK 20: truyền runId → env TMO_RUN_ID cho CLI spawn
-            // → bridge tmo_todo gắn todo ĐÚNG run (TODO block chu kỳ sau)
-            runId: runId ?? null,
-            temperature: agentTemperature,
-            maxTokens: agentMaxTokens,
-            // TASK 39 — NATIVE FC: truyền schema tools qua API → model emit
-            // tool_calls chuẩn (không phải đoán text protocol). Goal-loop xử
-            // lý result.tool_calls ở hybrid bridge bên dưới (ưu tiên native,
-            // fallback parseToolCallsFromOutput cho provider không FC).
-            // TASK D (2026-10-30): skipNativeTools theo env
-            // TMO_GOAL_LOOP_NATIVE_TOOLS — '0' (mặc định) → callZenProvider
-            // KHÔNG đính kèm body.tools (dead weight với model bỏ qua native
-            // FC — tiết kiệm ~7k tok/vòng); '1' → hành vi TASK 39 như cũ.
-            ...(nativeToolSchemas.length > 0 ? {
-              tools: nativeToolSchemas,
-              tool_choice: 'auto' as const,
-              skipNativeTools: !goalLoopNativeToolsEnabled,
-            } : {}),
-            abortCheck: isCancelled,
-          }),
-          LLM_TIMEOUT_MS,
-          `Agent LLM (chu kỳ ${cycle})`,
-        ))
+        result = await attemptMainCall(agentProvider, agentModel)
+        // F2 — error-result (breaker mở = fail-fast R19 0 bytes): 1 ladder
+        // attempt với model khoẻ khác họ trước khi tuyên chu kỳ error.
+        if (result && !mainCallUsable(result) && result.error && agentProvider === 'nvidia' && !isCancelled()) {
+          console.warn(`[GoalLoop] ${agentName} main-call model job ${agentModel} fail (${String(result.error).slice(0, 140)}) — F2 ladder explicit-but-blocked → thử ${mainCallLadderModel}`)
+          try {
+            const ladderResult = await attemptMainCall('nvidia', mainCallLadderModel)
+            if (mainCallUsable(ladderResult)) {
+              console.log(`[GoalLoop] ${agentName} F2 ladder ${mainCallLadderModel} cứu main call (attempt 1 ${agentModel} fail)`)
+              result = ladderResult
+            }
+          } catch { /* ladder fail → giữ result lỗi → nhánh fatal (R2-b #1) xử lý như cũ */ }
+        }
       } catch (llmErr) {
-        console.error(`[GoalLoop] ${agentName} LLM error (chu kỳ ${cycle}, vòng ${cycleIterations}): ${llmErr instanceof Error ? llmErr.message : String(llmErr)}`)
-        lastLlmError = llmErr instanceof Error ? llmErr.message : String(llmErr)
-        cycleHadLlmError = true
-        endedBy = 'error'
-        break
+        // F2 — throw (timeout-hang…): 1 ladder attempt TRƯỚC khi tuyên error,
+        // tránh đốt trắng chu kỳ vì 1 model hang (bằng chứng: 2×150s timeout
+        // rồi breaker mở → các chu kỳ sau fail NGAY liên tục).
+        const errMsg = llmErr instanceof Error ? llmErr.message : String(llmErr)
+        if (agentProvider === 'nvidia' && !isCancelled()) {
+          console.warn(`[GoalLoop] ${agentName} main-call lỗi (${errMsg.slice(0, 140)}) — F2 ladder thử model khoẻ: ${mainCallLadderModel}`)
+          try { result = await attemptMainCall('nvidia', mainCallLadderModel) } catch { /* ladder cũng throw → error path gốc bên dưới */ }
+        }
+        if (!mainCallUsable(result)) {
+          console.error(`[GoalLoop] ${agentName} LLM error (chu kỳ ${cycle}, vòng ${cycleIterations}): ${errMsg}`)
+          lastLlmError = (result && result.error) ? result.error : errMsg
+          cycleHadLlmError = true
+          endedBy = 'error'
+          break
+        }
+        console.log(`[GoalLoop] ${agentName} F2 ladder ${mainCallLadderModel} cứu main call sau throw (chu kỳ ${cycle})`)
       }
 
       if (isCancelled()) { endedBy = 'cancelled'; break }
@@ -4160,7 +4200,7 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
       // là PARTIAL HỢP LỆ (cut-mid-work) — xử lý evidence bình thường, vòng
       // kế spawn mới nhìn thấy KẾT QUẢ TOOL THẬT trong transcript → tiếp tục
       // việc dở (đúng semantics "chữa cháy giữa chừng" của goal loop).
-      const hasPartialExecuted = !!(result.executed_tool_calls && result.executed_tool_calls.length > 0)
+      const hasPartialExecuted = !!(result?.executed_tool_calls && result.executed_tool_calls.length > 0)
       if (!result || (result.error && !result.content && !hasPartialExecuted)) {
         lastLlmError = result?.error || 'LLM call failed'
         cycleHadLlmError = true
@@ -6051,8 +6091,21 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
     }
 
     // ===== No-progress detection =====
+    // (F5 hoist: cycleToolEvents tính TRƯỚC để dùng chung cho no-progress
+    // fingerprint lẫn stall brake CI-1 bên dưới — không lọc evidence 2 lần.)
+    const cycleToolEvents = evidence.filter(e => e.cycle === cycle && e.kind === 'tool')
+    // F5 (OBS P9 — user duyệt fix F1-F6 2026-10-20): chu kỳ RỖNG do infra
+    // error (main-call LLM fail + 0 tool call — vd model pin bị breaker chặn:
+    // chu kỳ 2-3 job Omega cmvghpzbv…kn6dj1 “error, 0 tool calls” rồi bị cắt
+    // no_progress khi việc còn dở) KHÔNG được đếm no_progress: fingerprint
+    // chu kỳ đó trùng chu kỳ trước chỉ vì agent KHÔNG ĐƯỢC PHÉP hành động,
+    // không phải xoay vòng bế tắc. Bỏ qua cả tăng lẫn reset (giữ trạng thái
+    // stagnation thật của các chu kỳ làm việc trước đó); stall brake CI-1 bên
+    // dưới vẫn đếm (phanh chống chạy vô hạn khi provider chết thật sự — F2
+    // ladder + attempts F6 đã thắt nguồn infra-error ở thượng nguồn).
+    const cycleInfraError = cycleHadLlmError && cycleToolEvents.length === 0
     const fp = progressFingerprint(messages)
-    if (cycle > 1 && fp === prevFingerprint) {
+    if (cycle > 1 && fp === prevFingerprint && !cycleInfraError) {
       noProgressCount++
       console.warn(`[GoalLoop] ${agentName} NO-PROGRESS: fingerprint chu kỳ ${cycle} trùng chu kỳ trước (lần ${noProgressCount})`)
       if (noProgressCount >= 1) {
@@ -6106,7 +6159,9 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
           }
         }
       }
-    } else {
+    } else if (!cycleInfraError) {
+      // F5: chu kỳ infra-error KHÔNG reset noProgressCount (không cung cấp
+      // bằng chứng tiến triển cũng như bế tắc — trung lập với detector)
       noProgressCount = 0
     }
     prevFingerprint = fp
@@ -6128,7 +6183,6 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
     // sai. Chu kỳ chỉ stall khi: 0 call thành công VÀ mọi thất bại lặp đúng
     // chữ ký đã gặp trong chu kỳ (không học gì mới). Ngưỡng số chu kỳ stall:
     // env GOAL_LOOP_STALL_CYCLES (mặc định 3).
-    const cycleToolEvents = evidence.filter(e => e.cycle === cycle && e.kind === 'tool')
     const cycleSuccessfulTools = cycleToolEvents.filter(e => e.success === true).length
     const cycleFailureSigs = new Set(
       cycleToolEvents.filter(e => e.success !== true).map(e => `${e.tool}|${(e.text || '').slice(0, 120)}`)
