@@ -133,17 +133,23 @@ describe('r95 · B — cờ on (ENV): ghi sự kiện đúng trường + seq đ�
     expect(rows[0].kind).toBe('run.start')
     expect(rows[0].runId).toBe('run_b1')
     expect(rows[0].sessionId).toBe('sess_b1')
-    expect(JSON.parse(rows[0].payloadJson)).toEqual({ task: 'demo' })
     expect(rows[1].table).toBe('QEntry')
     expect(rows[1].rowKey).toBe('s|a')
+    // PIN UPDATE (W2/S4 BLUEPRINT-R17BC v0.2 — 2026-10-20): writeOne giờ đính
+    // processRole vào MỌI payload (process phát sự kiện — 'api' mặc định khi
+    // process không đặt TMO_PROCESS_ROLE; test process không đặt → 'api').
+    expect(JSON.parse(rows[0].payloadJson)).toEqual({ task: 'demo', processRole: 'api' })
+    expect(JSON.parse(rows[2].payloadJson)).toEqual({ reward: 0.42, processRole: 'api' })
   })
 
-  test('B2 payload undefined → "{}" (không phải "null"/"undefined")', async () => {
+  test('B2 payload undefined → "{}" (không phải "null"/"undefined") — PIN UPDATE W2/S4: thêm processRole', async () => {
     await wipeObsTables()
     observeEvent({ actor: 'system', kind: 'db.write', summary: 'không payload' })
     await flushObservationQueue()
     const row = await db.observationEvent.findFirst()
-    expect(row?.payloadJson).toBe('{}')
+    // PIN UPDATE (W2/S4): payload undefined giờ thành {"processRole":"api"}
+    // (process phát sự kiện) — chữ ký "{} rỗng" cũ không còn đúng.
+    expect(row?.payloadJson).toBe('{"processRole":"api"}')
   })
 
   test('B3 isObsLedgerEnabled=true khi ENV on', () => {

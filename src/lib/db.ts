@@ -252,6 +252,14 @@ const TRANSIENT_SQLITE_PATTERNS: readonly string[] = [
   // — "Transaction API error: Transaction already closed: A commit cannot be
   // executed on an expired transaction." Retry = transaction mới hoàn toàn.
   'expired transaction',
+  // W2/S3 (BLUEPRINT-R17BC v0.2 — REVIEW-1 P0-5, ĐIỀU KIỆN CẦN cho split):
+  // 2 process (API + worker) cùng cấp seq ObservationEvent qua writeOne
+  // (MAX(seq)+1 trong tx ngắn — schema.prisma:2645 RO-4 dựa "1 process", W2
+  // phá giả thiết đó) → va @unique seq → P2002 message chứa constraint name
+  // `ObservationEvent_seq_key`. Retry an toàn: tx MỚI đọc lại MAX — tx cũ
+  // chưa commit thì chưa chiếm seq. HẸP chỉ tên constraint này — P2002 của
+  // bảng khác (logic nghiệp vụ đúng) vẫn fail cứng như cũ.
+  'ObservationEvent_seq_key',
 ]
 
 export function isTransientSqliteError(err: unknown): boolean {

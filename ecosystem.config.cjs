@@ -126,5 +126,37 @@ module.exports = {
       merge_logs: true,
       kill_timeout: 5000,
     },
+    {
+      // W2/S3 (BLUEPRINT-R17BC v0.2 — user duyệt 2026-10-20): PROCESS WORKER
+      // RIÊNG cho goal-loop — tách khỏi process API để API restart không giết
+      // job đang chạy (KPI #4 cách ly). DB là bus duy nhất — 0 IPC mới.
+      // Bun interpreter (bun chạy TS trực tiếp + tsconfig paths).
+      // Mode đọc từ .env (CÙNG nguồn với API): inline (mặc định) = shadow —
+      // process này KHÔNG claim (worker chạy trong API như hôm nay, an toàn
+      // double-run không thể xảy ra vì glwMode gate 2 process đọc cùng .env);
+      // split = worker này lo recoverPending + start.
+      // Watchdog riêng: MemWatchdog nhẹ WORKER_MEM_WATCHDOG_MB + heart-movement
+      // thread P1-3 (WORKER_HEART_MOVEMENT_MS) — KHÔNG HttpWatchdog (0 port).
+      name: 'theopus-worker',
+      script: 'scripts/worker.ts',
+      interpreter: 'bun',
+      cwd: '/home/z/tmo-app',
+      env: {
+        NODE_ENV: 'development',
+        DATABASE_URL: 'file:/home/z/tmo-app/db/custom.db',
+        NODE_OPTIONS: '--max-old-space-size=768',
+      },
+      watch: false,
+      autorestart: true,
+      max_restarts: 50,
+      restart_delay: 4000,
+      max_memory_restart: '1400M',
+      out_file: '/home/z/my-project/dev.log',
+      error_file: '/home/z/my-project/dev.log',
+      merge_logs: true,
+      log_date_format: '',
+      time: false,
+      kill_timeout: 8000,
+    },
   ],
 };

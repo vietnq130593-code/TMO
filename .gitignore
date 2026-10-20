@@ -92,6 +92,13 @@ worklog.md
 # null) — FB-Đợt7-R5 phát hiện file từng KHÔNG được track → fix BUG2-068
 # không sống sót qua clone; benchmark là bằng chứng nghiệm thu P5-M1 nên track.
 !/scripts/matryoshka-benchmark.ts
+# NGOẠI LỆ: worker.ts + worker-heart-thread.ts — W2/S3 BLUEPRINT-R17BC v0.2
+# (user duyệt 2026-10-20): process worker riêng cho goal-loop (pm2 app 3
+# theopus-worker trong ecosystem.config.cjs). KHÔNG track = mất khi clone
+# (bài học matryoshka-benchmark.ts FB-Đợt7-R5) — đây là hạ tầng vận hành
+# được ecosystem tham chiếu trực tiếp.
+!/scripts/worker.ts
+!/scripts/worker-heart-thread.ts
 # NGOẠI LỆ: watch-agents.ts — trạm quan sát vận hành agents (Task 54): xem
 # runs/jobs/messages/reviews mới + phát hiện stuck/failed — ops theo dõi
 # agents chạy thật: DATABASE_URL=... bun scripts/watch-agents.ts --since-min 60

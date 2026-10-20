@@ -1270,6 +1270,18 @@ if (!globalForGlw.__tmoGoalLoopWorkerStarted) {
   globalForGlw.__tmoGoalLoopWorkerStarted = true
   // REVIEW 13-f: start LUÔN (xem comment khối phía trên) — flag chỉ điều khiển
   // route enqueue durable của chat, không còn điều khiển worker.
+  // W2/S3 (BLUEPRINT-R17BC v0.2 — user duyệt triển khai): GOAL_LOOP_WORKER_MODE=split
+  // → process API KHÔNG start worker (worker process riêng theopus-worker lo
+  // recoverPending + start — DB là bus, 0 IPC mới; enqueue của 3 import site
+  // [opus/pipeline:52, chat route:73, goal-loop-jobs:38] vẫn hoạt động vì bản
+  // chất là DB write). Inline-fallback khi enqueue lỗi giữ nguyên chủ đích
+  // (chat route:1235-1246 + guard cấm double-run khi job row đã tạo).
+  const glwMode = (process.env.GOAL_LOOP_WORKER_MODE || 'inline').trim().toLowerCase()
+  if (glwMode === 'split') {
+    console.log(
+      '[instrumentation] GOAL_LOOP_WORKER_MODE=split — process API KHÔNG start goal-loop worker (theopus-worker riêng lo recoverPending + start; job chạy trọn vẹn qua API restart — KPI #4 cách ly). Enqueue durable vẫn hoạt động: job nằm queued, worker claim khi bật (P1-6).'
+    )
+  } else {
   // Đợi DB self-heal xong (ensureDbReady dedup với các lời gọi phía trên)
   // rồi mới sweep + start — tránh requeue/claim đập vào DB chưa migrate.
   // Fire-and-forget: KHÔNG block startup của Next. Nếu DB warm-up lỗi thì
@@ -1299,6 +1311,7 @@ if (!globalForGlw.__tmoGoalLoopWorkerStarted) {
         )
       }
     })
+  } // <- đóng else glwMode (W2/S3: inline = chuỗi boot gốc như hôm nay)
 }
 
 // ============================================================================

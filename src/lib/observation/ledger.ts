@@ -275,7 +275,17 @@ async function drain(): Promise<void> {
  * transaction MỚI hoàn toàn (seq đọc lại — transaction cũ hết hạn chưa bao
  * giờ commit nên an toàn; drain loop đơn luồng không tự đua). */
 async function writeOne(evt: ObserveEventInput): Promise<void> {
-  const payloadJson = capPayload(evt.payload)
+  // W2/S4 (BLUEPRINT-R17BC v0.2 — processRole 'api'|'worker'): mọi event ghi rõ
+  // process đang phát — fingerprint phân biệt 2 process khi split (bài học
+  // r126 B1.2: phân biệt bằng đặc trưng, không tự chế). Worker đặt env
+  // TMO_PROCESS_ROLE=worker lúc boot; process không đặt → 'api' (inline mode
+  // hôm nay đúng là 'api'). KHÔNG dedupe oan 2 process — fingerprint khác nguồn.
+  const payloadJson = capPayload({
+    ...evt.payload,
+    processRole: (evt.payload as { processRole?: string } | undefined)?.processRole
+      ?? process.env.TMO_PROCESS_ROLE
+      ?? 'api',
+  })
   await withSqliteRetry(
     () => db.$transaction(async tx => {
       const last = await tx.observationEvent.findFirst({
