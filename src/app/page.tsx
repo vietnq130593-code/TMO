@@ -302,8 +302,8 @@ function UploadSection({ onUploadComplete, existingDocNames }: { onUploadComplet
 
 // ==================== DOCUMENTS LIST ====================
 
-function DocumentsList({ documents, onProcessDoc, onDeleteDoc, onPauseDoc, onReExtractDoc, onForceRecover, processingIds, extractingDocIds, pausedDocIds, userPausedDocIds, docPage, docTotal, docPageSize, onPageChange, docStatusBreakdown, docLoading, autoMode, onToggleAuto, onRegenerateEmbeddings, embeddingPseudoCount, uploadSlot, onEmbedOnlyDoc }: {
-  documents: DocumentRecord[]; onProcessDoc: (id: string) => void; onDeleteDoc: (id: string) => void; onPauseDoc: (id: string) => void; onReExtractDoc: (id: string) => void; onForceRecover: () => void; processingIds: Set<string>; extractingDocIds: Set<string>; pausedDocIds: Set<string>; userPausedDocIds: Set<string>; docPage: number; docTotal: number; docPageSize: number; onPageChange: (page: number) => void; docStatusBreakdown: Record<string, number>; docLoading: boolean; autoMode: boolean; onToggleAuto: () => void; onRegenerateEmbeddings: () => void; embeddingPseudoCount: number; uploadSlot?: React.ReactNode; onEmbedOnlyDoc?: (id: string) => void
+function DocumentsList({ documents, onProcessDoc, onDeleteDoc, onPauseDoc, onReExtractDoc, onForceRecover, processingIds, extractingDocIds, pausedDocIds, userPausedDocIds, docPage, docTotal, docPageSize, onPageChange, docStatusBreakdown, docLoading, autoMode, onToggleAuto, onRegenerateEmbeddings, embeddingPseudoCount, qdrantIndexed, uploadSlot, onEmbedOnlyDoc }: {
+  documents: DocumentRecord[]; onProcessDoc: (id: string) => void; onDeleteDoc: (id: string) => void; onPauseDoc: (id: string) => void; onReExtractDoc: (id: string) => void; onForceRecover: () => void; processingIds: Set<string>; extractingDocIds: Set<string>; pausedDocIds: Set<string>; userPausedDocIds: Set<string>; docPage: number; docTotal: number; docPageSize: number; onPageChange: (page: number) => void; docStatusBreakdown: Record<string, number>; docLoading: boolean; autoMode: boolean; onToggleAuto: () => void; onRegenerateEmbeddings: () => void; embeddingPseudoCount: number; qdrantIndexed?: { indexed: number; total: number } | null; uploadSlot?: React.ReactNode; onEmbedOnlyDoc?: (id: string) => void
 }) {
   // Track which document's extraction details are expanded
   const [expandedDocId, setExpandedDocId] = useState<string | null>(null)
@@ -460,7 +460,8 @@ function DocumentsList({ documents, onProcessDoc, onDeleteDoc, onPauseDoc, onReE
             {completedDocs > 0 && <span className="flex items-center gap-1"><span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-500" />Hoàn thành {completedDocs}</span>}
             {partialDocs > 0 && <span className="flex items-center gap-1"><span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-500" />Tạm dừng {partialDocs}</span>}
             {processingDocs > 0 && <span className="flex items-center gap-1"><span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400" />Đang xử lý {processingDocs}</span>}
-            {uploadedDocs > 0 && <span className="flex items-center gap-1"><span className="inline-block h-1.5 w-1.5 rounded-full bg-stone-500" />Đang chờ {uploadedDocs}</span>}
+            {uploadedDocs > 0 && <span className="flex items-center gap-1" title="Nguồn: listing R2 prefix pdfs/ (GET /api/ingestion/upload) — file đã tải lên R2 nhưng CHƯA qua pipeline xử lý (Document table SQLite rỗng sau DB mới 19-10). Đây là nguồn sự thật RIÊNG với stats card Qdrant/Neo4j — R17 (QUAN-SAT 7 · 6.3) thống nhất hiển thị 2 trạng thái, không đổi logic."><span className="inline-block h-1.5 w-1.5 rounded-full bg-stone-500" />R2 uploads (chưa qua pipeline) {uploadedDocs}</span>}
+            {qdrantIndexed && qdrantIndexed.total > 0 && <span className="flex items-center gap-1" title="Nguồn: /api/query?action=stats (Qdrant documents + Neo4j) — W1 backfill 9/9 knowledge *.TXT đã indexed (blueprint BACKUP-GATE S1.3). Đối chiếu nhóm R2 uploads phía trên: 2 nguồn sự thật, 2 trạng thái khác nhau."><span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />Đã indexed (Qdrant) {qdrantIndexed.indexed}/{qdrantIndexed.total}</span>}
             {errorDocs > 0 && <span className="flex items-center gap-1"><span className="inline-block h-1.5 w-1.5 rounded-full bg-red-400" />Lỗi {errorDocs}</span>}
           </div>
         )}
@@ -1614,6 +1615,11 @@ export default function Home() {
   }, [])
 
   const fetchHealth = useCallback(async (force: boolean = false) => {
+    // R17 (QUAN-SAT 7 · 6.2A) — tab ẩn: bỏ poll định kỳ (force vẫn chạy — user
+    // vừa action). Giảm số request đang bay bị cắt giữa lúc server chậm.
+    if (!force && typeof document !== 'undefined' && document.hidden) {
+      return
+    }
     setHealthRefreshing(true)
     // FIX: add a per-request timeout + real error handling. Previously errors were
     // swallowed by `catch {}` and non-200 responses were ignored, so when /api/health
@@ -1624,7 +1630,14 @@ export default function Home() {
     // Neo4j nodes/rels counts in the dashboard refresh immediately instead of being
     // stuck on the pre-pipeline cached value.
     const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), 20000)
+    // R17 (QUAN-SAT 7 · 6.2A): 20s → 60s. Bằng chứng R16 V1 + phụ lục V1:
+    // khi goal-loop run ghi DB, /api/health + nhóm API trả chậm 45-118s;
+    // client abort giữa chừng ở 20s → server "failed to pipe response —
+    // ReadableStream is locked" (×19 trong window dev.log) → thêm chuỗi
+    // recompile + RSS ratchet (reaper sandbox SIGINT ở ~2.1-2.2GB). Nâng 60s
+    // cho phần lớn request (45-59s chiếm đa số) kịp hoàn tất tự nhiên; vẫn
+    // có trần chống treo vĩnh viễn nếu server chết thật.
+    const timeoutId = setTimeout(() => controller.abort(), 60000)
     try {
       const res = await fetch('/api/health' + (force ? '?force=true' : ''), { signal: controller.signal })
       if (res.ok) {
@@ -1654,7 +1667,7 @@ export default function Home() {
       }
     } catch (err) {
       const msg = err instanceof DOMException && err.name === 'AbortError'
-        ? 'Hết thời gian chờ (20s)'
+        ? 'Hết thời gian chờ (60s)'
         : 'Không kết nối được server'
       setHealthError(msg)
     } finally {
@@ -2870,7 +2883,7 @@ export default function Home() {
                   </TabsList>
 
                   <TabsContent value="documents" className="mt-4">
-                      <DocumentsList documents={documents} onProcessDoc={handleProcessDoc} onDeleteDoc={handleDeleteDoc} onPauseDoc={handlePauseDoc} onReExtractDoc={handleReExtractDoc} onForceRecover={handleForceRecover} processingIds={processingIds} extractingDocIds={extractingDocIds} pausedDocIds={pausedDocIds} userPausedDocIds={userPausedDocIds} docPage={docPage} docTotal={docTotal} docPageSize={docPageSize} onPageChange={(p) => fetchDocuments(false, p)} docStatusBreakdown={docStatusBreakdown} docLoading={docLoading} autoMode={autoMode} onToggleAuto={() => { const newMode = !autoMode; setAutoMode(newMode); try { localStorage.setItem('graphrag-auto-mode', String(newMode)) } catch {} ; sonnerToast.success(newMode ? 'Đã bật chế độ Tự động' : 'Đã tắt chế độ Tự động', { description: newMode ? '4 keys × 4 docs/key (tối đa 16 song song) — Ưu tiên tài liệu trích xuất dở trước, xong key nào → tự chuyển tài liệu mới' : 'Không tự động — cần bấm "Tiếp tục" thủ công', duration: 3000 }) }} onRegenerateEmbeddings={handleRegenerateEmbeddings} embeddingPseudoCount={embeddingStatus?.pseudo || 0} onEmbedOnlyDoc={handleEmbedOnlyDoc} uploadSlot={<UploadSection onUploadComplete={(uploadedDocIds: string[]) => { fetchDocuments(true, 1); fetchStats() }} existingDocNames={existingDocNames} />} />
+                      <DocumentsList documents={documents} onProcessDoc={handleProcessDoc} onDeleteDoc={handleDeleteDoc} onPauseDoc={handlePauseDoc} onReExtractDoc={handleReExtractDoc} onForceRecover={handleForceRecover} processingIds={processingIds} extractingDocIds={extractingDocIds} pausedDocIds={pausedDocIds} userPausedDocIds={userPausedDocIds} docPage={docPage} docTotal={docTotal} docPageSize={docPageSize} onPageChange={(p) => fetchDocuments(false, p)} docStatusBreakdown={docStatusBreakdown} docLoading={docLoading} autoMode={autoMode} onToggleAuto={() => { const newMode = !autoMode; setAutoMode(newMode); try { localStorage.setItem('graphrag-auto-mode', String(newMode)) } catch {} ; sonnerToast.success(newMode ? 'Đã bật chế độ Tự động' : 'Đã tắt chế độ Tự động', { description: newMode ? '4 keys × 4 docs/key (tối đa 16 song song) — Ưu tiên tài liệu trích xuất dở trước, xong key nào → tự chuyển tài liệu mới' : 'Không tự động — cần bấm "Tiếp tục" thủ công', duration: 3000 }) }} onRegenerateEmbeddings={handleRegenerateEmbeddings} embeddingPseudoCount={embeddingStatus?.pseudo || 0} qdrantIndexed={dbStats ? { indexed: dbStats.documentsByStatus?.['indexed'] ?? 0, total: dbStats.totalDocuments ?? 0 } : null} onEmbedOnlyDoc={handleEmbedOnlyDoc} uploadSlot={<UploadSection onUploadComplete={(uploadedDocIds: string[]) => { fetchDocuments(true, 1); fetchStats() }} existingDocNames={existingDocNames} />} />
                   </TabsContent>
 
                   <TabsContent value="analytics" className="mt-4">

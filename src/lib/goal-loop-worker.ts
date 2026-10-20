@@ -500,6 +500,19 @@ class GoalLoopWorker {
               const { maybeAutoOpusReview } = await import('@/lib/opus/pipeline')
               void maybeAutoOpusReview(row.sessionId, { runRef: null, messageId: row.messageId ?? null })
             } catch { /* fail-open */ }
+            // R17 (QUAN-SAT lượt 7 · 6.1b) — orphan sweep đánh FAIL job phải
+            // GHI NỢ infra NGAY (trước đây im lặng — sổ nợ trắng dù job user bị
+            // hủy vĩnh viễn; bằng chứng R16 V1.5). Ghi tại nơi phát hiện, không
+            // đợi arbiter/finalize. Fail-open theo từng job.
+            try {
+              const { recordDebtIssue } = await import('@/lib/execution/debt-ledger')
+              await recordDebtIssue({
+                issue: `Goal-loop job failed vĩnh viễn (orphan sweep stale): mồ côi quá trần resume, không finalize được — server mất ổn định giữa chừng`,
+                kind: 'infra',
+                sessionId: row.sessionId,
+                evidence: `job ${row.id} stale ${Math.round(jobAgeMs / 3_600_000)}h > trần ${Math.round(GOAL_LOOP_RESUME_MAX_AGE_MS / 3_600_000)}h (R18) · error=${row.error?.slice(0, 200) ?? '(trống)'}`,
+              })
+            } catch { /* fail-open — ghi nợ không được phép chặn sweep */ }
           }
           continue
         }
@@ -546,6 +559,20 @@ class GoalLoopWorker {
                 opusErr instanceof Error ? opusErr.message : String(opusErr)
               )
             }
+            // R17 (QUAN-SAT lượt 7 · 6.1b) — đường ghi nợ thứ 4: attempts cạn
+            // sau crash là sự cố hạ tầng (server chết giữa job), không phải
+            // lỗi agent — ghi nợ infra NGAY tại nơi phát hiện. Bằng chứng R16
+            // V1.5: job user 'Tiếp tục công việc bạn làm thiếu' hủy 2 lần →
+            // failed vĩnh viễn → DebtLedger vẫn 0 dòng. Fail-open.
+            try {
+              const { recordDebtIssue } = await import('@/lib/execution/debt-ledger')
+              await recordDebtIssue({
+                issue: `Goal-loop job failed vĩnh viễn (orphan sweep): attempts cạn sau crash server — công việc dở bị hủy, không finalize được`,
+                kind: 'infra',
+                sessionId: row.sessionId,
+                evidence: `job ${row.id} attempts ${row.attempts}/${GOAL_LOOP_MAX_ATTEMPTS} · error=${row.error?.slice(0, 200) ?? '(trống)'}`,
+              })
+            } catch { /* fail-open — ghi nợ không được phép chặn sweep */ }
           }
         }
       } catch (err) {

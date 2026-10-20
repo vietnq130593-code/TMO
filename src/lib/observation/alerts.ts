@@ -546,6 +546,25 @@ export async function salvageCrashedRun(r: SalvageRunRow, now: number): Promise<
       `Dọn run mồ côi ${r.agentName ?? r.runId ?? r.id.slice(0, 8)} — kẹt 'running' ${orphanMinutes} phút (đã chết giữa chừng) → đánh dấu failed/crashed + salvage ${r.tokensUsed != null ? `${r.tokensUsed} tokens/${r.cycles ?? '?'} chu kỳ checkpoint` : 'metadata tiêu cực'}`,
       r.runId ?? null,
       )
+      // R17 (QUAN-SAT lượt 7 · 6.1a) — ĐƯỜNG GHI NỢ THỨ 4 "crash-proof":
+      // sự cố chính là nguồn nợ đáng tin nhất — ghi TẠI NƠI PHÁT HIỆN (ngay khi
+      // salvage đóng sổ run crashed), KHÔNG đợi arbiter/finalize. Bằng chứng
+      // R16 V2: 3 đường ghi cũ đều qua arbiter/finalize → run crash (process
+      // chết) không bao giờ tới vòng tổng kết → DebtLedger trắng sau 24h có
+      // 3 run failed/crashed. kind='infra' (severity high — agent không tự
+      // phục vụ được); dedupe do recordDebtIssue upsert theo fingerprint
+      // xuyên run; cửa !alreadyAlerted chống boot sweep + runtime sweep đếm
+      // trùng 1 run (2 salvage cùng runId chỉ ghi nợ 1 lần). Fail-open.
+      try {
+        const { recordDebtIssue } = await import('@/lib/execution/debt-ledger')
+        await recordDebtIssue({
+          issue: `Run ${r.agentName ?? r.runId ?? r.id.slice(0, 8)} crashed (salvage) — process chết giữa chừng, không finalize được (mồ côi ${orphanMinutes} phút)`,
+          kind: 'infra',
+          sessionId: r.sessionId,
+          runId: r.runId,
+          evidence: `salvage row ${r.id}: complete=false · durationMs=${durationMs} · checkpoint ${r.cycles ?? '?'} chu kỳ ~${r.tokensUsed ?? '?'} tokens · toolCalls=${r.toolCalls ?? '?'}`,
+        })
+      } catch { /* fail-open — ghi nợ không được phép làm hỏng salvage */ }
     }
   } catch {
     /* fail-open bước 1 */

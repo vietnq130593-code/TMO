@@ -84,22 +84,51 @@ export function recordToolMetric(params: {
     // mất vĩnh viễn (fail-open nuốt). Retry chỉ chạy lại khi query chưa kịp
     // execute (đứng trong pool queue — P1008) — trường hợp hiếm commit-mà-
     // mất-response chấp nhận duplicate 1 row (tốt hơn mất metric).
+    const sessionId = (params.sessionId || 'unknown').slice(0, 120)
+    const agentRole = (params.agentRole || 'unknown').slice(0, 60)
+    const errorTag = params.success ? null : toErrorTag(params.error)
     void withSqliteRetry(
       () => db.toolMetric.create({
         data: {
           toolName,
-          sessionId: (params.sessionId || 'unknown').slice(0, 120),
-          agentRole: (params.agentRole || 'unknown').slice(0, 60),
+          sessionId,
+          agentRole,
           success: !!params.success,
           exitCode: params.success ? 0 : 1,
           durationMs: Math.max(0, Math.round(params.durationMs || 0)),
-          errorTag: params.success ? null : toErrorTag(params.error),
+          errorTag,
         },
       }),
       { label: `toolMetric.create(${toolName})` },
     ).catch(() => {
       /* fail-open — metrics không được phép crash hay block tool exec */
     })
+    // R17 (QUAN-SAT lượt 7 · 6.1c) — ĐƯỜNG GHI NỢ THỨ 4 "crash-proof" cho
+    // tool-failure lặp: cùng tool fail ≥3 lần CÙNG session → ghi nợ infra
+    // NGAY, không đợi arbiter (bằng chứng R16 V2.3: 'shell' ×5 "/bin/bash:
+    // sqlite3: command not found" + 'db_query' ×3 — hiển thị ngay Tool health
+    // panel nhưng DebtLedger 0 dòng). Mỗi lần fail mới (4th, 5th...) đếm lại
+    // ≥3 → recordDebtIssue gọi lại → bump recurrence (đúng N2 — tái xuất
+    // hiện là tín hiệu hệ thống). Fingerprint của issue chứa errorTag nên 2
+    // "họ lỗi" khác nhau của cùng tool = 2 nợ riêng. Fail-open tuyệt đối.
+    if (!params.success) {
+      void withSqliteRetry(
+        () => db.toolMetric.count({ where: { sessionId, toolName, success: false } }),
+        { label: `toolMetric.count(${toolName})` },
+      )
+        .then(failCount => {
+          if (failCount < 3) return
+          void import('@/lib/execution/debt-ledger')
+            .then(({ recordDebtIssue }) => recordDebtIssue({
+              issue: `Tool ${toolName} thất bại lặp ≥3 lần cùng session — ${errorTag ?? 'không có errorTag'}`,
+              kind: 'infra',
+              sessionId: sessionId === 'unknown' ? null : sessionId,
+              evidence: `ToolMetric ${toolName} (agent ${agentRole}): ${failCount} fail cùng session · errorTag=${errorTag ?? '(trống)'}`,
+            }))
+            .catch(() => { /* fail-open — ghi nợ không được phép crash metric */ })
+        })
+        .catch(() => { /* fail-open — pattern check không được phép crash */ })
+    }
   } catch {
     /* fail-open */
   }
