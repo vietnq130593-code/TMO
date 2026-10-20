@@ -229,7 +229,10 @@ describe('r73-3 → R19 — model fallback đã dỡ hoàn toàn (user directive
   test('lỗi model trả NGAY kèm nguyên nhân + hướng dẫn chọn model khác (behavioral pin R19)', () => {
     const llmSrc = readFileSync(join(REPO, 'src/lib/llm.ts'), 'utf8')
     // 3 đường: NIM agent / model lạ org-name / zen HTTP+CLI
-    expect(llmSrc).toContain('NIM model "${model}" gọi thất bại — không tự fallback (R19)')
+    // SOFTMAX-PILOT (2026-10-20): biến đổi từ ${model} → ${nimModel} (softmax có
+    // thể re-pick model khởi đầu — thông báo lỗi phải nói ĐÚNG model đã thử).
+    // Pin hành vi giữ nguyên: lỗi trả NGAY kèm nguyên nhân + hướng dẫn (R19).
+    expect(llmSrc).toContain('NIM model "${nimModel}" gọi thất bại — không tự fallback (R19)')
     expect(llmSrc).toContain('không nằm trong danh sách model NIM được hỗ trợ')
     expect(llmSrc).toContain('Model "${zenModel}" gọi thất bại (Zen HTTP + CLI — không tự fallback R19)')
     expect(llmSrc).toContain('Chọn model khác trong khung chat')

@@ -2816,6 +2816,9 @@ export async function runAgentStep(params: {
           agentName: agent.name,
           temperature: agent.temperature,
           maxTokens: agent.maxTokens,
+          // SOFTMAX-PILOT: team modelOverride = lựa chọn user → tường minh
+          // (KHÔNG override → model profile mặc định → softmax eligible).
+          explicitModelChoice: !!(ctx as WorkflowContext).modelOverride,
           // USER REQUEST 2026-08-31: chuỗi xoay vòng key LLM dừng ngay khi user hủy
           abortCheck: isCancelled,
           ...(nativeTools && nativeTools.length > 0
@@ -3736,7 +3739,7 @@ Output JSON trong markdown code block:
     verifyPrompt,
     { provider: agentDef.provider, model: agentDef.model },
     verifySystemPrompt,
-    { agentId: 'TL-verify', agentName: 'MEGATRON' }
+    { agentId: 'TL-verify', agentName: 'MEGATRON', explicitModelChoice: !!(ctx as WorkflowContext).modelOverride }
   )
 
   let verifyTimeoutId: ReturnType<typeof setTimeout> | undefined

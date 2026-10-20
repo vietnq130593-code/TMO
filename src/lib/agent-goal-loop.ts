@@ -2341,6 +2341,8 @@ QUY TẮC: KHÔNG gọi tool. KHÔNG bắt đầu công việc mới. Chỉ tổ
           agentName: `${agentName} (final-report${tryModel === agentModel ? '' : '+ladder'})`,
           temperature: agentTemperature ?? 0.4,
           maxTokens: Math.max(agentMaxTokens ?? 2048, 4096),
+          // SOFTMAX-PILOT: model job = lựa chọn user thấy ở indicator → tường minh
+          explicitModelChoice: true,
           abortCheck,
         }),
         LLM_TIMEOUT_MS,
@@ -2698,6 +2700,8 @@ async function runCtoConsultation(params: {
       maxTokens: agentMaxTokens ?? 0,
       agentId,
       agentName,
+      // SOFTMAX-PILOT: model job = lựa chọn user thấy → tường minh
+      explicitModelChoice: true,
     })
 
     const durationMs = Date.now() - startedAt
@@ -4105,6 +4109,11 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
             // P6-M3: seed softmax "hash(sessionId, cycle)" — chu kỳ nào chọn
             // model nấy, retry cùng chu kỳ ra cùng lựa chọn (chạy lại được)
             qPolicyCycle: cyclesAttempted,
+            // SOFTMAX-PILOT (2026-10-20): model job = lựa chọn user thấy ở
+            // indicator chat → ĐÁNH DẤU tường minh — softmax không re-pick
+            // (chỉ evaluator/workflow/opus chạy trên profile mặc định mới
+            // eligible — giữ chỉ-thị-không-nói-dối là ưu tiên tuyệt đối).
+            explicitModelChoice: true,
             // 2026-10-20 TASK 20: truyền runId → env TMO_RUN_ID cho CLI spawn
             // → bridge tmo_todo gắn todo ĐÚNG run (TODO block chu kỳ sau)
             runId: runId ?? null,

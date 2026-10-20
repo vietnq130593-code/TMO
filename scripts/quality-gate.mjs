@@ -276,7 +276,15 @@ const stages = [
           // r60 (C6): TMO_AGENT_RUNS_DIR → jsonl TEST-* ghi sang /tmp tạm,
           // KHÔNG rơi vào agent-runs/ thật của repo (watcher mission lọc
           // TEST-* nhưng rác vẫn xâm nhập đĩa + hậu kiểm phải dọn tay).
-          env: { DATABASE_URL: TEST_DB_URL, TMO_AGENT_RUNS_DIR: TEST_RUNS_DIR },
+          env: {
+            DATABASE_URL: TEST_DB_URL,
+            TMO_AGENT_RUNS_DIR: TEST_RUNS_DIR,
+            // SOFTMAX-PILOT (2026-10-20): .env production bật RUNTIME_MODEL_POLICY=
+            // softmax cho runtime — test PHẢI chạy policy OFF để deterministic
+            // (bằng chứng: r87 policy-on thêm 2-3 fail timeout 5000ms — Q-table
+            // DB path chỉ đúng ngữ cảnh runtime, không phải contract test).
+            RUNTIME_MODEL_POLICY: 'off',
+          },
           timeoutMs: 10 * 60_000,
         })
       } finally {
@@ -316,7 +324,15 @@ const stages = [
             '--coverage-reporter=lcov',
             `--coverage-dir=${COVERAGE_DIR}`,
           ],
-          env: { DATABASE_URL: TEST_DB_URL, TMO_AGENT_RUNS_DIR: TEST_RUNS_DIR },
+          env: {
+            DATABASE_URL: TEST_DB_URL,
+            TMO_AGENT_RUNS_DIR: TEST_RUNS_DIR,
+            // SOFTMAX-PILOT (2026-10-20): .env production bật RUNTIME_MODEL_POLICY=
+            // softmax cho runtime — test PHẢI chạy policy OFF để deterministic
+            // (bằng chứng: r87 policy-on thêm 2-3 fail timeout 5000ms — Q-table
+            // DB path chỉ đúng ngữ cảnh runtime, không phải contract test).
+            RUNTIME_MODEL_POLICY: 'off',
+          },
           timeoutMs: 10 * 60_000,
         })
         if (testsResult.status !== 'PASS') {

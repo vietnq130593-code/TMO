@@ -76,6 +76,9 @@ import {
 // trước đây chỉ tầng parse tool_call strip (r44) nên panel Suy nghĩ + báo cáo
 // vẫn dính rác. tool-calls.ts chỉ import find-balanced-json — không cycle.
 import { stripProviderGarbleMarkers } from '@/lib/tool-calls'
+// SOFTMAX-PILOT (2026-10-20): research chat override (ALS) thắng softmax policy
+// — module THUẦN node:async_hooks, import tĩnh KHÔNG tạo circular.
+import { currentResearchModelOverride } from '@/lib/research-team/model-override-context'
 // Task 33 (§0b lượt 2): isTransientSqliteError cho isTransientDbError — pattern
 // "Socket timeout"/"Timed out fetching" của Prisma query engine (SQLite) mà
 // TokenTracker retryDbOp cần nhận. db.ts KHÔNG import llm.ts — không cycle.
@@ -225,6 +228,12 @@ export interface LLMCallOptions {
   maxTokens?: number
   agentId?: string      /// AgentProfile.id — for per-agent token tracking
   agentName?: string    /// Agent name — denormalized for quick display
+  /** SOFTMAX-PILOT (2026-10-20 — user duyệt bật thí điểm): caller đánh dấu
+   *  model truyền vào là LỰA CHỌN TƯỜNG MINH của user (chat dropdown / team
+   *  modelOverride / goal-loop job model) → softmax policy KHÔNG đổi model
+   *  khởi đầu (chỉ đổi khi agent dùng model profile mặc định — semantic
+   *  P6-M3 giữ nguyên). Undefined → eligible cho softmax re-pick. */
+  explicitModelChoice?: boolean
   /** Phase 1c: Native function-calling tool schemas.
    *  When provided, the NIM API call includes `tools` + `tool_choice`.
    *  When undefined, the request body is unchanged (backward compatible). */
@@ -4680,6 +4689,12 @@ async function maybeApplySoftmaxModelPolicy(configuredZenModel: string, options?
   // đúng điểm dừng #5; env fallback giữ nguyên ngữ nghĩa bản FB-P6 (env
   // 'softmax' → bật, giá trị khác → off).
   if (getTuningEnum('runtime_model_policy') !== 'softmax') return configuredZenModel
+  // SOFTMAX-PILOT: lựa chọn tường minh của user (chat dropdown/team override)
+  // thắng policy — indicator KHÔNG bao giờ nói model X mà hệ chạy model Y.
+  if (options?.explicitModelChoice === true) {
+    console.log(`[LLM] softmax-pick model=${configuredZenModel} p=1.00 reason=caller-đánh-dấu-lựa-chọn-tường-minh — giữ nguyên`)
+    return configuredZenModel
+  }
   // Override tườ minh của user → tôn trọng (spec: "Chọn primary khi agent
   // KHÔNG có override tườ minh")
   if (await hasExplicitModelOverride(options?.agentName)) {
@@ -4760,6 +4775,62 @@ async function maybeApplySoftmaxModelPolicy(configuredZenModel: string, options?
   } catch (err) {
     console.warn('[LLM] softmax policy failed (fail-open → model cấu hình):', err instanceof Error ? err.message : String(err))
     return configuredZenModel
+  }
+}
+
+// ==================== SOFTMAX-PILOT NIM (2026-10-20 — user duyệt) ====================
+
+/**
+ * SOFTMAX-PILOT (2026-10-20): softmax chọn model khởi đầu cho đường NIM —
+ * mirror maybeApplySoftmaxModelPolicy (zen) nhưng ứng viên = NVIDIA_AGENT_MODELS
+ * (đã duyệt R25, không cần lọc caps). Chính sách P6-M3 giữ nguyên:
+ *   - runtime_model_policy ≠ 'softmax' (mặc định off) → trả model cấu hình;
+ *   - lựa chọn tường minh của user (options.explicitModelChoice / AgentModelOverride
+ *     DB / research ALS override) → KHÔNG đổi — indicator không bao giờ nói X chạy Y;
+ *   - Q(s,a) chưa có dữ liệu → uniform prior; τ = runtime_model_tau; seed tất định
+ *     hash(sessionId|agentName, qPolicyCycle) — chạy lại được (spec §P6-M3).
+ * Pilotscope: π_Q thuần — KHÔNG trộn Brain-C mixture (kill-switch 2 lớp như
+ * zen sẽ wire sau khi pilot có dữ liệu Q ≠ 0).
+ * Fail-open mọi tầng — không bao giờ làm hỏng call vì policy lỗi.
+ */
+async function maybeApplySoftmaxNimPolicy(configuredNimModel: string, options?: LLMCallOptions): Promise<string> {
+  if (getTuningEnum('runtime_model_policy') !== 'softmax') return configuredNimModel
+  if (options?.explicitModelChoice === true) {
+    console.log(`[LLM] softmax-nim model=${configuredNimModel} p=1.00 reason=caller-đánh-dấu-lựa-chọn-tường-minh — giữ nguyên`)
+    return configuredNimModel
+  }
+  if (await hasExplicitModelOverride(options?.agentName)) {
+    console.log(`[LLM] softmax-nim model=${configuredNimModel} p=1.00 reason=agent-có-override-tường-minh — giữ nguyên`)
+    return configuredNimModel
+  }
+  // Research team: user chọn model qua chat (ALS override đang hoạt động) →
+  // tôn trọng (model-override-context là module THUẦN node:async_hooks —
+  // import tĩnh không tạo circular).
+  if (currentResearchModelOverride()?.model) {
+    console.log(`[LLM] softmax-nim model=${configuredNimModel} p=1.00 reason=research-chat-override — giữ nguyên`)
+    return configuredNimModel
+  }
+  try {
+    const { getQAdvice, softmaxPolicy, deterministicSeed, pickIndexBySeed, agentRuntimeStateKey } = await import('@/lib/learning/q-table')
+    const candidates = NVIDIA_AGENT_MODELS.slice()
+    if (candidates.length <= 1) return configuredNimModel
+    const stateKey = agentRuntimeStateKey()
+    const advice = await getQAdvice(stateKey, candidates)
+    const qByAction = new Map(advice.map(a => [a.action, a.q]))
+    const scores = candidates.map(c => qByAction.get(c) ?? 0)
+    const probs = softmaxPolicy(scores, getTuningNumber('runtime_model_tau'))
+    const seed = deterministicSeed(
+      String(options?.sessionId ?? options?.agentName ?? 'anon'),
+      String(options?.qPolicyCycle ?? 0),
+    )
+    const idx = pickIndexBySeed(probs, seed)
+    if (idx < 0) return configuredNimModel
+    const picked = candidates[idx]
+    console.log(`[LLM] softmax-nim model=${picked} q=${scores[idx].toFixed(2)} p=${probs[idx].toFixed(2)} τ=${getTuningNumber('runtime_model_tau')} ${candidates.length}-ứng-viên seed=${seed}${picked !== configuredNimModel ? ` (thay ${configuredNimModel})` : ''}`)
+    return picked
+  } catch (err) {
+    console.warn('[LLM] softmax-nim policy failed (fail-open → model cấu hình):', err instanceof Error ? err.message : String(err))
+    return configuredNimModel
   }
 }
 
@@ -6200,24 +6271,27 @@ export async function callLLMForAgent(
   // ===== NIM ROUTE — các model NIM được duyệt cho agent (NVIDIA_AGENT_MODELS
   // R25: glm-5.3-flash chính + ds-v4.1-flash + glm-5.3 + nemotron-550b) =====
   if (NVIDIA_AGENT_MODELS.includes(model)) {
+    // SOFTMAX-PILOT (2026-10-20): policy on + không có lựa chọn tường minh →
+    // softmax chọn model khởi đầu trong NVIDIA_AGENT_MODELS theo Q(s,a).
+    const nimModel = await maybeApplySoftmaxNimPolicy(model, options)
     const nimResult = await callModelWithKeyRotation(
-      model,
+      nimModel,
       prompt,
       systemPrompt,
       options,
-      { taskLabel: `agent-nim:${model}` },
+      { taskLabel: `agent-nim:${nimModel}` },
     )
     if (nimResult && (nimResult.content || (nimResult.tool_calls && nimResult.tool_calls.length > 0))) {
       const tcCount = nimResult.tool_calls?.length ?? 0
-      console.log(`[LLM] Agent dùng NIM ${model} ✓ (${tcCount} tool_calls, ${nimResult.tokensUsed ?? 0} tokens)${options?.agentName ? ` — agent: ${options.agentName}` : ''}`)
+      console.log(`[LLM] Agent dùng NIM ${nimModel} ✓ (${tcCount} tool_calls, ${nimResult.tokensUsed ?? 0} tokens)${options?.agentName ? ` — agent: ${options.agentName}` : ''}`)
       return nimResult
     }
-    console.warn(`[LLM] Agent NIM ${model} thất bại — KHÔNG fallback (R19)${options?.agentName ? ` — agent: ${options.agentName}` : ''}: ${String(nimResult?.error || 'null result').slice(0, 200)}`)
+    console.warn(`[LLM] Agent NIM ${nimModel} thất bại — KHÔNG fallback (R19)${options?.agentName ? ` — agent: ${options.agentName}` : ''}: ${String(nimResult?.error || 'null result').slice(0, 200)}`)
     return {
       content: '',
       provider: 'nvidia',
-      model,
-      error: `NIM model "${model}" gọi thất bại — không tự fallback (R19): ${String(nimResult?.error || 'không rõ nguyên nhân — xem log [LLM] 🔄').slice(0, 300)}. Chọn model khác trong khung chat rồi gửi lại.`,
+      model: nimModel,
+      error: `NIM model "${nimModel}" gọi thất bại — không tự fallback (R19): ${String(nimResult?.error || 'không rõ nguyên nhân — xem log [LLM] 🔄').slice(0, 300)}. Chọn model khác trong khung chat rồi gửi lại.`,
     }
   }
 

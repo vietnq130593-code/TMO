@@ -195,8 +195,13 @@ describe('r81 · resolve STORE > ENV > DEFAULT', () => {
   test('default khi không có store + không có env', () => {
     const prevTau = process.env.RUNTIME_MODEL_TAU
     const prevEps = process.env.TMO_EPISODIC_EPSILON
+    // SOFTMAX-PILOT (2026-10-20): quality-gate tests stage tiêm RUNTIME_MODEL_POLICY=off
+    // (deterministic — .env production bật softmax). Case "default" cần môi trường
+    // KHÔNG có env này → delete + restore theo đúng pattern 2 biến trên.
+    const prevPolicy = process.env.RUNTIME_MODEL_POLICY
     delete process.env.RUNTIME_MODEL_TAU
     delete process.env.TMO_EPISODIC_EPSILON
+    delete process.env.RUNTIME_MODEL_POLICY
     try {
       expect(getTuningNumber('q_learning_alpha')).toBe(0.1)
       expect(getTuningNumber('runtime_model_tau')).toBe(0.5)
@@ -206,6 +211,7 @@ describe('r81 · resolve STORE > ENV > DEFAULT', () => {
     } finally {
       if (prevTau !== undefined) process.env.RUNTIME_MODEL_TAU = prevTau
       if (prevEps !== undefined) process.env.TMO_EPISODIC_EPSILON = prevEps
+      if (prevPolicy !== undefined) process.env.RUNTIME_MODEL_POLICY = prevPolicy
     }
   })
 

@@ -1111,6 +1111,8 @@ export async function POST(request: NextRequest) {
                 sessionId: sessionId || undefined,
                 temperature: agentTemperature,
                 maxTokens: agentMaxTokens,
+                // SOFTMAX-PILOT: agentModel = model user thấy ở indicator → tường minh
+                explicitModelChoice: true,
               },
             )
             const fastContent = (fastResult?.content || '').trim()
