@@ -224,4 +224,95 @@ Ghi chú kỹ thuật khảo sát: `rg` trên dev.log phải dùng `-a` (byte \0
 
 ## 9. LỊCH SỬ HIỆU ĐỈNH
 
-- **v0.1 — 2026-10-20:** khởi thảo theo chỉ thị user ("Tiến hành viết technical Blueprint cho những gì cần triển khai"). Bằng chứng §1 thu trong phiên này (trực tiếp + trích nguồn đã đối chiếu). Scope = R17 B-full + R17 C (đúng "ưu tiên kế tiếp" FB-F1F6); P-NEW-1 gộp vào B-full; P-NEW-4 + P-R13-1 ghi ngoài phạm vi §7. **Chờ user duyệt để vào W1.**
+- **v0.1 — 2026-10-20:** khởi thảo theo chỉ thị user ("Tiến hành viết technical Blueprint cho những gì cần triển khai"). Bằng chứng §1 thu trong phiên này (trực tiếp + trích nguồn đã đối chiếu). Scope = R17 B-full + R17 C (đúng "ưu tiên kế tiếp" FB-F1F6); P-NEW-1 gộp vào B-full; P-NEW-4 + P-R13-1 ghi ngoài phạm vi §7. Chờ duyệt để vào W1.
+- **REVIEW-1 — 2026-10-20 (phiên này, user directive "Vào vai kỹ sư AI, kiến trúc sư hệ thống review lại blueprint"):** phê vấn v0.1 bằng đối chiếu code (§10): verdict ⛔ tạm đứng — yêu cầu nâng **v0.2** với **5 P0 + 6 P1 + 3 P2**; thứ tự W1→W2, nguyên tắc §3, anti-goals §7 được duyệt giữ nguyên (§10.4). Chờ duyệt v0.2 để vào W1.
+
+---
+
+## 10. REVIEW-1 (2026-10-20) — phê vấn v0.1 bởi kỹ sư AI / kiến trúc sư hệ thống
+
+- **Đối tượng:** v0.1 @ commit `a7d74f1`.
+- **Phương pháp:** đúng giáo trình dự án — verdict-by-evidence: mọi phán quyết đối chiếu tới dòng code (đường dẫn kèm từng phát hiện), không review trên giấy. Điều tra bổ sung thực hiện trong phiên này: q-table.ts:322-354 · schema.prisma:2645-2649 · db.ts:238-255 + 172-179 · ledger.ts:270-297 · chat/route.ts:1235-1246.
+- **Verdict: ⛔ TẠM ĐỨNG — chưa duyệt v0.1 vào W1.** Cần v0.2 với 5 sửa P0 (§10.5). Toàn bộ phần đúng thì được duyệt giữ nguyên tường minh (§10.4) — review không "phá cho có".
+
+### 10.1 · Phát hiện P0 — chặn duyệt (5)
+
+**P0-1 · Hàng đợi in-memory không sống sót qua crash — trong đúng hệ thống mà triệu chứng số 1 là crash.**
+- Mâu thuẫn nội tại: §4.1c cam kết "at-least-once", nhưng queue nằm trong bộ nhớ process. Chính bằng chứng nền của blueprint (§1.2) là crash loop ~30s/chu kỳ (↺167→170; R17 §2.1: 94 restart/phiên). Kernel OOM/SIGKILL giết process → **toàn bộ queue biến mất và không khôi phục được** — "debt on boot" bất khả thi về mặt thông tin: process mới không biết queue cũ chứa gì.
+- Đánh giá trade trung thực: hiện nay mất op khi **contention** (Socket timeout → retry cạn → fail-open). Batcher chữa được điều đó, nhưng **thêm** một chế độ mất mới: mất khi **crash** (cửa sổ flush 1s × depth ≤ 200). Với tần suất crash đã đo, có nguy cơ đổi "mất hiếm nhưng theo contention" lấy "mất mỗi lần process chết" — nghịch với chính động cơ viết blueprint.
+- Yêu cầu v0.2 (3 lớp, bắt buộc):
+  1. **Trigger flush thứ 4 — `flushNow()` gọi tại run-close/finalize**: burst đo được của Task 33 nằm đúng lúc run-close; rỗng hóa queue ngay trước cửa sổ nguy hiểm nhất (crash cũng tập trung lúc finalize).
+  2. **Drain có bound riêng trong SelfExitDrain (≤ 3s, TÁCH khỏi hợp đồng 600ms response-drain hiện có)**: hết bound → debt + exit(1) như cũ — tuyệt đối không kéo dài exit đến mức đua thua kernel (bài học R17 §2.1: watchdog phải thắng cuộc đua bằng cách exit SỚM hơn, không phải chờ lâu hơn).
+  3. **Hạ danh hiệu trung thực + KPI định lượng**: "at-least-once qua contention + clean self-exit; **at-most-once qua SIGKILL/kernel OOM (cửa sổ ≤ 1s × ≤ 200 ops)**" — kèm KPI mới "ops mất/crash" đo bằng burst test (kill -9 giữa burst), không phải lời hứa.
+
+**P0-2 · Poison op đầu độc cả hàng đợi.**
+- Theo §4.1c hiện tại: cả-batch fail → retry → hết retry → debt + GIỮ batch → flush kế fail y hệt → **một op lỗi cấu trúc (P2025 record-not-found — db.ts:172-179 đã ghi nhận đây là control-flow THƯỜNG GẶP; hoặc constraint violation) chặn vĩnh viễn cả 200 op lành**, và bound "2 batch chờ" làm các batch khỏe phía sau bị drop oan.
+- Yêu cầu v0.2: **flush 2 pha** — pha 1: batch tx như thiết kế; nếu fail non-transient → **pha 2: per-op salvage** (mỗi op một mini-tx riêng, `withSqliteRetry` từng op); op poison → debt + loại khỏi batch; op lành phải commit đủ. Metric mới: `salvageSplits`, `poisonCount` (đẩy vào observation instrumentation).
+
+**P0-3 · Coalesce last-wins hủy hoại op RMW (đọc-sửa-ghi) — mất dữ liệu im lặng.**
+- Kiểm chứng code: `updateQ` (q-table.ts:322-354) là **RMW thuần** — `findUnique` đọc qValue hiện tại → tính `newQ` theo công thức Q-learning → `upsert { qValue: newQ (set tuyệt đối), visits: { increment: 1 } }`. Nếu caller khai `idempotencyKey` cho 2 updateQ cùng (stateKey, actionKey): coalesce last-wins → **phần đóng góp của op đầu biến mất không dấu vết** — mất đúng tín hiệu Q-learning mà Task 33 đã đo là thiệt hại ("updateQ mất vĩnh viễn → Brain-C đứt nguồn"). `visits: increment` cùng loại rủi ro.
+- Yêu cầu v0.2: quy tắc cứng + type-guard tại enqueue: **coalesce CHỈ dành cho set-semantics tuyệt đối** (upsert/update ghi giá trị cuối cùng không phụ thuộc giá trị hiện tại); **RMW — increment, updateQ, mọi công thức đọc-hiện-tại-tính-lại — KHÔNG BAO GIỜ coalesce**, giữ FIFO nguyên vẹn trong tx (tx thấy write của op trước trong cùng batch → ngữ nghĩa chuỗi được bảo toàn). Kèm **bảng audit từng call-site S2** làm cổng migrate từng site, cột: `set|RMW` · `cần-id-trả-về` · `idempotent` · `direct-bắt-buộc`.
+
+**P0-4 · KPI #4 như hiện tại KHÔNG THỂ ĐẠT bởi S3; KPI #5 đo sai thứ cần đo.**
+- Blueprint tự dẫn chứng (§1.2, R17 §2.1 verify live): cold-compile route → RSS 2270MB → self-exit. Tách worker đưa organs + mini-services ra khỏi process API, nhưng **boot ratchet của Next dev compile vẫn nằm trong process API** → S3 không diệt được restart của API. S3 làm được đúng một việc: **cách ly blast radius** (job không chết khi API restart). Giữ KPI #4 "API restart/run = 0" nguyên văn → giao thức quan sát sẽ đánh FAIL → thúc ép masking — sai hướng đúng như anti-goal §7.4 chống cap.
+- Yêu cầu v0.2:
+  - KPI #4 đổi thành kết quả cách ly: **"job bị giết khi API restart = 0 (job chạy trọn vẹn trong worker)"** — con số "API restart count" chuyển thành **báo cáo** (không gate), thuộc nợ follow-up đặt tên: **"API compile-ratchet boot"** (không scope-creep bản này; ghi §7).
+  - KPI #5 "steady < 900MB" đã thỏa ngầm ngay hôm nay (pm2: 61.9MB) — đo thứ thực sự gây sự cố: đổi thành **gate phần thuộc W2: "mức đóng góp của worker/organs vào RSS API = 0 sau tách (delta trước/sau)"** + **báo cáo (không gate): RSS peak boot API trước/sau** làm số liệu cho nợ compile-ratchet.
+
+**P0-5 · `ObservationEvent.seq @unique` — S2 mâu thuẫn thiết kế single-writer; W2 phá giả thiết "1 process".**
+- Kiểm chứng schema.prisma:2645-2649: `seq Int @unique` cấp bằng `MAX(seq)+1` trong tx ngắn; comment ghi rõ giả thiết **"single-writer queue… SQLite serialise tự nhiên + pm2 fork 1 process"** (RO-4); ledger.ts:270-276 xác nhận drain đơn luồng là điều kiện an toàn của phép cấp seq.
+- Hai mâu thuẫn với v0.1:
+  (a) §4.2 đề xuất batch "ledger events dòng đơn" → tạo **allocator seq thứ hai trong cùng process** (tx của batcher chạy trên connection khác với drain writeOne) — hai tx đọc cùng MAX → đụng `@unique` → P2002 **không nằm trong TRANSIENT_SQLITE_PATTERNS** (db.ts:238-255) → fail cứng, sự kiện mất.
+  (b) W2 split: worker process + API process cùng cấp seq → giả thiết "pm2 fork 1 process" sập đúng như comment đã cảnh báo — hiện tượng này tồn tại bất kể có batch events hay không.
+- Yêu cầu v0.2:
+  1. **Rút observation events khỏi danh sách batch §4.2** (giữ nguyên toàn bộ đường writeOne — đúng thiết kế RO-4);
+  2. **Thêm "P2002 đến từ seq" vào họ transient + retry** (tx mới đọc lại MAX — an toàn: tx cũ chưa commit thì chưa chiếm seq; đây là điều kiện cần cho W2);
+  3. Ghi rõ W2 phụ thuộc fix (2) — không phải tùy chọn.
+
+### 10.2 · Phát hiện P1 — nên sửa trong v0.2 (6)
+
+| # | Phát hiện (kiểm chứng) | Yêu cầu v0.2 |
+|---|---|---|
+| P1-1 | `enqueue` chờ-flush: khi batch bị DROP, promise của caller "treo vô định" (§4.1a chỉ định nghĩa resolve lúc thành công) | **Reject có type** (`BatchDroppedError`) khi drop; pending xuyên retained-retry nhưng có trần; fire-and-forget không đổi |
+| P1-2 | 2 lớp retry đè nhau: call-site `withSqliteRetry` + batch retry cả-batch + (sắp có) salvage per-op → nhân hồi lũy thừa | Chủ sở hữu retry dịch về batcher trên batched path; raw fn trong op KHÔNG tự `withSqliteRetry` nữa; direct path giữ nguyên hiện trạng |
+| P1-3 | Split worker không có HttpWatchdog; `GOAL_LOOP_STALL_*` chỉ cảnh báo UI — worker **treo** (await kẹt, RSS thấp) sẽ không bao giờ được restart | Thêm **heart-movement watchdog trong worker**: heart không nhúc nhích > ngưỡng → self-exit → pm2 restart (khác STALL-preempt là pause job — pause không chữa process treo) |
+| P1-4 | Drain batcher nếu đè lên hợp đồng SelfExitDrain 600ms sẽ phá đúng thiết kế đang thắng cuộc đua kernel | Bound riêng ≤ 3s đã nêu P0-1.2 — tách bạch, exit đúng giờ |
+| P1-5 | Batch tx 200 op giữ write-lock SQLite suốt batch → **block heartbeat/claim của worker** (DB-liveness là đường TỚI của điều độ) + ledger interactive tx (ledger.ts:272) | **Target hold-time batch tx** (< 300ms điển hình; vượt → tự split batch nhỏ hơn) + KPI mới: "claim/heartbeat/checkout p95 < 500ms" |
+| P1-6 | Split mode vẫn giữ inline-fallback khi enqueue lỗi (chat route:1235-1246: "enqueue lỗi → chạy INLINE"; kèm guard cấm double-run khi job row đã tạo) | Ghi rõ vào §4.3: fallback là **chủ đích giữ nguyên** (availability khi DB xuống) — job có thể chạy trong process API dưới điều kiện DB-degraded; đây là hành vi cũ có guard, không phải regression |
+
+### 10.3 · Phát hiện P2 (3)
+
+1. `PrismaModel` union cần delegate-map typed (tránh `any` tràn qua ranh giới batcher — implement note).
+2. Burst test 500 ops/1s bổ sung 2 phép đo: (a) direct-path interleaved — chat create latency không hồi quy khi batch ON; (b) **định lượng ops mất/crash** (kill -9 giữa burst) — đầu vào cho KPI P0-1.3.
+3. Observation instrumentation (§4.1d đang có 4 số) thêm: `holdMs` (P1-5), `salvageSplits`, `poisonCount` (P0-2).
+
+### 10.4 · Những gì review DUYỆT GIỮ NGUYÊN (chống review-phá phần đã đúng)
+
+1. **Thứ tự W1 (B-full) → W2 (C)** + đủ 3 lý do §5 — đứng vững qua phê vấn; P0-1 càng củng cố (tách trước không giảm tải, chỉ dời chỗ đứng hàng đợi).
+2. **Nguyên tắc §3** — đặc biệt 3.2 "chỉ batch ĐUÔI ghi": P0-3 chính là bằng chứng RMW phải giữ FIFO trên đường TỚI.
+3. **Anti-goals §7** — giữ nguyên cả 9; lưu ý P0-1 KHÔNG được giải bằng cách thêm middleware ngoài (vi phạm anti-goal 2) — giải bằng flush-trigger + drain bound + danh hiệu trung thực.
+4. **S2 dựa đúng danh sách burst Task 33** — với điều kiện bảng audit P0-3; việc rút observation events khỏi list (P0-5) là điều chỉnh danh sách theo thiết kế RO-4 có sẵn, không phải phá nguồn.
+5. **S3 topology + DB-liveness direction** ("DB là bus, 0 IPC mới") — với bổ sung P1-3 (heart-movement) và P1-6 (fallback ghi minh thị).
+6. **KPI #1-3, #6-7** nguyên vẹn; #4/#5 điều chỉnh như P0-4 (bản chất là làm cho KPI đo đúng thứ S3 làm được).
+
+### 10.5 · Bảng yêu cầu v0.2 (tổng hợp — map finding → chỗ sửa)
+
+| Finding | Sửa tại |
+|---|---|
+| P0-1 (crash-loss) | §4.1b (trigger 4 flushNow) · §4.1c (danh hiệu) · §4.1d (KPI ops-mất/crash) · SelfExitDrain bound ≤3s |
+| P0-2 (poison op) | §4.1c (flush 2 pha + salvage) · §4.1d (salvageSplits/poisonCount) |
+| P0-3 (RMW coalesce) | §4.1a (type-guard cấm coalesce RMW) · §4.2 (bảng audit call-site) |
+| P0-4 (KPI #4/#5) | §6 (gate cách ly + báo cáo; nợ "API compile-ratchet boot" ghi §7) |
+| P0-5 (seq single-writer) | §4.2 (rút events khỏi batch list) · §4.3b (P2002-seq transient — điều kiện W2) |
+| P1-1..P1-6 | §4.1 (promise/retry/holdMs) · §4.3 (heart-movement + fallback minh thị) · §6 (KPI claim/heartbeat p95) |
+| P2-1..P2-3 | §4.1a (delegate-map) · §5 W1 (burst test mở rộng) · §4.1d |
+
+### 10.6 · Tái hiện điều tra review
+
+```
+rg -n "qValue: newQ|visits: \{ increment" src/lib/learning/q-table.ts    # P0-3 — RMW updateQ
+rg -n "seq" prisma/schema.prisma | rg -A2 ObservationEvent                # P0-5 — @unique + comment single-writer
+rg -n "TRANSIENT_SQLITE_PATTERNS" -A18 src/lib/db.ts                      # P0-2/P0-5 — họ transient (thiếu P2002-seq)
+sed -n '1235,1246p' src/app/api/openclaw/chat/route.ts                     # P1-6 — inline-fallback + double-run guard
+sed -n '270,297p' src/lib/observation/ledger.ts                            # P0-5 — writeOne drain đơn luồng
+```
