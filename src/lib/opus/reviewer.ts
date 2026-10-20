@@ -229,12 +229,22 @@ export function parseOpusVerdict(text: string): OpusVerdict {
   return verdict
 }
 
-/** Verdict ESCALATE an toàn khi model không trả JSON hợp lệ sau 2 lần thử */
-export function buildSafeEscalateVerdict(reason: string): OpusVerdict {
-  const axis = (label: string): OpusAxis => ({ score: 5, note: `Chưa đánh giá được (${label}) — model không trả verdict hợp lệ` })
+/**
+ * Verdict ESCALATE an toàn khi model không trả JSON hợp lệ sau 2 lần thử.
+ * FIX OPUS-VERDICT-1 (2026-10-20): thêm kind — trước đây mọi nguyên nhân đều
+ * hiện chung chung "Opus không đọc được verdict JSON từ model"; lý do thật chỉ
+ * nằm rải rác trong dev.log. Giờ:
+ *   - kind='parse' (mặc định): call LLM thành công nhưng output sai format.
+ *   - kind='infra': LLM call thất bại tầng hạ tầng (model chết 410, key hỏng,
+ *     R19 soft-fail {content:'', error}) — llm.error được đưa nguyên văn vào
+ *     reason để chẩn đoán thấy được NGAY từ OpusReview.verdict JSON.
+ */
+export function buildSafeEscalateVerdict(reason: string, kind: 'parse' | 'infra' = 'parse'): OpusVerdict {
+  const infra = kind === 'infra'
+  const axis = (label: string): OpusAxis => ({ score: 5, note: `Chưa đánh giá được (${label}) — ${infra ? 'LLM call thất bại tầng hạ tầng' : 'model không trả verdict hợp lệ'}` })
   return {
     decision: 'ESCALATE',
-    summary: 'Opus không đọc được verdict JSON từ model',
+    summary: infra ? 'Opus không gọi được LLM (lỗi hạ tầng model/provider)' : 'Opus không đọc được verdict JSON từ model',
     axes: {
       specCompliance: axis('spec compliance'),
       processQuality: axis('process quality'),
@@ -244,13 +254,15 @@ export function buildSafeEscalateVerdict(reason: string): OpusVerdict {
     },
     issues: [],
     directive: {
-      goal: 'Kiểm tra lại model/định dạng output của Opus',
-      rationale: `Parse lỗi 2 lần (${reason}) — cần kiểm tra cấu hình model chain trước khi tiếp tục review tự động`,
+      goal: infra ? 'Kiểm tra cấu hình model/provider của Opus (LLM call thất bại)' : 'Kiểm tra lại model/định dạng output của Opus',
+      rationale: infra
+        ? `LLM call thất bại (${reason}) — cần cấu hình model đang sống cho Opus trước khi tiếp tục review tự động`
+        : `Parse lỗi 2 lần (${reason}) — cần kiểm tra cấu hình model chain trước khi tiếp tục review tự động`,
       scope: 'Chỉ kiểm tra cấu hình model/instruction của Opus — không thay đổi phần còn lại của hệ thống',
       delegation: 'Mr. Architect',
-      acceptanceCriteria: ['Opus model trả về JSON parse được ngay lần thử đầu'],
+      acceptanceCriteria: [infra ? 'LLM call của Opus trả content không rỗng (error unset) ngay lần thử đầu' : 'Opus model trả về JSON parse được ngay lần thử đầu'],
     },
-    rationale: 'Parse lỗi 2 lần — dừng chờ Mr. Architect thay vì phán đoán mù',
+    rationale: infra ? 'Lỗi hạ tầng LLM — dừng chờ Mr. Architect thay vì phán đoán mù' : 'Parse lỗi 2 lần — dừng chờ Mr. Architect thay vì phán đoán mù',
     evidenceRefs: [],
     stopAssessment: {
       ledgerClean: false,
@@ -341,9 +353,13 @@ export async function runOpusReview(
     const profile = await getOpusProfile()
     const agentConfig = profile
       ? { provider: profile.provider, model: profile.model }
-      : // getOpusProfile chỉ null khi DB lỗi — fallback production core zen
-        // (minimax-m3 cũ đã EOL 410 — loại bỏ 2026-11-30)
-        { provider: 'zen', model: 'space-bunny-free' }
+      : // getOpusProfile chỉ null khi DB lỗi — fallback production fleet NIM.
+        // FIX OPUS-VERDICT-1 (2026-10-20): fallback cũ zen/space-bunny-free bị
+        // Zen khai tử (HTTP 410 ModelDeprecated — probe live xác nhận; key oc_sk
+        // còn bị 403 FreeTierError với model thay thế minimax-m3.1-flash-free,
+        // OpenCode CLI không cài) → đồng bộ về model fleet NVIDIA đang sống
+        // (14 agent còn lại đều chạy nvidia/nemotron-3-ultra-550b-a55b).
+        { provider: 'nvidia', model: 'nvidia/nemotron-3-ultra-550b-a55b' }
 
     const dossier = await buildOpusDossier(sessionId, messageId)
     const dossierPrompt =
@@ -360,7 +376,24 @@ export async function runOpusReview(
       agentName: OPUS_AGENT_NAME,
     })
 
-    // 4. Parse + retry 1 lần + fail-safe
+    // ━━ FIX OPUS-VERDICT-1 (2026-10-20): guard lỗi hạ tầng LLM ━━
+    // callLLMForAgent theo R19 trả soft-fail { content: '', error } khi model
+    // chết / key hỏng. Bằng chứng 2 review 2026-10-20: profile Opus còn trỏ
+    // zen/space-bunny-free đã 410 ModelDeprecated → parse chuỗi rỗng →
+    // "Không tìm thấy JSON object trong output model" → retry "chỉ JSON thuần"
+    // với model đã chết là thuốc sai bệnh (0.7s, 4 calls, 100% fail) → fallback
+    // ESCALATE với thông báo chung chung, nguyên nhân thật chỉ nằm trong dev.log.
+    // Giờ: llm.error set → là LỖI HẠ TẦNG, KHÔNG parse, KHÔNG retry — reason
+    // thật (nguyên văn từ llm.ts) thẳng vào verdict fallback (kind='infra').
+    if (llm?.error && !llm.content) {
+      usedFallback = true
+      verdict = buildSafeEscalateVerdict(
+        `LỖI HẠ TẦNG LLM — KHÔNG phải lỗi định dạng (model không trả gì để parse): ${llm.error}`,
+        'infra'
+      )
+      console.error(`[Opus][reviewer] LLM call thất bại (hạ tầng) — bỏ qua parse/retry: ${llm.error}`)
+    } else
+    // 4. Parse + retry 1 lần + fail-safe (chỉ khi call THÀNH CÔNG mà sai format)
     try {
       verdict = parseOpusVerdict(llm.content ?? '')
     } catch (firstErr) {
@@ -378,6 +411,12 @@ export async function runOpusReview(
             agentName: OPUS_AGENT_NAME,
           }
         )
+        // FIX OPUS-VERDICT-1: retry cũng chết tầng hạ tầng (transient sau lần
+        // đầu format-sai) → reason phải là lỗi LLM thật, không phải
+        // "Không tìm thấy JSON object" gây hiểu nhầm là lỗi prompt/định dạng.
+        if (retry?.error && !retry.content) {
+          throw new Error(`LLM lỗi ở lần retry (hạ tầng): ${retry.error}`)
+        }
         verdict = parseOpusVerdict(retry.content ?? '')
         llm = retry
       } catch (secondErr) {
