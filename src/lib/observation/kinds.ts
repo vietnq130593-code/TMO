@@ -82,6 +82,13 @@ export const OBS_KINDS: readonly ObsKindDef[] = [
   // OBS-V3 H6 (R34): Layer 9 chỉ thị TẠM DỪNG mở rộng phạm vi (lỗi lặp ≥3 cách
   // trong session) — trước giờ chỉ SSE omega_escalation, mất theo reload.
   { kind: 'adapt.escalate', group: 'alert', label: 'Thích ứng dừng mở rộng' },
+  // §7.10 (2026-10-21) + S6-code — 2 kind memory của MemWatchdog (instrumentation):
+  // mem.soft_tier phát từ EXECUTION-EFFICIENCY S6 (đã phát từ trước nhưng thiếu
+  // dòng khai báo — fail-open nhóm 'db' trung tính); mem.boot_grace MỚI cho
+  // boot-grace HARD-RSS (spike cold-compile được tha). Nhóm 'impact' — tín hiệu
+  // sức khỏe process, không phải cảnh báo cần action.
+  { kind: 'mem.soft_tier', group: 'impact', label: 'Mem soft-tier' },
+  { kind: 'mem.boot_grace', group: 'impact', label: 'Mem boot-grace' },
 ]
 
 const KIND_BY_NAME = new Map<string, ObsKindDef>(OBS_KINDS.map(k => [k.kind, k]))

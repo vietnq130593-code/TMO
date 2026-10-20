@@ -27,6 +27,13 @@ import { maybeSyncZenFreeModels } from './lib/free-models-sync'
 // drift và tự chạy `prisma db push` — KHÔNG chặn boot (fire-and-forget);
 // warm-up bên dưới await nó trước khi prefetch /api/agents.
 import { ensureDbReady } from './lib/db-setup'
+// §7.10 (2026-10-21): policy thuần cho HARD-RSS tier boot-grace — xem
+// src/lib/mem-watchdog-policy.ts cho bằng chứng + thiết kế.
+import {
+  resolveHardTierDecision,
+  MEM_WATCHDOG_BOOT_GRACE_MS_DEFAULT,
+  MEM_WATCHDOG_BOOT_CEILING_HEADROOM_MB,
+} from './lib/mem-watchdog-policy'
 
 // ============================================================================
 // R40 (2026-10-18) — SPAWN CWD GUARD, ROOT Ở MODULE SCOPE.
@@ -181,6 +188,24 @@ if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
   // bị: mục tiêu là hard-tier ít khi phải bắn (spike bị chặn sớm ở tầng V8 GC).
   const MEM_WATCHDOG_SOFT_MB = Number(process.env.MEM_WATCHDOG_SOFT_MB ?? 1600)
   let softWarnActive = false
+  // §7.10 BLUEPRINT-R17BC (round riêng 2026-10-21 — DEBT-R17BC giữ hoãn):
+  // boot-grace cho HARD-RSS tier — cold-compile Next dev lúc boot spike RSS
+  // 2.2-2.6GB THOÁNG QUA (bằng chứng dev.log: boot bắt kịp RSS<2100 thì sống
+  // và RSS rơi ~500MB sau 40s) trong khi tier blind HARD giết app ngay lần
+  // check đầu → crash-loop ~29s/vòng. Grace tính từ process start: trong
+  // grace vượt HARD chỉ log + observation event; vượt ceiling (mặc định
+  // HARD+700) vẫn exit (runaway thật); ngoài grace hành vi y hệt vòng 11c.
+  // Tier áp-lực-thật (avail-aware ×2 + global guard) KHÔNG nhận grace.
+  const MEM_WATCHDOG_BOOT_GRACE_MS = Number(
+    process.env.MEM_WATCHDOG_BOOT_GRACE_MS ?? MEM_WATCHDOG_BOOT_GRACE_MS_DEFAULT,
+  )
+  const MEM_WATCHDOG_BOOT_CEILING_MB = Number(
+    process.env.MEM_WATCHDOG_BOOT_CEILING_MB ??
+      (MEM_WATCHDOG_RSS_HARD_MB > 0
+        ? MEM_WATCHDOG_RSS_HARD_MB + MEM_WATCHDOG_BOOT_CEILING_HEADROOM_MB
+        : 0),
+  )
+  let bootGraceEventEmitted = false
   if (MEM_WATCHDOG_MB > 0) {
     const readMemAvailableMb = (): number | null => {
       try {
@@ -229,14 +254,53 @@ if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
         // avail → self-exit sạch TRƯỚC KHI bị SIGINT ngoài ý muốn (xem comment
         // khai báo MEM_WATCHDOG_RSS_HARD_MB). Không cần chờ 2 check — reaper
         // có thể xuống tay bất kỳ lúc nào sau khi RSS vượt vùng này.
-        if (MEM_WATCHDOG_RSS_HARD_MB > 0 && rssMb >= MEM_WATCHDOG_RSS_HARD_MB) {
-          console.error(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB ≥ HARD ngưỡng ${MEM_WATCHDOG_RSS_HARD_MB}MB — reaper sandbox thực chiến SIGINT ở ~2.1-2.2GB (vòng 11c) → self-exit sạch TRƯỚC khi bị giết âm thầm (PM2 restart ~5s; durable goal jobs RESUME từ checkpoint)`)
-          // ROUND-46 review-fix (2a): return sau khi lên lịch exit — không rơi
-          // tiếp xuống các nhánh check khác trong cùng tick (đánh giá round-46:
-          // log "RSS cao một mình chưa nguy hiểm" in RA khi exit đã lên lịch —
-          // gây nhiễu điều tra vận hành).
-          selfExitWithDrain(`MemWatchdog HARD-RSS ${rssMb.toFixed(0)}MB ≥ ${MEM_WATCHDOG_RSS_HARD_MB}MB`)
-          return
+        // §7.10 (2026-10-21): tier blind này nhận BOOT-GRACE — quyết định qua
+        // policy thuần resolveHardTierDecision (spike cold-compile thoáng qua
+        // được tha trong cửa sổ grace từ process start; vượt ceiling grace vẫn
+        // exit; ngoài grace hành vi y hệt vòng 11c). Tier avail-aware ×2 và
+        // global guard phía dưới KHÔNG qua policy — áp lực hệ thống thật vẫn
+        // được xử lý tức thì cả trong grace.
+        if (MEM_WATCHDOG_RSS_HARD_MB > 0) {
+          const hardDecision = resolveHardTierDecision({
+            rssMb,
+            hardMb: MEM_WATCHDOG_RSS_HARD_MB,
+            uptimeMs: Math.round(process.uptime() * 1000),
+            graceMs: MEM_WATCHDOG_BOOT_GRACE_MS,
+            ceilingMb: MEM_WATCHDOG_BOOT_CEILING_MB,
+          })
+          if (hardDecision.action === 'exit') {
+            if (hardDecision.reason === 'grace-ceiling') {
+              console.error(`[MemWatchdog] §7.10 GRACE-CEILING: RSS ${rssMb.toFixed(0)}MB ≥ ceiling ${hardDecision.ceilingMb}MB TRONG cửa sổ boot-grace — không phải spike cold-compile mà là runaway thật → self-exit sạch TRƯỚC reaper (PM2 restart ~5s; durable goal jobs RESUME từ checkpoint)`)
+              selfExitWithDrain(`MemWatchdog §7.10 grace-ceiling RSS ${rssMb.toFixed(0)}MB ≥ ${hardDecision.ceilingMb}MB trong boot-grace`)
+            } else {
+              console.error(`[MemWatchdog] RSS ${rssMb.toFixed(0)}MB ≥ HARD ngưỡng ${MEM_WATCHDOG_RSS_HARD_MB}MB — reaper sandbox thực chiến SIGINT ở ~2.1-2.2GB (vòng 11c) → self-exit sạch TRƯỚC khi bị giết âm thầm (PM2 restart ~5s; durable goal jobs RESUME từ checkpoint)`)
+              selfExitWithDrain(`MemWatchdog HARD-RSS ${rssMb.toFixed(0)}MB ≥ ${MEM_WATCHDOG_RSS_HARD_MB}MB`)
+            }
+            // ROUND-46 review-fix (2a): return sau khi lên lịch exit — không rơi
+            // tiếp xuống các nhánh check khác trong cùng tick.
+            return
+          }
+          if (hardDecision.action === 'grace-log') {
+            console.warn(`[MemWatchdog] §7.10 BOOT-GRACE: RSS ${rssMb.toFixed(0)}MB ≥ HARD ${MEM_WATCHDOG_RSS_HARD_MB}MB nhưng trong cửa sổ grace (còn ${Math.round(hardDecision.graceRemainingMs / 1000)}s, uptime ${Math.round(process.uptime())}s) — nghi spike cold-compile Next dev → THA (không exit); ceiling tự vệ ${hardDecision.ceilingMb}MB; tier áp-lực-thật (avail-aware ×2 + global guard) vẫn hoạt động đầy đủ`)
+            // Observation event 1 lần/cửa sổ grace — bằng chứng cho kênh quan
+            // sát (throttle: spike có thể kéo dài vài check 20s, không spam).
+            if (!bootGraceEventEmitted) {
+              bootGraceEventEmitted = true
+              void import('@/lib/observation/ledger')
+                .then(m => m.observeEvent({
+                  actor: 'system:memwatchdog',
+                  kind: 'mem.boot_grace',
+                  summary: `RSS ${Math.round(rssMb)}MB ≥ HARD ${MEM_WATCHDOG_RSS_HARD_MB}MB trong boot-grace §7.10 — spike cold-compile được tha (ceiling ${hardDecision.ceilingMb}MB)`,
+                  payload: {
+                    rssMb: Math.round(rssMb),
+                    hardMb: MEM_WATCHDOG_RSS_HARD_MB,
+                    ceilingMb: hardDecision.ceilingMb,
+                    graceRemainingMs: hardDecision.graceRemainingMs,
+                  },
+                }))
+                .catch(() => { /* fail-open — observation không được phá watchdog */ })
+            }
+          }
         }
         // Global-memory guard — ROUND-3 FIX
         if (MEM_WATCHDOG_GLOBAL_MIN_MB > 0 && rssMb > MEM_WATCHDOG_GLOBAL_RSS_MB) {
@@ -275,7 +339,7 @@ if (!globalForMemWatchdog.__tmoMemWatchdogStarted) {
       } catch { /* fail-open — watchdog lỗi không được phép tự giết app */ }
     }, MEM_WATCHDOG_INTERVAL_MS)
     memWatchdogTimer.unref?.()
-    console.log(`[MemWatchdog] bật — ngưỡng RSS ${MEM_WATCHDOG_MB}MB × 2 lần kiểm tra (${Math.round(MEM_WATCHDOG_INTERVAL_MS / 1000)}s/lần, avail-aware: chỉ exit khi MemAvailable<${MEM_WATCHDOG_RSS_EXIT_AVAIL_MB}MB) + global guard MemAvailable<${MEM_WATCHDOG_GLOBAL_MIN_MB}MB khi RSS>${MEM_WATCHDOG_GLOBAL_RSS_MB}MB (exit ngay) + HARD-RSS ${MEM_WATCHDOG_RSS_HARD_MB}MB (exit ngay bất kể avail — chống reaper sandbox SIGINT ~2.1-2.2GB)`)
+    console.log(`[MemWatchdog] bật — ngưỡng RSS ${MEM_WATCHDOG_MB}MB × 2 lần kiểm tra (${Math.round(MEM_WATCHDOG_INTERVAL_MS / 1000)}s/lần, avail-aware: chỉ exit khi MemAvailable<${MEM_WATCHDOG_RSS_EXIT_AVAIL_MB}MB) + global guard MemAvailable<${MEM_WATCHDOG_GLOBAL_MIN_MB}MB khi RSS>${MEM_WATCHDOG_GLOBAL_RSS_MB}MB (exit ngay) + HARD-RSS ${MEM_WATCHDOG_RSS_HARD_MB}MB (exit ngay bất kể avail — chống reaper sandbox SIGINT ~2.1-2.2GB)${MEM_WATCHDOG_RSS_HARD_MB > 0 && MEM_WATCHDOG_BOOT_GRACE_MS > 0 ? ` + §7.10 boot-grace ${Math.round(MEM_WATCHDOG_BOOT_GRACE_MS / 1000)}s từ process start (spike cold-compile ≤ ceiling ${Number.isFinite(MEM_WATCHDOG_BOOT_CEILING_MB) && MEM_WATCHDOG_BOOT_CEILING_MB > 0 ? Math.max(MEM_WATCHDOG_BOOT_CEILING_MB, MEM_WATCHDOG_RSS_HARD_MB) : MEM_WATCHDOG_RSS_HARD_MB}MB được tha; tier áp-lực-thật không nhận grace)` : ''}`)
   }
 }
 

@@ -113,8 +113,8 @@ describe('r122 · A — 6 kind mới đăng ký đúng nhóm (OBS-V3)', () => {
     expectKind('adapt.escalate', 'alert')
     expectKind('model.failover', 'tuning')
     expectKind('chat.fastpath', 'run')
-    // tổng 25 (r99-C1 pin đồng bộ — PIN UPDATE R34)
-    expect(OBS_KINDS.length).toBe(25)
+    // tổng 27 (r99-C1 pin đồng bộ — PIN UPDATE R34; §7.10 2026-10-21: 25 → 27 — mem.soft_tier + mem.boot_grace nhóm impact)
+    expect(OBS_KINDS.length).toBe(27)
   })
 })
 
