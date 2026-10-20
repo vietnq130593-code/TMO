@@ -309,6 +309,40 @@ export const GOAL_LOOP_STALL_PREEMPT_MS = Math.max(0, intEnvWithDefault('GOAL_LO
  */
 export const GOAL_LOOP_MUTEX_MAX_PREEMPTS = Math.max(1, intEnvWithDefault('GOAL_LOOP_MUTEX_MAX_PREEMPTS', 3))
 
+// ==================== DEBT-R17BC — PID-RECYCLING GATE (orphan sweep) ====================
+
+/**
+ * DEBT-R17BC (nợ follow-up pilot W2 2026-10-20 — trả 2026-10-21) —
+ * PID-RECYCLING GATE cho orphan sweep: Linux tái chế pid nên "pid còn sống"
+ * qua process.kill(pid, 0) CHƯA đủ tin rằng chủ cũ của job còn chạy (bằng
+ * chứng pilot: probe chết → pid 32463 được process khác tái sử dụng →
+ * isWorkerPidAlive true nhầm → sweep SKIP requeue → job mồ côi kẹt 'running'
+ * tới trần STALE-AGE 12h mới bị mark failed, không bao giờ RESUME).
+ * Quyết định THUẦN (dễ unit test — không đụng DB/process):
+ *   - pid chết → không nghi (đường requeue thường đã xử).
+ *   - pid sống + heartbeat chưa từng ghi (null/undefined) → TIN pid (bảo thủ:
+ *     claim ghi heartbeatAt ngay khi đổi status sang running nên đây chỉ là
+ *     row legacy — thiếu tín hiệu thì không phạt).
+ *   - pid sống + heartbeat stale ≥ threshold (default GOAL_LOOP_STALL_PREEMPT_MS
+ *     30' — xa hơn trần LLM 8'; heartbeat DB ghi MỖI VÒNG/tool batch, throttle
+ *     15s) → NGHI tái chế: hoặc pid bị process khác tái sử dụng, hoặc job đã
+ *     wedged — cả hai đều đã nằm trong semantics preempt (requeue GIỮ
+ *     checkpoint qua updateMany conditional chống đè race) nên an toàn tương
+ *     đương đường stall-preempt hiện có.
+ *   - threshold ≤ 0 → tắt gate (đồng bộ ngữ nghĩa "0 = tắt" của họ GOAL_LOOP_
+ *     preempt/starve — fail-safe về hành vi cũ).
+ */
+export function isPidRecycleSuspect(
+  pidAlive: boolean,
+  heartbeatAgeMs: number | null | undefined,
+  thresholdMs: number = GOAL_LOOP_STALL_PREEMPT_MS
+): boolean {
+  if (!pidAlive) return false
+  if (thresholdMs <= 0) return false
+  if (heartbeatAgeMs === null || heartbeatAgeMs === undefined || !Number.isFinite(heartbeatAgeMs)) return false
+  return heartbeatAgeMs >= thresholdMs
+}
+
 // ==================== TASK 43 — ADAPTIVE CONCURRENCY (AUTO-SCALING) ====================
 
 /**

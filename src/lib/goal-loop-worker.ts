@@ -72,6 +72,7 @@ import {
   GOAL_LOOP_STALL_PREEMPT_MS,
   GOAL_LOOP_MUTEX_MAX_PREEMPTS,
   GOAL_LOOP_RESUME_MAX_AGE_MS,
+  isPidRecycleSuspect,
   type GoalLoopCheckpoint,
   type GoalLoopDurableHooks,
   type GoalLoopJobInput,
@@ -467,7 +468,22 @@ class GoalLoopWorker {
         // Máy chạy >1 instance (dev + pm2 / 2 terminal) → mỗi process có Map
         // running riêng; sweep của process này KHÔNG được requeue job process
         // kia đang chạy (double-run thật). Chỉ tiếp tục khi pid chủ đã CHẾT.
-        if (row.workerPid && row.workerPid !== process.pid && this.isWorkerPidAlive(row.workerPid)) {
+        // ━━━ DEBT-R17BC — PID-RECYCLING GATE (nợ follow-up pilot W2
+        // 2026-10-20, trả 2026-10-21): pid "sống" CHƯA đủ tin — Linux tái chế
+        // pid (bằng chứng pilot: probe chết → pid 32463 được process khác tái
+        // sử dụng → isWorkerPidAlive true nhầm → sweep SKIP → job mồ côi kẹt
+        // 'running' tới trần STALE-AGE 12h, không bao giờ RESUME). Heartbeat
+        // DB được ghi MỖI VÒNG/tool batch (throttle 15s) nên pid sống mà
+        // heartbeat stale ≥ GOAL_LOOP_STALL_PREEMPT_MS (30' > trần LLM 8')
+        // thì hoặc pid bị tái chế hoặc job wedged — cả hai đã nằm trong
+        // semantics preempt (requeue giữ checkpoint, updateMany conditional
+        // chống đè race). Nhánh SKIP giờ chỉ chạy khi pid sống VÀ heartbeat
+        // đủ tươi; heartbeat null → vẫn tin pid (bảo thủ — xem helper).
+        const pidAlive = Boolean(
+          row.workerPid && row.workerPid !== process.pid && this.isWorkerPidAlive(row.workerPid)
+        )
+        const pidSuspectRecycled = isPidRecycleSuspect(pidAlive, heartbeatAgeMs)
+        if (pidAlive && !pidSuspectRecycled) {
           const lastLog = this.pidSkipLogAt.get(row.id) ?? 0
           if (now - lastLog > 60_000) {
             this.pidSkipLogAt.set(row.id, now)
@@ -477,6 +493,20 @@ class GoalLoopWorker {
             )
           }
           continue
+        }
+        if (pidSuspectRecycled) {
+          // pid "sống" nhưng heartbeat stale — KHÔNG continue: rơi xuống
+          // requeue/mark-failed như thể pid đã chết (checkpoint còn nguyên)
+          const lastLog = this.pidSkipLogAt.get(row.id) ?? 0
+          if (now - lastLog > 60_000) {
+            this.pidSkipLogAt.set(row.id, now)
+            if (this.pidSkipLogAt.size > 200) this.pidSkipLogAt.clear() // bound
+            console.warn(
+              `[GoalLoopWorker] orphan sweep: job ${row.id} — workerPid ${row.workerPid} "còn sống" nhưng heartbeat stale ` +
+                `${heartbeatAgeMs !== null ? `${Math.round(heartbeatAgeMs / 60000)} phút` : '?'} (≥ ${Math.round(GOAL_LOOP_STALL_PREEMPT_MS / 60000)} phút) — ` +
+                `pid nghi bị Linux tái chế (DEBT-R17BC) → requeue giữ checkpoint thay vì SKIP kẹt tới trần 12h`
+            )
+          }
         }
         // ━━━ R18 GATE 2 — STALE-AGE: job mồ côi quá tuổi không resume nữa ━━━
         const jobAgeMs = row.createdAt ? now - row.createdAt.getTime() : 0

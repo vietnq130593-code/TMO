@@ -1,0 +1,7 @@
+Nhiệm vụ: Phân tích module src/lib/db-write-batcher.ts (vừa được triển khai ở wave W1) và viết báo cáo scratch/pilot-r17bc-report.md bằng tiếng Việt, gồm: (1) danh sách đầy đủ các trigger flush của batcher; (2) giải thích cơ chế flush 2 pha và per-op salvage khi op poison; (3) liệt kê 5 số stats quan trọng nhất trong WriteQueueStats kèm ý nghĩa; (4) nêu 3 call-site đã migrate sang batch và 2 đường bắt buộc giữ direct (kèm lý do).
+
+Nghiệm thu:
+- [ ] File scratch/pilot-r17bc-report.md tồn tại, dài tối thiểu 30 dòng, tiếng Việt.
+- [ ] Báo cáo nêu ĐÚNG đủ 4 trigger flush (timer chu kỳ / depth ngưỡng / flushNow run-close / drain exit) — đối chiếu được với code.
+- [ ] Báo cáo trích ít nhất 5 trường stats có thật trong interface WriteQueueStats (ví dụ flushP95Ms, dropCount, poisonCount, salvageSplits, holdMs).
+- [ ] Báo cáo nêu đúng ít nhất 2 đường giữ direct (updateQ RMW / ArbiterVerdict đường TỚI / observation ledger single-writer) kèm lý do ngắn.
