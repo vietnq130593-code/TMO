@@ -20,7 +20,9 @@
  *                tick (~30s): lưới an toàn cho mọi stall (job quá nhanh rơi
  *                vào dedupe window, PM2 restart giữa review, dispatch chết,
  *                verdict rơi rớt…)
- *            → gate (mode auto + kill switch + dedupe 45s + 4 tín hiệu A/B/
+ *            → gate (mode auto + kill switch + BUSY-GUARD — agent đang
+ *            xử lý tác vụ thì KHÔNG review giữa chừng (user directive
+ *            2026-10-20) + dedupe 45s + 4 tín hiệu A/B/
  *            C/D — xem passesAutoGate) → runAutoReview (serialize
  *            per-session) → runOpusReview(triggerMode='auto') → verdict:
  *              CONTINUE/FIX/REDIRECT → applyOpusVerdict(autoDispatch=true)
@@ -57,6 +59,7 @@ import { runOpusReview, markReviewRunning, markReviewDone } from './reviewer'
 import { parseMetadata } from './ledger'
 import { OPUS_AGENT_NAME } from './opus-agent'
 import { observeEvent } from '@/lib/observation/ledger'
+import { hasActiveAgentTaskRun } from '@/lib/agent-run-tracker'
 import type { OpusVerdict } from './types'
 
 // ==================== SETTINGS (SINGLETON + KILL SWITCH) ====================
@@ -753,6 +756,56 @@ const REVIEW_FAILURE_BREAK_THRESHOLD = 3
 /** Sessions đã trip breaker (log + alert 1 lần; reset khi 1 attempt hoàn thành) */
 const reviewFailureTripped = new Set<string>()
 
+// ==================== BUSY-GUARD — REVIEW CHỈ SAU KHI AGENT XONG TÁC VỤ ====================
+
+export interface AgentTaskBusyState {
+  busy: boolean
+  /** Mô tả việc đang chạy ('' khi agent rảnh) — dùng làm reason skip của gate + note 409 route manual */
+  detail: string
+}
+
+/**
+ * USER DIRECTIVE 2026-10-20 ("khi agent đang xử lý tác vụ, nếu bật Opus Review
+ * thì chỉ khi agent thực hiện xong tác vụ Opus mới tiến hành review — không
+ * review khi agent chưa hoàn thành tác vụ"): agent có đang xử lý tác vụ của
+ * session này không? 2 nguồn tín hiệu, cả 2 đều an toàn cho hook hoàn thành
+ * (hook chỉ fire SAU khi tác vụ đã terminal nên KHÔNG BAO GIỜ bị guard này
+ * chặn nhầm review chính đáng):
+ *   (1) DURABLE — GoalLoopJob status queued/running (job directive Opus ban
+ *       hành, cron, user kích hoạt): sống qua restart, nguồn sự thật chính
+ *       cho đường worker. Worker markCompleted/markFailed/mark-cancelled chạy
+ *       TRƯỚC hook → lúc hook fire job đã terminal → check này pass.
+ *   (2) IN-PROCESS — tracker in-memory có run agent đang chạy thật (inline
+ *       chat run khi ENABLE_DURABLE_GOAL_LOOP=false, delegation sub-run,
+ *       CTO consult): goal-loop endRun() chạy TRƯỚC khi assistant message
+ *       persist + hook fire → check này cũng pass cho hook. LOẠI TRỪ run
+ *       review của chính Opus (xem hasActiveAgentTaskRun) — nếu không, review
+ *       của Opus tự chặn sweep/hook của chính nó.
+ * KHÔNG xét AgentRunRecord DB status='running': việc đóng row là fire-and-
+ * forget (updateLatestAgentRunRecord chạy void) đua với hook hoàn thành →
+ * chặn oan review chính đáng; zombie row do crash đã có orphan-sweep 30' +
+ * salvage (R4/R17) đóng sổ. Fail-open: DB lỗi → chỉ xét tín hiệu (2).
+ */
+export async function isAgentTaskRunning(sessionId: string): Promise<AgentTaskBusyState> {
+  try {
+    const job = await db.goalLoopJob.findFirst({
+      where: { sessionId, status: { in: ['queued', 'running'] } },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, status: true },
+    })
+    if (job) {
+      return {
+        busy: true,
+        detail: `goal-loop job ${job.id} đang ${job.status === 'running' ? 'chạy' : 'chờ trong hàng đợi'}`,
+      }
+    }
+  } catch { /* fail-open — query lỗi thì tiếp tục xét tracker in-memory */ }
+  if (hasActiveAgentTaskRun(sessionId)) {
+    return { busy: true, detail: 'agent run đang chạy trong process (inline/delegation)' }
+  }
+  return { busy: false, detail: '' }
+}
+
 async function passesAutoGate(sessionId: string): Promise<{ pass: boolean; reason: string; modeAuto: boolean }> {
   const session = await db.agentSession.findUnique({
     where: { sessionId },
@@ -764,6 +817,25 @@ async function passesAutoGate(sessionId: string): Promise<{ pass: boolean; reaso
 
   if (await isKilled()) {
     return { pass: false, reason: 'KILL SWITCH đang bật — auto mode ngưng toàn hệ thống', modeAuto: true }
+  }
+
+  // ━━ BUSY-GUARD (user directive 2026-10-20 — "không review khi agent chưa
+  // hoàn thành tác vụ"): agent còn tác vụ dở (goal-loop job queued/running
+  // hoặc run inline/delegation đang chạy) → KHÔNG review giữa chừng — review
+  // giữa tác vụ đang chạy sẽ phán quyết trên dữ liệu chưa trọn + ban hành
+  // chỉ đạo xung đột với việc agent đang làm. Review kế được kích hoạt BỞI
+  // CHÍNH hook hoàn thành tác vụ đó (job terminal → hook / inline persist →
+  // hook) hoặc sweep tick sau — tín hiệu không mất, chỉ đổi thời điểm về
+  // "sau khi agent xong việc" đúng yêu cầu user. Đặt TRƯỚC mọi tín hiệu A/B/
+  // C/D (sweep reconciliation không được phép review xuyên qua tác vụ đang
+  // chạy) và trước dedupe (skip không tiêu tốn cửa sổ dedupe 45s).
+  const busy = await isAgentTaskRunning(sessionId)
+  if (busy.busy) {
+    return {
+      pass: false,
+      reason: `agent đang xử lý tác vụ (${busy.detail}) — Opus chỉ review SAU khi agent hoàn thành tác vụ`,
+      modeAuto: true,
+    }
   }
 
   const lastReview = await db.opusReview.findFirst({

@@ -1248,6 +1248,32 @@ export function getActiveRunSessionIds(): string[] {
 }
 
 /**
+ * OPUS BUSY-GUARD (user directive 2026-10-20 — "chỉ khi agent thực hiện xong
+ * tác vụ Opus mới tiến hành review, không review khi agent chưa hoàn thành"):
+ * session có run agent ĐANG CHẠY thật không — LOẠI TRỪ run review của chính
+ * Opus (agentName='Opus' / runId 'opus_rev_*'). Nếu không loại trừ, review
+ * của Opus tự chặn: sweep/hook gọi gate giữa lúc review đang chạy → gate thấy
+ * "agent đang chạy" (chính là Opus) → skip oan với lý do sai. Fail-open:
+ * lỗi registry → false (các tín hiệu gate khác vẫn xét — không chặn review).
+ */
+export function hasActiveAgentTaskRun(sessionId: string | null | undefined): boolean {
+  try {
+    if (!sessionId) return false
+    const reg = registry()
+    const runs = reg.runsBySession.get(sessionId)
+    if (!runs || runs.length === 0) return false
+    return runs.some(
+      r =>
+        r.status === 'running' &&
+        r.agentName !== 'Opus' &&
+        !(r.runId ?? '').startsWith('opus_rev_'),
+    )
+  } catch {
+    return false
+  }
+}
+
+/**
  * CI-2 (Task 11-a) — Lấy runId của run ĐANG ACTIVE (status='running') của
  * session. Chat route dùng ở CRASH-PATH: goal loop văng exception ra ngoài
  * trước khi endAgentRun được gọi → cần runId để đóng todo của run đó một cách

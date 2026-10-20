@@ -17,7 +17,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import type { ChatMessage } from '@prisma/client'
 import { db } from '@/lib/db'
 import { runOpusReview, markReviewRunning, markReviewDone } from '@/lib/opus/reviewer'
-import { applyOpusVerdict, serializeOpusReview, serializeChatMessage, isKilled } from '@/lib/opus/pipeline'
+import { applyOpusVerdict, serializeOpusReview, serializeChatMessage, isKilled, isAgentTaskRunning } from '@/lib/opus/pipeline'
 
 export const dynamic = 'force-dynamic'
 
@@ -42,6 +42,25 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Không tìm thấy session này' }, { status: 404 })
     }
     const mode = session.opusReviewMode === 'auto' ? 'auto' : 'manual'
+
+    // ━━ BUSY-GUARD (user directive 2026-10-20 — "không review khi agent chưa
+    // hoàn thành tác vụ"): áp cho CẢ manual lẫn auto — review giữa chừng tác
+    // vụ đang chạy sẽ phán quyết trên dữ liệu chưa trọn + chỉ đạo xung đột
+    // với việc agent đang làm. Đặt TRƯỚC mutex opus-review-running và KHÔNG
+    // giữ lock khi từ chối. Auto mode không lệ thuộc: review tự động được
+    // kích hoạt lại bởi hook hoàn thành tác vụ / sweep tick sau.
+    const busy = await isAgentTaskRunning(sessionId)
+    if (busy.busy) {
+      console.log(`[Opus] POST review: session=${sessionId} SKIP — agent đang xử lý tác vụ (${busy.detail}) — 409 agent-task-running`)
+      return NextResponse.json(
+        {
+          ok: false,
+          error: 'agent-task-running',
+          note: `Agent đang xử lý tác vụ (${busy.detail}) — Opus chỉ review sau khi agent hoàn thành tác vụ. Thử lại khi tác vụ kết thúc.`,
+        },
+        { status: 409 },
+      )
+    }
 
     // In-process lock per-session — chống 2 review chồng nhau của cùng session
     if (!markReviewRunning(sessionId)) {

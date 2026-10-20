@@ -4178,7 +4178,23 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         body: JSON.stringify({ sessionId: sid, messageId }),
       })
       if (res.status === 409) {
-        toast({ title: 'Opus đang review — chờ chút', description: 'Một vòng review khác của phiên này vẫn đang chạy.', duration: 3000 })
+        // 2 loại 409 khác nhau (user directive 2026-10-20):
+        //  - agent-task-running: agent đang xử lý tác vụ — Opus chỉ review
+        //    SAU khi agent hoàn thành (không review giữa chừng).
+        //  - opus-review-running: một vòng review khác của phiên vẫn đang chạy.
+        const errData = (await res.json().catch(() => ({} as { error?: string; note?: string }))) as {
+          error?: string
+          note?: string
+        }
+        if (errData?.error === 'agent-task-running') {
+          toast({
+            title: 'Agent đang xử lý tác vụ',
+            description: errData?.note || 'Opus chỉ review sau khi agent hoàn thành tác vụ — thử lại khi tác vụ kết thúc.',
+            duration: 4000,
+          })
+        } else {
+          toast({ title: 'Opus đang review — chờ chút', description: 'Một vòng review khác của phiên này vẫn đang chạy.', duration: 3000 })
+        }
         return
       }
       if (!res.ok) {

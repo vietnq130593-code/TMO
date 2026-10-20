@@ -24,6 +24,9 @@
  *                             trước đó (tiến trình). Cap 6000. Trống → ghi rõ
  *                             "KHÔNG có bằng chứng kiểm định máy nào..."
  *   §6. ISSUE LEDGER ĐANG MỞ — getOpenIssues (evidence cap 500/issue)
+ *   §6b. NỢ HẠ TẦNG DEBTLEDGER — nợ infra còn treo của phiên (open/
+ *        in_progress, cap 10) — null khi không có nợ (user directive
+ *        2026-10-20: Opus ưu tiên giao xử lý nợ trước khi tiếp tục yêu cầu gốc)
  *
  * Mỗi section kèm chỉ dẫn ngắn cho Opus theo đúng thứ tự đọc cố định.
  */
@@ -417,6 +420,39 @@ async function sectionOpenLedger(sessionId: string): Promise<string> {
   return `${header}\n${lines.join('\n')}`
 }
 
+/**
+ * §6b — NỢ HẠ TẦNG DEBTLEDGER còn treo của phiên (open/in_progress).
+ * USER DIRECTIVE 2026-10-20 ("ưu tiên đầu tiên của Opus là xử lý các nợ kỹ thuật
+ * phát sinh, sau đó mới tiếp tục chỉ thị các phần việc hoàn thành yêu cầu
+ * gốc"): Opus cần THẤY nợ hạ tầng để giao xử lý trước trong directive — trước
+ * đây dossier chỉ có Issue Ledger (issue do chính Opus ghi), nợ infra
+ * (crash/tool-fail lặp — R17 đường ghi nợ thứ 4) nằm ngoài tầm nhìn của Opus.
+ * Scope: nợ phát sinh từ PHIÊN này (originSessionId) — nợ global từ phiên khác
+ * do pickupDebtForRun tự nhặt đầu run agent, không nằm ở đây. Null khi không
+ * có nợ / lỗi truy vấn (fail-open — không có mảnh này thì bỏ qua section).
+ */
+async function sectionDebtLedger(sessionId: string): Promise<string | null> {
+  try {
+    const debts = await db.debtLedger.findMany({
+      where: { originSessionId: sessionId, status: { in: ['open', 'in_progress'] } },
+      orderBy: { openedAt: 'asc' },
+      take: 10,
+      select: { id: true, title: true, kind: true, severity: true, attempts: true, evidence: true, openedAt: true },
+    })
+    if (debts.length === 0) return null
+    const lines = debts.map(
+      (d, idx) =>
+        `  ${idx + 1}. [${d.severity}·${d.kind}] ${truncate(d.title, 220)}${d.attempts > 0 ? ` (đã pickup ${d.attempts} lần chưa xong)` : ''}\n     Bằng chứng: ${truncate(d.evidence ?? '(không có)', 300)} (mở ${fmtTime(d.openedAt)})`
+    )
+    return (
+      '§6b. NỢ HẠ TẦNG DEBTLEDGER CÒN TREO CỦA PHIÊN (open/in_progress — theo user directive 2026-10-20: ưu tiên GIAO XỬ LÝ các nợ này TRƯỚC khi tiếp tục phần việc còn lại của yêu cầu gốc; agent run kế cũng tự nhặt các mục này qua pickup đầu run):\n' +
+      lines.join('\n')
+    )
+  } catch {
+    return null // fail-open — lỗi truy vấn thì bỏ qua section này
+  }
+}
+
 // ==================== DOSSIER CHÍNH ====================
 
 /**
@@ -449,7 +485,7 @@ export async function buildOpusDossier(sessionId: string, messageId?: string | n
     ),
   ])
 
-  const [s1, s2, s3, s4, s5, s6] = await Promise.all([
+  const [s1, s2, s3, s4, s5, s6, s6b] = await Promise.all([
     sectionOriginalRequest(sessionId).catch(
       () => '§1. YÊU CẦU GỐC\n⚠️ Không đọc được yêu cầu gốc (lỗi truy vấn).'
     ),
@@ -462,6 +498,8 @@ export async function buildOpusDossier(sessionId: string, messageId?: string | n
       () => '§5. BẰNG CHỨNG KIỂM ĐỊNH\n⚠️ Không đọc được bằng chứng — coi là chưa verify.'
     ),
     sectionOpenLedger(sessionId).catch(() => '§6. ISSUE LEDGER ĐANG MỞ\n⚠️ Không đọc được sổ issue.'),
+    // §6b nợ hạ tầng — null khi phiên không có nợ / lỗi truy vấn (không chèn dòng nào)
+    sectionDebtLedger(sessionId),
   ])
 
   const header = [
@@ -473,5 +511,7 @@ export async function buildOpusDossier(sessionId: string, messageId?: string | n
     '═════════════════════════════════════════════════════════════════════',
   ].join('\n')
 
-  return [header, s1, s2, s3, s4, s5, s6].join('\n\n' + '─'.repeat(72) + '\n\n')
+  const sections = [header, s1, s2, s3, s4, s5, s6]
+  if (s6b) sections.push(s6b)
+  return sections.join('\n\n' + '─'.repeat(72) + '\n\n')
 }
