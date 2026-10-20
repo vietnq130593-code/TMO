@@ -101,6 +101,12 @@ try {
 // ~2.1-2.2GB). Idempotent: lần gọi thứ 2+ trong cùng drain window là no-op.
 // ============================================================================
 const SELF_EXIT_DRAIN_MS = Math.max(0, Number(process.env.TMO_SELFEXIT_DRAIN_MS ?? 600))
+// W1/S1 (BLUEPRINT-R17BC v0.2 — REVIEW-1 P0-1.2): write-queue drain bound
+// RIÊNG, TÁCH khỏi hợp đồng 600ms response-drain phía trên. Exit chờ
+// max(600ms, drain thật) nhưng KHÔNG vượt TMO_EXIT_WRITE_DRAIN_MS (3s) —
+// queue rỗng → exit đúng 600ms như trước (0 thay đổi khi trống); exit sớm
+// vẫn thắng kernel (đúng thiết kế vòng 11c — R17 §2.1).
+const EXIT_WRITE_DRAIN_MS = Math.max(200, Number(process.env.TMO_EXIT_WRITE_DRAIN_MS ?? 3000))
 let selfExitDrainScheduled = false
 function selfExitWithDrain(reason: string): void {
   if (selfExitDrainScheduled) return
@@ -109,9 +115,23 @@ function selfExitWithDrain(reason: string): void {
     process.exit(1)
     return
   }
+  const startedAt = Date.now()
   console.error(`[SelfExitDrain] ${reason} — chờ ${SELF_EXIT_DRAIN_MS}ms cho response đang bay flush hết rồi exit(1)`)
-  const t = setTimeout(() => process.exit(1), SELF_EXIT_DRAIN_MS)
-  t.ref?.() // đảm bảo timer chạy dù event loop rảnh
+  // Hard cap: drain không bao giờ đẩy exit vượt max(600ms, 3s) — watchdog phải
+  // thắng kernel bằng exit SỚM hơn, không phải chờ lâu hơn (bài học R17 §2.1).
+  const cap = setTimeout(() => process.exit(1), Math.max(SELF_EXIT_DRAIN_MS, EXIT_WRITE_DRAIN_MS))
+  cap.ref?.() // đảm bảo timer chạy dù event loop rảnh
+  // W1/S1 trigger 4: drain write-queue (dynamic import — không cycle top-level;
+  // có bound nội bộ riêng trong drainWriteQueueForExit). Xong → chờ nốt phần
+  // response-drain còn lại rồi exit. Fail-open: lỗi batcher KHÔNG chặn exit.
+  void import('@/lib/db-write-batcher')
+    .then(({ drainWriteQueueForExit }) => drainWriteQueueForExit(EXIT_WRITE_DRAIN_MS))
+    .catch(() => undefined)
+    .then(() => {
+      const rem = Math.max(0, SELF_EXIT_DRAIN_MS - (Date.now() - startedAt))
+      const t = setTimeout(() => process.exit(1), rem)
+      t.ref?.()
+    })
 }
 
 const globalForMemWatchdog = globalThis as unknown as { __tmoMemWatchdogStarted?: boolean }

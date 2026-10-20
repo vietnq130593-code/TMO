@@ -34,3 +34,21 @@ Stage Summary:
 - 6 P1: promise reject khi drop (BatchDroppedError) · 1 chủ sở hữu retry (tránh nhân lũy thừa) · heart-movement watchdog cho worker split (STALL chỉ pause job, không chữa process treo) · drain không đè hợp đồng 600ms · hold-time batch tx <300ms + KPI claim/heartbeat p95 <500ms · inline-fallback split mode ghi minh thị (có guard double-run sẵn).
 - Điểm duyệt giữ nguyên: thứ tự W1→W2 + 3 lý do; nguyên tắc "chỉ batch đuôi ghi"; anti-goals 9 (P0-1 cấm giải bằng middleware ngoài); S2 nguồn Task 33; S3 "DB là bus, 0 IPC"; KPI #1-3/#6-7.
 - Bước kế: chờ user duyệt — nâng v0.2 theo §10.5 rồi mới vào W1.
+
+---
+Task ID: W1-BFULL-1
+Agent: Z.ai Code (main session)
+Task: Nâng blueprint v0.2 + triển khai ngay W1 B-full (user: "Nâng lên đi, sau khi hoàn thành nâng cấp blueprint rồi thì tiến hành triển khai blueprint ngay")
+
+Work Log:
+- Nâng BLUEPRINT-R17BC v0.2: §4.1 2-làn type + type-guard RMW + delegate-map + BatchDroppedError + 4 trigger (flushNow run-close + drain exit ≤3s TMO_EXIT_WRITE_DRAIN_MS tách 600ms) + flush 2 pha per-op salvage + danh hiệu bền trung thực + metrics 8 số; §4.2 thành bảng AUDIT 10 dòng; §4.3 heart-movement + P2002-seq + inline-fallback minh thị; §6 KPI #4/#5 đổi gate cách ly + thêm #8/#9; §7.10 nợ compile-ratchet. Commit b01252a.
+- Triển khai W1: (1) src/lib/db-write-batcher.ts MỚI (~500 dòng: SetOp/RawOp 2 làn, deep-scan TypeError RMW, coalesce set-only last-wins, flush 2 pha + salvage per-op, bound RETAINED_MAX=2 drop-oldest + BatchDroppedError, holdMs autosplit halve/double, stats 8 số, flag ĐỌC ĐỘNG queueEnabled() — đổi mode được trong cùng process test); (2) migrate 4 nhóm site: tool-metrics-recorder #1 (fire-and-forget; debt-count read giữ direct), memory-tiers #3 (await-version), llm.ts TokenTracker #4 (5 upsert idempotencyKey + flushTokenData shutdown gọi flushWriteQueueNow), auto-learn #6′ (3 create; autoLearnRecord + localEntity GIỮ direct cần id); (3) 2 hook: flushWriteQueueNow tại run-close (agent-run-tracker persistAgentRunRecord) + drainWriteQueueForExit trong selfExitWithDrain (instrumentation-node, hard cap max(600ms, 3s), dynamic import không cycle); (4) .env/.env.example docs 6 cờ (default OFF).
+- Fixbug W1 2 vòng: R1 1 phát hiện (TS2578 ×3 — bỏ @ts-expect-error, guard runtime mới là điểm thử), R2 0 (4 điểm nghi vấn độc lập ĐẠT; kill-9 đo đúng hợp đồng: pending 0/40, flushed 40/40).
+- Test: r137 14/14 + r138 10/10 (burst 500/1s + 50 direct interleave đủ 550 rows; kill-9 2 mode qua tests/helpers/write-batcher-kill9-child.ts Bun.spawn SIGKILL). Full gate PASS 5/6 (2251 test, build SKIP local).
+- Điều chỉnh audit khi triển khai (ghi thẳng bảng §4.2 + §9 v0.2-impl + fixbug.md): #8 updateLatestAgentRunRecord → DIRECT (return control-flow agent-run-tracker:471-472 + delegate-bridge); #6 autoLearnRecord → DIRECT (cần record.id :231).
+- Commit + push (origin + mirror).
+
+Stage Summary:
+- W1 B-full hoàn tất: batcher + 4 nhóm site migrated + 2 hook + env docs + 24 test mới. Bền trung thực: at-least-once qua contention + clean self-exit; at-most-once qua SIGKILL ≤1s×≤200 (đã ĐO bằng kill-9, không lời hứa).
+- KPI đạt tầng test: #3 (flushP95<1s, drop 0) + #7 (replay đủ rows) + #9 (định lượng). KPI #1/#2 cần run thật đầy đủ — tự đến ở mission kế (giao thức quan sát 5/5 ON).
+- Wave kế: W2 (S3+S4) — bước (0) điều kiện cần: ObservationEvent_seq_key vào transient db.ts.

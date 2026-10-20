@@ -50,6 +50,8 @@ import path from 'node:path'
 // minimax khỏi phần text Suy nghĩ (tool call đã hiển thị là event riêng).
 // tool-calls.ts chỉ import find-balanced-json — không cycle với module này.
 import { stripProviderGarbleMarkers, maskToolCallText } from '@/lib/tool-calls'
+// W1/S1 (BLUEPRINT-R17BC v0.2): flushNow tại run-close — trigger 3 (P0-1.1).
+import { flushWriteQueueNow } from '@/lib/db-write-batcher'
 
 // ==================== Types ====================
 
@@ -500,6 +502,11 @@ function persistAgentRunRecord(run: AgentRun): void {
       }
     })()
   } catch { /* fail-open */ }
+  // W1/S1 trigger 3 (BLUEPRINT-R17BC v0.2 — P0-1.1): run-close/finalize là nơi
+  // burst + crash tập trung (bằng chứng Task 33 + OBS-1) — rỗng hóa write-queue
+  // NGAY, fire-and-forget (không block path metrics fail-open này; ops tool/
+  // working-memory/token của run được commit trước cửa sổ nguy hiểm nhất).
+  void flushWriteQueueNow()
 }
 
 // ==================== Public API ====================

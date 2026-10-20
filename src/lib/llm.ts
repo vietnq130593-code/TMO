@@ -83,6 +83,10 @@ import { currentResearchModelOverride } from '@/lib/research-team/model-override
 // "Socket timeout"/"Timed out fetching" của Prisma query engine (SQLite) mà
 // TokenTracker retryDbOp cần nhận. db.ts KHÔNG import llm.ts — không cycle.
 import { isTransientSqliteError } from '@/lib/db'
+// W1/S2 audit #4 (BLUEPRINT-R17BC v0.2 — bảng §4.2): TokenTracker persist là
+// SET TUYỆT ĐỐI (tokens ghi đè) → hợp lệ coalesce idempotencyKey last-wins.
+// Chủ sở hữu retry dời về batcher (P1-2) — retryDbOp không còn ôm các upsert này.
+import { enqueueWriteFireAndForget, flushWriteQueueNow } from '@/lib/db-write-batcher'
 
 /** EventEmitter for real-time token updates (SSE).
  *  Emits 'token-update' event whenever addTokensUsed() or addTokensUsedByAgent() is called.
@@ -995,26 +999,35 @@ async function persistDailyTokens(
     // === PERSIST TO SQLITE (local cache) ===
     // Only write total if dirty
     if (isForcedPersist || totalTokensDirty) {
-      await retryDbOp(db => db.dailyTokenUsage.upsert({
-        where: { date },
-        update: { tokens: count },
-        create: { date, tokens: count },
-      }))
+      // W1/S2 audit #4: upsert-set qua WriteBatcher — idempotencyKey cho phép
+      // coalesce (last-wins ĐÚNG set semantics: giá trị sau đè giá trị trước).
+      enqueueWriteFireAndForget(
+        {
+          kind: 'upsert',
+          model: 'dailyTokenUsage',
+          where: { date },
+          update: { tokens: count },
+          create: { date, tokens: count },
+          idempotencyKey: `dailyTokenUsage|${date}`,
+        },
+        { label: `TokenTracker.dailyTokenUsage(${date})` },
+      )
     }
     // Persist per-provider token counts — only dirty providers
     for (const [provider, tokens] of Object.entries(providers)) {
       if (!isForcedPersist && !providerDirty.has(provider)) continue // Skip unchanged
-      try {
-        await retryDbOp(db => db.dailyTokenByProvider.upsert({
+      // W1/S2 audit #4: upsert-set qua WriteBatcher (fire-and-forget).
+      enqueueWriteFireAndForget(
+        {
+          kind: 'upsert',
+          model: 'dailyTokenByProvider',
           where: { date_provider: { date, provider } },
           update: { tokens },
           create: { date, provider, tokens },
-        }))
-      } catch (err) {
-        if (!isTransientDbError(err)) {
-          console.error(`[TokenTracker] Failed to persist provider tokens for ${provider}:`, err)
-        }
-      }
+          idempotencyKey: `dailyTokenByProvider|${date}|${provider}`,
+        },
+        { label: `TokenTracker.dailyTokenByProvider(${provider})` },
+      )
     }
     // Persist per-provider-per-slot token counts — only dirty slots
     for (const [provider, providerSlots] of Object.entries(slots)) {
@@ -1022,17 +1035,18 @@ async function persistDailyTokens(
         const slot = parseInt(slotStr, 10)
         const dirtyKey = `${provider}:${slot}`
         if (!isForcedPersist && !slotDirty.has(dirtyKey)) continue // Skip unchanged
-        try {
-          await retryDbOp(db => db.dailyTokenByProviderSlot.upsert({
+        // W1/S2 audit #4: upsert-set qua WriteBatcher (fire-and-forget).
+        enqueueWriteFireAndForget(
+          {
+            kind: 'upsert',
+            model: 'dailyTokenByProviderSlot',
             where: { date_provider_slot: { date, provider, slot } },
             update: { tokens },
             create: { date, provider, slot, tokens },
-          }))
-        } catch (err) {
-          if (!isTransientDbError(err)) {
-            console.error(`[TokenTracker] Failed to persist slot tokens for ${provider} slot ${slot}:`, err)
-          }
-        }
+            idempotencyKey: `dailyTokenByProviderSlot|${date}|${dirtyKey}`,
+          },
+          { label: `TokenTracker.dailyTokenByProviderSlot(${dirtyKey})` },
+        )
       }
     }
 
@@ -1041,17 +1055,18 @@ async function persistDailyTokens(
       for (const [modelName, tokens] of Object.entries(providerModels)) {
         const dirtyKey = `${provider}:${modelName}`
         if (!isForcedPersist && !modelDirty.has(dirtyKey)) continue // Skip unchanged
-        try {
-          await retryDbOp(db => db.dailyTokenByProviderModel.upsert({
+        // W1/S2 audit #4: upsert-set qua WriteBatcher (fire-and-forget).
+        enqueueWriteFireAndForget(
+          {
+            kind: 'upsert',
+            model: 'dailyTokenByProviderModel',
             where: { date_provider_model: { date, provider, model: modelName } },
             update: { tokens },
             create: { date, provider, model: modelName, tokens },
-          }))
-        } catch (err) {
-          if (!isTransientDbError(err)) {
-            console.error(`[TokenTracker] Failed to persist model tokens for ${provider}/${modelName}:`, err)
-          }
-        }
+            idempotencyKey: `dailyTokenByProviderModel|${date}|${dirtyKey}`,
+          },
+          { label: `TokenTracker.dailyTokenByProviderModel(${dirtyKey})` },
+        )
       }
     }
 
@@ -1061,8 +1076,12 @@ async function persistDailyTokens(
       if (!key.startsWith(date)) continue
       const dirtyKey = `${agentData.agentId}:${agentData.provider}:${agentData.model}`
       if (!isForcedPersist && !agentDirty.has(dirtyKey)) continue // Skip unchanged
-      try {
-        await retryDbOp(db => db.dailyTokenByAgent.upsert({
+      // W1/S2 audit #4: upsert-set qua WriteBatcher (fire-and-forget) — field
+      // update có agentName (đổi tên) vẫn SET tuyệt đối, không atomic RMW.
+      enqueueWriteFireAndForget(
+        {
+          kind: 'upsert',
+          model: 'dailyTokenByAgent',
           where: {
             date_agentId_provider_model: {
               date,
@@ -1087,15 +1106,15 @@ async function persistDailyTokens(
             inputTokens: agentData.inputTokens,
             outputTokens: agentData.outputTokens,
           },
-        }))
-      } catch (err) {
-        if (!isTransientDbError(err)) {
-          console.error(`[TokenTracker] Failed to persist agent tokens for ${agentData.agentName}/${agentData.provider}/${agentData.model}:`, err)
-        }
-      }
+          idempotencyKey: `dailyTokenByAgent|${date}|${dirtyKey}`,
+        },
+        { label: `TokenTracker.dailyTokenByAgent(${agentData.agentName}/${agentData.provider}/${agentData.model})` },
+      )
     }
 
-    // Clear dirty flags after successful SQLite persist
+    // Clear dirty flags after scheduling persist (W1/S2 audit #4: ops đã capture
+    // giá trị TUYỆT ĐỐI tại enqueue — mất op chỉ tự lành ở lần dirty kế, đúng
+    // tính chất dirty-state TokenTracker db.ts:228)
     totalTokensDirty = false
     providerDirty.clear()
     slotDirty.clear()
@@ -1127,6 +1146,10 @@ export async function flushTokenData(): Promise<void> {
     console.log(`[TokenTracker] Flushing token data: ${dailyTokenCount} tokens for ${dailyTokenDate}`)
     await persistDailyTokens()
   }
+  // W1/S2: shutdown path (SIGINT/SIGTERM/beforeExit) — persistDailyTokens giờ
+  // enqueue fire-and-forget; ép flush NGAY để ops không kẹt lại khi process exit
+  // (đường flush chủ động, không chờ watchdog drain TMO_EXIT_WRITE_DRAIN_MS).
+  await flushWriteQueueNow()
 }
 
 // ==================== GRACEFUL SHUTDOWN ====================

@@ -27,6 +27,7 @@
 import { generateEmbedding, getEmbeddingDimension, getCurrentEmbeddingModelVersion } from '@/lib/embeddings'
 import { callUtilityLLM, addTokensUsedByAgent } from '@/lib/llm'
 import { db } from '@/lib/db'
+import { enqueueWriteFireAndForget } from '@/lib/db-write-batcher'
 // OBS-P2 hook (§C.3 đợt 2) — db.write AutoLearnRecord
 import { observeEvent } from '@/lib/observation/ledger'
 import { chunkText } from '@/lib/chunking'
@@ -215,6 +216,9 @@ export async function autoLearnFromAnswer(input: AutoLearnInput): Promise<boolea
 
   try {
     // 2. Create AutoLearnRecord in SQLite (status: pending)
+    // W1/S2 audit #6 (BLUEPRINT-R17BC v0.2): create này GIỮ ĐƯỜNG DIRECT —
+    // cần record.id ngay (:231 → observeEvent rowKey :238, update :370 dùng
+    // recordId) — vi phạm hợp đồng "cần-id-trả-về" nếu ép qua batcher.
     const record = await db.autoLearnRecord.create({
       data: {
         agentId: input.agentId,
@@ -303,8 +307,13 @@ export async function autoLearnFromAnswer(input: AutoLearnInput): Promise<boolea
     // 7. Save relationships to SQLite buffer
     let relationshipsSaved = 0
     for (const rel of extraction.relationships) {
-      try {
-        await db.localRelationship.create({
+      // W1/S2 audit #6 (BLUEPRINT-R17BC v0.2 — bảng §4.2): localRelationship.create
+      // qua WriteBatcher (fire-and-forget — fail-open từng create giữ nguyên :326-328;
+      // entity id tham chiếu đã capture giá trị tại enqueue — nguồn id từ map #7 direct).
+      enqueueWriteFireAndForget(
+        {
+          kind: 'create',
+          model: 'localRelationship',
           data: {
             documentId,
             // FIX kg-arch-a (task 17-c): gắn entity ids — schema LocalRelationship
@@ -321,16 +330,19 @@ export async function autoLearnFromAnswer(input: AutoLearnInput): Promise<boolea
             source: `auto-learn:${input.agentName}`,
             synced: false,
           },
-        })
-        relationshipsSaved++
-      } catch (err) {
-        console.warn(`[AutoLearn] Failed to save relationship "${rel.sourceName}-${rel.type}->${rel.targetName}":`, err instanceof Error ? err.message : String(err))
-      }
+        },
+        { label: `autoLearn.localRelationship(${rel.type})` },
+      )
+      relationshipsSaved++
     }
 
     // 8. Save as AgentInsight for the agent's knowledge base
-    try {
-      await db.agentInsight.create({
+    // W1/S2 audit #6: agentInsight.create qua WriteBatcher (fire-and-forget —
+    // fail-open :342-344 giữ nguyên, giờ là bg-catch trong batcher).
+    enqueueWriteFireAndForget(
+      {
+        kind: 'create',
+        model: 'agentInsight',
         data: {
           agentId: input.agentId,
           content: `Query: ${input.query}\n\nAnswer: ${input.answer.slice(0, 800)}`,
@@ -338,14 +350,17 @@ export async function autoLearnFromAnswer(input: AutoLearnInput): Promise<boolea
           type: 'factual',
           confidence: input.confidence,
         },
-      })
-    } catch (err) {
-      console.warn('[AutoLearn] Failed to save agent insight:', err instanceof Error ? err.message : String(err))
-    }
+      },
+      { label: `autoLearn.agentInsight(${input.agentName})` },
+    )
 
     // 9. Log to LearningLog
-    try {
-      await db.learningLog.create({
+    // W1/S2 audit #6: learningLog.create qua WriteBatcher (fire-and-forget —
+    // fail-open :365-367 giữ nguyên, giờ là bg-catch trong batcher).
+    enqueueWriteFireAndForget(
+      {
+        kind: 'create',
+        model: 'learningLog',
         data: {
           agentId: input.agentId,
           eventType: 'insight',
@@ -361,10 +376,9 @@ export async function autoLearnFromAnswer(input: AutoLearnInput): Promise<boolea
             documentId,
           }),
         },
-      })
-    } catch (err) {
-      console.warn('[AutoLearn] Failed to log learning event:', err instanceof Error ? err.message : String(err))
-    }
+      },
+      { label: `autoLearn.learningLog(${input.agentName})` },
+    )
 
     // 10. Update AutoLearnRecord → completed
     await db.autoLearnRecord.update({

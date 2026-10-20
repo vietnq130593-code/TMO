@@ -16,6 +16,7 @@
  */
 
 import { db, withSqliteRetry } from '@/lib/db'
+import { enqueueWriteFireAndForget } from '@/lib/db-write-batcher'
 
 /** Độ dài tối đa errorTag (dòng đầu message lỗi)
  *  2026-09-26 FIX (Tool health audit): 64 → 200. Trước đây cắt sớm khiến mất
@@ -87,8 +88,18 @@ export function recordToolMetric(params: {
     const sessionId = (params.sessionId || 'unknown').slice(0, 120)
     const agentRole = (params.agentRole || 'unknown').slice(0, 60)
     const errorTag = params.success ? null : toErrorTag(params.error)
-    void withSqliteRetry(
-      () => db.toolMetric.create({
+    // W1/S2 audit #1 (BLUEPRINT-R17BC v0.2 — bảng §4.2): toolMetric.create qua
+    // WriteBatcher. OFF = pass-through identical (withSqliteRetry do batcher nắm,
+    // P1-2); ON = op gom vào batch 1 tx — chống "Socket timeout" cụm run-close
+    // (đo thật Task 33 :83: metric mất vĩnh viễn khi fail-open nuốt; idempotency:
+    // hiếm commit-mà-mất-response chấp nhận duplicate 1 row — giữ nguyên hợp đồng
+    // :84-86). Fail-open tuyệt đối: fire-and-forget KHÔNG throw — metrics không
+    // được phép crash hay block tool exec (giữ nguyên catch-im-lặng :103-105 →
+    // giờ là bg-catch debt/DEVlog trong batcher).
+    enqueueWriteFireAndForget(
+      {
+        kind: 'create',
+        model: 'toolMetric',
         data: {
           toolName,
           sessionId,
@@ -98,11 +109,9 @@ export function recordToolMetric(params: {
           durationMs: Math.max(0, Math.round(params.durationMs || 0)),
           errorTag,
         },
-      }),
+      },
       { label: `toolMetric.create(${toolName})` },
-    ).catch(() => {
-      /* fail-open — metrics không được phép crash hay block tool exec */
-    })
+    )
     // R17 (QUAN-SAT lượt 7 · 6.1c) — ĐƯỜNG GHI NỢ THỨ 4 "crash-proof" cho
     // tool-failure lặp: cùng tool fail ≥3 lần CÙNG session → ghi nợ infra
     // NGAY, không đợi arbiter (bằng chứng R16 V2.3: 'shell' ×5 "/bin/bash:

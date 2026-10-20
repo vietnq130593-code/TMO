@@ -26,6 +26,7 @@
  */
 
 import { db, withSqliteRetry } from '@/lib/db'
+import { enqueueWrite } from '@/lib/db-write-batcher'
 // TOMBSTONE GUARD (fix review 2026-09-08): session đã bị user xóa → KHÔNG ghi
 // thêm working-memory mồ côi (goal-loop chạy dở sau delete vẫn viết HOT entries).
 import { isSessionDeleted } from '@/lib/session-tombstone'
@@ -209,8 +210,16 @@ export async function addToWorkingMemory(params: {
     // khỏi HOT tier memory. Retry an toàn: query timeout đa số kẹt trong pool
     // queue chưa execute; trường hợp hiếm commit-mà-mất-response chấp nhận
     // duplicate 1 row nội dung (tốt hơn mất context).
-    await withSqliteRetry(
-      () => db.workingMemory.create({
+    // W1/S2 audit #3 (BLUEPRINT-R17BC v0.2 — bảng §4.2): workingMemory.create
+    // qua WriteBatcher — AWAIT-version (ON-mode resolve khi flush commit ≤ FLUSH_MS;
+    // OFF = pass-through identical). Đường lỗi NHIỀU NHẤT cụm run-close
+    // (:206-208 — 6 Socket timeout/giờ) → tin nhắn chat mất khỏi HOT tier.
+    // Idempotency: hiếm commit-mà-mất-response chấp nhận duplicate 1 row nội
+    // dung (:209-211) — hợp đồng giữ nguyên.
+    await enqueueWrite(
+      {
+        kind: 'create',
+        model: 'workingMemory',
         data: {
           agentId: params.agentId,
           sessionId: params.sessionId,
@@ -219,7 +228,7 @@ export async function addToWorkingMemory(params: {
           importance: params.importance ?? 0.8,
           expiresAt: new Date(Date.now() + WORKING_MEMORY_TTL_MS),
         },
-      }),
+      },
       { label: `addToWorkingMemory(${params.role})` },
     )
   } catch (err) {
