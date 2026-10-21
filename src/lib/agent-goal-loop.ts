@@ -54,7 +54,7 @@
  * (chat route) có fallback /api/query như cũ.
  */
 
-import { callLLMForAgent, verdictBudget, NEMOTRON_550B_NIM_ID, DEEPSEEK_V41_FLASH_NIM_ID, type LLMTool } from '@/lib/llm'
+import { callLLMForAgent, verdictBudget, NEMOTRON_550B_NIM_ID, DEEPSEEK_V41_FLASH_NIM_ID, getExplicitModelHealth, decideExplicitModelPreSkip, type ExplicitPreSkipDecision, type LLMTool } from '@/lib/llm'
 import { executeTool, buildCompactToolSchemasSection, resolveToolAlias, getToolDefinitions, getAllBuiltinToolNames } from '@/lib/code-team/tool-executor'
 import { parseToolCallsFromOutput, formatMessagesForLLM, detectBrokenToolCallHint, countProviderGarbleMarkers, tryParseLooseJson, salvageNativeToolArgs, maskToolCallText } from '@/lib/tool-calls'
 // R12 (triển khai fix lượt quan sát 5 — 2026-10-14): INFRA-DEBT DEMOTION —
@@ -233,6 +233,42 @@ function intEnv(name: string, fallback: number): number {
   if (raw === undefined || raw.trim() === '') return fallback
   const v = Number(raw)
   return Number.isFinite(v) && v >= 0 ? Math.floor(v) : fallback
+}
+
+/**
+ * N3 pre-check (trả nợ OBS-2 — user duyệt 2026-10-21): tình trạng sức khỏe
+ * model pin explicit CỦA JOB trước khi đốt attempt đầu. Bằng chứng gốc:
+ * glm-5.3-flash stall 300s MỖI cửa sổ breaker mới (3 cửa sổ = 15' trắng) —
+ * F2 ladder chỉ cứu SAU stall; N3 bỏ qua model đang hỏng TRƯỚC KHI call.
+ * 3 tín hiệu (ưu tiên giảm dần): breaker đang mở → timeout-strike còn nóng
+ * (trong cửa sổ 30') → Q-history học-là-hỏng (softmax q-learn, ≥2 lượt, Q≤-0.15).
+ * CHỈ áp provider 'nvidia' (bằng chứng stall là NIM; zen ngoài phạm vi N3).
+ * Fail-open tuyệt đối: mọi lỗi (kể cả Q lookup) → không skip — hành vi cũ.
+ */
+async function preCheckExplicitPinnedModel(
+  provider: string,
+  model: string,
+  agentName: string,
+): Promise<ExplicitPreSkipDecision> {
+  if (provider !== 'nvidia') {
+    return { skip: false, source: 'ok', reason: `provider ${provider} ngoài phạm vi N3 (bằng chứng stall là NIM)` }
+  }
+  try {
+    const health = getExplicitModelHealth(model)
+    let qEntry: { q: number; visits: number } | null = null
+    try {
+      const { getQAdvice, agentRuntimeStateKey } = await import('@/lib/learning/q-table')
+      const advice = await getQAdvice(agentRuntimeStateKey(), [model])
+      if (advice.length > 0 && advice[0].action === model) qEntry = { q: advice[0].q, visits: advice[0].visits }
+    } catch { /* Q lookup fail-open — quyết trên breaker/strikes thôi */ }
+    const decision = decideExplicitModelPreSkip(health, qEntry)
+    if (decision.skip) {
+      console.warn(`[GoalLoop] N3 pre-check ${agentName}: model pin ${model} SKIP attempt đầu — nguồn ${decision.source}: ${decision.reason}`)
+    }
+    return decision
+  } catch (err) {
+    return { skip: false, source: 'ok', reason: `pre-check lỗi — fail-open giữ hành vi cũ: ${err instanceof Error ? err.message : String(err)}` }
+  }
 }
 
 /**
@@ -2173,8 +2209,18 @@ ${evidenceBlock}
       return parseEvalVerdict(result.content)
     }
 
-    // Attempt 1 — model của agent (hành vi cũ)
-    const verdict = await attemptEval(agentProvider, agentModel)
+    // Attempt 1 — model của agent (hành vi cũ) + N3 pre-check (trả nợ OBS-2
+    // 2026-10-21): model pin đang hỏng (breaker/strike nóng/Q-history xấu) →
+    // ladder phục vụ NGAY thay vì đốt stall 150-300s attempt 1 (bằng chứng
+    // OBS-2: final-report 10:27 "vẫn dính" glm breaker còn 59s).
+    const evalN3 = await preCheckExplicitPinnedModel(agentProvider, agentModel, agentName)
+    const evalAttempt1Model = evalN3.skip && agentProvider === 'nvidia'
+      ? (agentModel === NEMOTRON_550B_NIM_ID ? DEEPSEEK_V41_FLASH_NIM_ID : NEMOTRON_550B_NIM_ID)
+      : agentModel
+    if (evalAttempt1Model !== agentModel) {
+      console.warn(`[GoalLoop] Evaluator N3 pre-check (${evalN3.source}) — model pin ${agentModel} bị bỏ qua attempt 1 → ${evalAttempt1Model} chấm trực tiếp`)
+    }
+    const verdict = await attemptEval(evalAttempt1Model === agentModel ? agentProvider : 'nvidia', evalAttempt1Model)
     if (verdict) return verdict
     if (abortCheck()) return null
 
@@ -2328,10 +2374,20 @@ QUY TẮC: KHÔNG gọi tool. KHÔNG bắt đầu công việc mới. Chỉ tổ
   const FINAL_REPORT_RETRY_BACKOFF_MS = [12_000, 30_000]
   const FINAL_REPORT_MAX_ATTEMPTS = FINAL_REPORT_RETRY_BACKOFF_MS.length + 1
   const ladderModel = agentModel === NEMOTRON_550B_NIM_ID ? DEEPSEEK_V41_FLASH_NIM_ID : NEMOTRON_550B_NIM_ID
+  // N3 pre-check (trả nợ OBS-2 2026-10-21): model pin hỏng (breaker/strike
+  // nóng/Q-history xấu) → mọi slot model pin được THAY bằng ladder — không
+  // đốt stall 150-300s chờ model chết trip lại (bằng chứng OBS-2: 3 cửa sổ
+  // breaker = 15' trắng trên đường wrap-up quan trọng nhất run).
+  const frN3 = await preCheckExplicitPinnedModel(agentProvider, agentModel, agentName)
+  const frSlot = (m: string): string =>
+    frN3.skip && m === agentModel && agentProvider === 'nvidia' ? ladderModel : m
+  if (frN3.skip && agentProvider === 'nvidia') {
+    console.warn(`[GoalLoop] Final-report N3 pre-check (${frN3.source}) — model pin ${agentModel} bị thay bằng ${ladderModel} ở mọi slot attempt`)
+  }
   const attemptModels: Array<{ provider: string; model: string }> = [
-    { provider: agentProvider, model: agentModel },
+    { provider: agentProvider, model: frSlot(agentModel) },
     { provider: 'nvidia', model: ladderModel },
-    { provider: agentProvider, model: agentModel },
+    { provider: agentProvider, model: frSlot(agentModel) },
   ]
   let finalReportLastErr = 'unknown'
   for (let attempt = 1; attempt <= FINAL_REPORT_MAX_ATTEMPTS; attempt++) {
@@ -2696,7 +2752,17 @@ async function runCtoConsultation(params: {
       : ''
     const prompt = `${historyBlock}[Tin nhắn mới nhất của user — cần bạn phản hồi]\n${userMessage}`
 
-    const llm = await callLLMForAgent(prompt, { provider: agentProvider, model: agentModel }, ctoSystemPrompt, {
+    // N3 pre-check (trả nợ OBS-2 2026-10-21): consult là call quan trọng pha
+    // auto-escalate — model pin hỏng → ladder phục vụ ngay thay vì đốt stall
+    // (OBS-2: consult 10.151 tokens từng phải chờ qua 2 stall glm).
+    const ctoN3 = await preCheckExplicitPinnedModel(agentProvider, agentModel, agentName)
+    const ctoModel = ctoN3.skip && agentProvider === 'nvidia'
+      ? (agentModel === NEMOTRON_550B_NIM_ID ? DEEPSEEK_V41_FLASH_NIM_ID : NEMOTRON_550B_NIM_ID)
+      : agentModel
+    if (ctoModel !== agentModel) {
+      console.warn(`[GoalLoop] CTO-consult N3 pre-check (${ctoN3.source}) — model pin ${agentModel} bị thay bằng ${ctoModel}`)
+    }
+    const llm = await callLLMForAgent(prompt, { provider: ctoModel === agentModel ? agentProvider : 'nvidia', model: ctoModel }, ctoSystemPrompt, {
       temperature: agentTemperature ?? 0.4,
       // maxTokens <=0 (Opus profile -1 = unlimited) → llm.ts chuẩn hóa thành
       // "không gửi max_tokens" (Task 30 fix) — giữ nguyên semantics profile.
@@ -4153,7 +4219,18 @@ LỖI NGOÀI QUYỀN SỬA là gì (2026-10-27 phiên 4 — chính sách TỰ PH
         // 5-21' (rate-limit xoay key) — heartbeatAt đứng im cả quãng → watcher
         // báo stale giả (bằng chứng r59 …9k3kp8: 💤 stale dù job sống). Bọc
         // runWithBatchHeartbeat để tín hiệu sống cứ đập 30s/lần xuyên suốt await.
-        result = await attemptMainCall(agentProvider, agentModel)
+        // N3 pre-check (trả nợ OBS-2 2026-10-21): model pin đang breaker-block /
+        // timeout-strike còn nóng / Q-history học-là-hỏng → BỎ QUA attempt 1,
+        // ladder phục vụ NGAY (tiết kiệm stall 150-300s mỗi cửa sổ breaker mới
+        // — bằng chứng OBS-2: 3 cửa sổ = 15' đốt trắng). result.model vẫn là
+        // model THỰC phục vụ (credit assignment + indicator honesty).
+        const n3Pre = await preCheckExplicitPinnedModel(agentProvider, agentModel, agentName)
+        if (n3Pre.skip && agentProvider === 'nvidia' && !isCancelled()) {
+          console.warn(`[GoalLoop] ${agentName} main-call N3 pre-check (${n3Pre.source}) — model pin ${agentModel} bị bỏ qua attempt 1 → ladder ${mainCallLadderModel} phục vụ trực tiếp`)
+          result = await attemptMainCall('nvidia', mainCallLadderModel)
+        } else {
+          result = await attemptMainCall(agentProvider, agentModel)
+        }
         // F2 — error-result (breaker mở = fail-fast R19 0 bytes): 1 ladder
         // attempt với model khoẻ khác họ trước khi tuyên chu kỳ error.
         if (result && !mainCallUsable(result) && result.error && agentProvider === 'nvidia' && !isCancelled()) {

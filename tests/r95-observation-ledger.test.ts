@@ -372,7 +372,7 @@ describe('r95 · H — source-scan wiring đợt 1+2 (OBS-P1/P2 hooks)', () => {
   })
 
   test('H6 kinds.ts — 27 kind chuẩn + obs.alert nhóm alert (Task 26-BE GAP-2) + run.heart nhóm run (Task 33) + model.sync nhóm tuning (R5) + kind HyperNAS search.* đặt trước (single-source §9 HyperNAS)', () => {
-    expect(OBS_KINDS.length).toBe(27) // PIN UPDATE §7.10 (2026-10-21): 25 → 27 (2 kind MemWatchdog: mem.soft_tier đã phát từ S6 nhưng thiếu dòng khai báo + mem.boot_grace MỚI boot-grace HARD-RSS — đều nhóm impact) // PIN UPDATE R34 OBS-V3: 19 → 25 (6 kind mới: eval.run + kb.consult + learn.escalate + adapt.escalate + model.failover + chat.fastpath) // PIN UPDATE R5: 18 → 19 (model.sync — đồng bộ danh sách model free, Đài quan sát thấy diff catalog)
+    expect(OBS_KINDS.length).toBe(28) // PIN UPDATE KPI#2 (trả nợ 2026-10-21): 27 → 28 (kpi.tx — snapshot p95 interactive tx mỗi 1000 write, nhóm impact) // PIN UPDATE §7.10 (2026-10-21): 25 → 27 (2 kind MemWatchdog: mem.soft_tier đã phát từ S6 nhưng thiếu dòng khai báo + mem.boot_grace MỚI boot-grace HARD-RSS — đều nhóm impact) // PIN UPDATE R34 OBS-V3: 19 → 25 (6 kind mới: eval.run + kb.consult + learn.escalate + adapt.escalate + model.failover + chat.fastpath) // PIN UPDATE R5: 18 → 19 (model.sync — đồng bộ danh sách model free, Đài quan sát thấy diff catalog)
     expect(OBS_KINDS.map(k => k.kind)).toContain('search.session')
     expect(OBS_KINDS.map(k => k.kind)).toContain('impact.estimate')
     expect(OBS_KINDS.map(k => k.kind)).toContain('brain.infer-ref')

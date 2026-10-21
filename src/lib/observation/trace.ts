@@ -22,6 +22,7 @@
 import { createHash } from 'node:crypto'
 import { db } from '@/lib/db'
 import { getTuningEnum } from '@/lib/learning/tuning-store'
+import { noteInteractiveTxMs } from '@/lib/observation/tx-stats'
 
 // ==================== HẰNG SỐ (doctrine #1 — nguồn §C.2) ====================
 
@@ -189,31 +190,38 @@ async function writeOneTrace(item: TraceInferenceInput): Promise<void> {
     },
   })
   // brain.infer-ref: table/rowKey trỏ trace — timeline 1 nguồn (C.4)
-  await db.$transaction(async tx => {
-    const last = await tx.observationEvent.findFirst({
-      orderBy: { seq: 'desc' },
-      select: { seq: true },
+  // KPI #2 (trả nợ 2026-10-21): đo duration interactive tx (cấp seq + create
+  // — cùng pattern ledger.writeOne). Fail-open tuyệt đối.
+  const txT0 = Date.now()
+  try {
+    await db.$transaction(async tx => {
+      const last = await tx.observationEvent.findFirst({
+        orderBy: { seq: 'desc' },
+        select: { seq: true },
+      })
+      await tx.observationEvent.create({
+        data: {
+          seq: (last?.seq ?? 0) + 1,
+          actor: `brain:${item.brain}`,
+          kind: 'brain.infer-ref',
+          runId: item.runId ?? null,
+          table: 'BrainInferenceTrace',
+          rowKey: trace.id,
+          summary: `${item.brain} suy diễn (${item.organ}) — ${item.latencyMs}ms · v${item.modelVersion}`,
+          payloadJson: JSON.stringify({
+            brain: item.brain,
+            organ: item.organ,
+            modelVersion: item.modelVersion,
+            inputHash,
+            latencyMs: Math.max(0, Math.round(item.latencyMs)),
+            fullVector: full,
+          }),
+        },
+      })
     })
-    await tx.observationEvent.create({
-      data: {
-        seq: (last?.seq ?? 0) + 1,
-        actor: `brain:${item.brain}`,
-        kind: 'brain.infer-ref',
-        runId: item.runId ?? null,
-        table: 'BrainInferenceTrace',
-        rowKey: trace.id,
-        summary: `${item.brain} suy diễn (${item.organ}) — ${item.latencyMs}ms · v${item.modelVersion}`,
-        payloadJson: JSON.stringify({
-          brain: item.brain,
-          organ: item.organ,
-          modelVersion: item.modelVersion,
-          inputHash,
-          latencyMs: Math.max(0, Math.round(item.latencyMs)),
-          fullVector: full,
-        }),
-      },
-    })
-  })
+  } finally {
+    try { noteInteractiveTxMs('trace.writeOne', Date.now() - txT0) } catch { /* side-channel — không được phép throw */ }
+  }
 }
 
 // ==================== PRUNE (Q3 §7 — 20K / 14 ngày) ====================

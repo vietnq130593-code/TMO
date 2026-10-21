@@ -1914,3 +1914,26 @@
 - **Tác động:** Stage `tests` của quality gate không còn đáng tin theo từng cửa sổ vận hành (đỏ/xanh theo trạng thái scheduling máy, không theo chất lượng code) — block push các đợt có thay đổi hợp lệ nếu rơi cửa sổ đỏ.
 - **Fix:** CHƯA sửa (ngoài phạm vi §7.10 — cần round riêng theo đúng giao thức, không được vá vội trong đợt khác): hướng kiến nghị (a) guard tắt self-heal spawn CLI khi BUN_TEST=1 (env có sẵn trong bun test); (b) hoặc stage tests chạy serial nhóm DB-heavy; (c) hoặc prepare-db + bỏ quyền write DDL của test runner. Đã ghi nợ follow-up.
 - **Kiểm chứng:** A/B matrix 9 runs + forensics log đầy đủ trong fixbug.md ĐỢT FB-§7.10; tập fail đồng nhất tuyệt đối giữa có/không thay đổi §7.10; 5 stage còn lại PASS (type_check 8.2s · lint 51.8s · imports · smoke 5/5 · build SKIP local).
+
+### BUG2-316 · FIX 2026-10-21 (ĐỢT FB-DEBT4 — user duyệt trả 4 nợ): guard test-runner triple-check tắt TOÀN BỘ self-heal spawn dưới test
+- **Fix (db-setup.ts):** `isTestRunnerContext()` = `NODE_ENV==='test'` (marker CHÍNH — đo live bun 1.3.14: `BUN_TEST` KHÔNG được set trong process.env, khác tài liệu phổ biến) ∨ `BUN_TEST` truthy (dự phòng runner khác/tương lai) ∨ `TMO_TEST_DB_ISOLATED==='1'` (preload cách ly set — dấu chắc nhất). Guard đứng tại entry ensureDbReady TRƯỚC in-flight/cache — mọi đường probe CLI + `prisma db push`/`generate` spawn không thể tới được dưới test. App runtime (next dev/worker NODE_ENV=development · build production) không khớp marker nào — self-heal sống đầy đủ.
+- **Bài học chẩn đoan (giá trị nhất đợt):** bản guard đầu dùng đúng `BUN_TEST` như kiến nghị BUG2-316 gốc → r142-A1 FAIL NGAY vì bun 1.3.14 KHÔNG set biến đó; r142-A3 còn chạy probe THẬT 1.2s giữa test (tái hiện y hệt lỗi gốc) — bằng chứng sống rằng test phải pin tiền điều kiện môi trường, không tin "documentation convention".
+- **Kiểm chứng:** r142 10 test (A1-A3 hành vi guard ok/nhanh/lặp + B1-B3 source-scan thứ tự guard-trước-mọi-tầng + C1 boot-path pin ecosystem NODE_ENV=development). **Stage tests gate PASS 2362/0 fail — LẦN ĐẦU TIÊN từ khi BUG2-316 được phát hiện** (trước đó đỏ 9 lần liên tiếp §7.10 + "20 failures, 10 unique" OBS-2 N4); full gate PASS 5/6 (104.5s).
+
+### BUG2-317 · I·P3 — Stale pin OBS_KINDS ở r96-D1 (25) không được bump 25→27 thời §7.10: gate đỏ BUG2-316 CHE MẶT test này 2 vòng — hermetic fix lộ ra — FB-DEBT4-R1-01 (2026-10-21)
+- **Hiện tượng:** Sau khi guard BUG2-316 làm stage tests chạy xác định, r96-D1 fail `expect(json.kinds.length).toBe(25)` nhận 28 — pin này bị BỎ SÓT khi §7.10 bump 25→27 ba file r95/r99/r122 (đợt đó gate đỏ toàn stage nên không bao giờ thấy r96 fail → không biết phải bump).
+- **Tác động:** Nhỏ (chỉ lộ khi test chạy hermetic) nhưng là bằng chứng trần trụi cho chi phí ẩn của test không-hermetic: bug thật (stale pin) tồn tại 2 vòng mà không ai thấy.
+- **Fix:** PIN UPDATE 25→28 kèm chú thích lịch sử "trễ 2 vòng" (r96 giờ đồng bộ r95/r99/r122 = 28 với kpi.tx).
+- **Kiểm chứng:** r96 15/15 sau fix; gate stage tests PASS.
+
+### BUG2-318 · I·P3 — r86 C6/C9 timeout 5s mặc định sát nút theo tải box: 5 train surrogate tuần tự (đo 400-750ms/lần) ≈ 4-5.5s → flaky theo scheduling — lộ ra khi hermetic (2026-10-21)
+- **Hiện tượng:** Sau guard BUG2-316, r86-C6 (5 lần trainBrainSurrogate tuần tiếp + prune) timeout 5000ms → C7-C9 cascade (lock train còn giữ + hook timeout). Đo live C4=437ms/C5=712ms → 5 lần ≈ 4.5-5.5s+prune — đúng biên timeout default.
+- **Tác động:** Flaky theo tải box (app + worker + qdrant cùng chạy) — cùng họ "gate đỏ/xanh theo scheduling" mà BUG2-316 diệt, còn sót 1 điểm.
+- **Fix:** Tham số thứ 3 bun:test `timeout: 20_000` cho đúng 2 test nặng (C6, C9) kèm comment nguồn; KHÔNG đụng test nhẹ (B1 1.4s vẫn default).
+- **Kiểm chứng:** r86 32/32 trong gate (file lẻ trên bản copy DB production vẫn chậm do dữ liệu thật — E7 >5s — nhưng gate dùng DB test chuẩn bị sẵn là contract, E7 pass trong gate).
+
+### BUG2-319 · D·P2 — Reset #3 làm mất .env DEPLOYMENT-STATE (không chỉ API keys): 3 biến pin-bởi-test + 1 dòng cũ =2 xung đột — quy trình restore B2 thiếu checklist — FB-DEBT4-R1-02 (2026-10-21)
+- **Hiện tượng:** Sau clone lại theo runbook reset #3, 4 test pin deployment-state đỏ: r130-B4 (RUNTIME_MODEL_POLICY=softmax), r135-C1 (UTILITY_NIM_MODEL=nemotron-550b), r136-B2/B3 (GOAL_LOOP_MAX_ATTEMPTS=5 + KHÔNG còn =2). Nguyên nhân: `.env` được dựng từ `.env.example` (chỉ có giá trị mặc định/comment) — các biến deployment-state do các đợt fix trước ghi vào `.env` máy cũ (softmax pilot · F4 · F6) mất theo reset; `.env.example` còn ship sẵn `GOAL_LOOP_MAX_ATTEMPTS=2` tạo xung đột last-wins khi append =5.
+- **Tác động:** Restore "code + keys" là KHÔNG ĐỦ — deployment state pin-bởi-test phải được khôi phục đúng nếu không gate đỏ ngay đợt đầu sau reset (chính là điều đã xảy ra).
+- **Fix:** .env bổ khối "DEPLOYMENT STATE PIN" 3 biến (softmax · UTILITY_NIM_MODEL · MAX_ATTEMPTS=5) + COMMENT-out dòng =2 cũ (r136-B3 cấm =2 tồn tại). Runbook my-project recovery/RESTORE-TMO.md mục reset #3 cập nhật checklist B2 tương ứng (bài học cho reset #4+).
+- **Kiểm chứng:** r130/r135/r136 43/43 sau fix; gate stage tests PASS.

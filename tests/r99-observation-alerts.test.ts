@@ -350,7 +350,7 @@ describe('r99 · B — pure thresholds (r99 test trực tiếp — xem alerts.ts
 
 describe('r99 · C — kinds obs.alert + cờ obs_alerts (TUNING_SPECS thứ 30)', () => {
   test('C1 OBS_KINDS 27 + obs.alert nhóm alert + class amber (hợp đồng 26-RESTORE)', () => {
-    expect(OBS_KINDS.length).toBe(27) // PIN UPDATE §7.10 (2026-10-21): 25 → 27 (mem.soft_tier + mem.boot_grace — nhóm impact, đồng bộ pin r95-H6/r122-A1) // PIN UPDATE R34 OBS-V3: 19 → 25 (6 kind mới: eval.run + kb.consult + learn.escalate + adapt.escalate + model.failover + chat.fastpath) // PIN UPDATE R5: 18 → 19 (model.sync — đồng bộ model free, Đài quan sát thấy diff catalog)
+    expect(OBS_KINDS.length).toBe(28) // PIN UPDATE KPI#2 (trả nợ 2026-10-21): 27 → 28 (kpi.tx — snapshot p95 interactive tx mỗi 1000 write, nhóm impact) // PIN UPDATE §7.10 (2026-10-21): 25 → 27 (mem.soft_tier + mem.boot_grace — nhóm impact, đồng bộ pin r95-H6/r122-A1) // PIN UPDATE R34 OBS-V3: 19 → 25 (6 kind mới: eval.run + kb.consult + learn.escalate + adapt.escalate + model.failover + chat.fastpath) // PIN UPDATE R5: 18 → 19 (model.sync — đồng bộ model free, Đài quan sát thấy diff catalog)
     const def = obsKindDef('obs.alert')
     expect(def).not.toBeNull()
     expect(def!.group).toBe('alert')

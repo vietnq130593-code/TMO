@@ -329,8 +329,45 @@ async function runSetup(): Promise<DbSetupResult> {
  * Đảm bảo DB schema sẵn sàng. Dedup qua in-flight promise (nhiều route gọi
  * đồng thời chỉ chạy 1 lần); `force` bỏ qua kết quả cache OK trước đó (dùng
  * khi gặp DB error bất ngờ lúc runtime — vd file DB bị thay lúc app chạy).
+ *
+ * BUG2-316 (2026-10-21 — hermetic test suite, round trả nợ user duyệt):
+ * Dưới test runner, TOÀN BỘ tầng self-heal (probe CLI + prisma db push /
+ * generate spawn) bị TẮT. Bằng chứng gốc (A/B 9-run matrix, §7.10 phiên):
+ * request-time self-heal spawn `prisma db push` trên DB test GIỮA CHỪNG
+ * 111-112 file chạy song song → DDL đụng bảng đang được test dùng (bảng
+ * "biến mất thoáng" — TuningChangeLog) + cascade SQLITE_BUSY/P2024 5s →
+ * đúng tập "20 failures, 10 unique" OBS-2 N4 + gate đỏ/xanh thất thường.
+ * DB test đã được chuẩn bị TRƯỚC bởi preload (bunfig.toml copy bản riêng
+ * /tmp) hoặc quality-gate (db/.quality-gate-test.db) — self-heal giữa chừng
+ * chỉ gây race, không có kịch bản hợp lệ nào cần nó dưới test.
+ *
+ * Marker test — TRIPLE-CHECK (đo live bun 1.3.14: `BUN_TEST` KHÔNG được set
+ * trong process.env; bản này r143-verify tái hiện ngay guard đơn BUN_TEST
+ * cho phép probe spawn 1.2s giữa test = đúng lỗi BUG2-316):
+ *   1. NODE_ENV === 'test'  — bun test tự set (đã đo live; marker CHÍNH);
+ *   2. BUN_TEST truthy       — phòng tương lai bun đặt lại / runner khác;
+ *   3. TMO_TEST_DB_ISOLATED === '1' — preload cách ly DB đã kích hoạt
+ *      (tests/db-isolation-preload.ts set khi copy DB xong — dấu chắc chắn
+ *      nhất đang chạy dưới bộ test có cách ly).
+ * App runtime (next dev NODE_ENV=development · worker development · build
+ * production) KHÔNG bao giờ khớp marker nào — self-heal hoạt động đầy đủ.
  */
+function isTestRunnerContext(): boolean {
+  return (
+    process.env.NODE_ENV === 'test'
+    || Boolean(process.env.BUN_TEST)
+    || process.env.TMO_TEST_DB_ISOLATED === '1'
+  )
+}
+
 export async function ensureDbReady(opts: { force?: boolean } = {}): Promise<DbSetupResult> {
+  if (isTestRunnerContext()) {
+    return {
+      ok: true,
+      migrated: false,
+      reason: 'TEST-RUNNER guard (BUG2-316) — self-heal TẮT dưới test runner (NODE_ENV=test | BUN_TEST | TMO_TEST_DB_ISOLATED): DB test do preload/quality-gate chuẩn bị sẵn; spawn prisma db push giữa chừng gây race biến mất bảng + SQLITE_BUSY',
+    }
+  }
   if (globalForDbSetup.__tmoDbSetupInFlight) return globalForDbSetup.__tmoDbSetupInFlight
   if (!opts.force && globalForDbSetup.__tmoDbSetupLastResult?.ok) {
     return globalForDbSetup.__tmoDbSetupLastResult

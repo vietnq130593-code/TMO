@@ -27,6 +27,7 @@
 
 import { db, withSqliteRetry } from '@/lib/db'
 import { getTuningEnum } from '@/lib/learning/tuning-store'
+import { getInteractiveTxStats, noteInteractiveTxMs } from '@/lib/observation/tx-stats'
 
 // ==================== HẰNG SỐ (doctrine #1 — hardcode kèm nguồn) ====================
 
@@ -263,6 +264,22 @@ async function drain(): Promise<void> {
       void pruneObservationEvents().finally(() => {
         state().pruning = false
       })
+      // KPI #2 (trả nợ 2026-10-21): snapshot p95 interactive tx vào timeline
+      // mỗi nhịp prune (1 event / 1000 write) — tích lũy DÀI HẠN sống sót
+      // restart (in-memory ring 512 chỉ phản ánh gần đây). Fail-open tuyệt
+      // đối — enqueue là push queue đồng bộ, không throw.
+      try {
+        const snap = getInteractiveTxStats()
+        const lines = snap.labels.map(l => `${l.label}: p95=${l.p95Ms}ms max=${l.maxMs}ms n=${l.count}`)
+        if (lines.length > 0) {
+          observeEvent({
+            actor: 'system:kpi',
+            kind: 'kpi.tx',
+            summary: `KPI #2 interactive tx p95 (process ${snap.processRole}) — ${lines.join(' · ')}`,
+            payload: { snapshot: snap },
+          })
+        }
+      } catch { /* đo lường — không được phép ảnh hưởng drain */ }
     }
   }
 }
@@ -286,28 +303,37 @@ async function writeOne(evt: ObserveEventInput): Promise<void> {
       ?? process.env.TMO_PROCESS_ROLE
       ?? 'api',
   })
-  await withSqliteRetry(
-    () => db.$transaction(async tx => {
-      const last = await tx.observationEvent.findFirst({
-        orderBy: { seq: 'desc' },
-        select: { seq: true },
-      })
-      await tx.observationEvent.create({
-        data: {
-          seq: (last?.seq ?? 0) + 1,
-          actor: evt.actor,
-          kind: evt.kind,
-          summary: evt.summary,
-          payloadJson,
-          runId: evt.runId ?? null,
-          sessionId: evt.sessionId ?? null,
-          table: evt.table ?? null,
-          rowKey: evt.rowKey ?? null,
-        },
-      })
-    }),
-    { label: `ledger.writeOne(${evt.kind})` },
-  )
+  // KPI #2 (BLUEPRINT-R17BC §6 — trả nợ 2026-10-21): đo duration interactive
+  // tx của MỖI writeOne (bao gồm retry withSqliteRetry — trọn trải nghiệm
+  // caller). Rẻ (push ring 512) + fail-open tuyệt đối — không bao giờ làm
+  // hỏng write chính vì sự kiện đo lường.
+  const txT0 = Date.now()
+  try {
+    await withSqliteRetry(
+      () => db.$transaction(async tx => {
+        const last = await tx.observationEvent.findFirst({
+          orderBy: { seq: 'desc' },
+          select: { seq: true },
+        })
+        await tx.observationEvent.create({
+          data: {
+            seq: (last?.seq ?? 0) + 1,
+            actor: evt.actor,
+            kind: evt.kind,
+            summary: evt.summary,
+            payloadJson,
+            runId: evt.runId ?? null,
+            sessionId: evt.sessionId ?? null,
+            table: evt.table ?? null,
+            rowKey: evt.rowKey ?? null,
+          },
+        })
+      }),
+      { label: `ledger.writeOne(${evt.kind})` },
+    )
+  } finally {
+    try { noteInteractiveTxMs('ledger.writeOne', Date.now() - txT0) } catch { /* side-channel — không được phép throw */ }
+  }
 }
 
 /** Độ dài BYTE UTF-8 của chuỗi — khác .length (đếm đơn vị UTF-16 — FB-OBS-R1-03). */

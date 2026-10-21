@@ -2743,6 +2743,101 @@ export function getModelBlockBreakers(): Array<{ model: string; blockedUntil: nu
     .map(([model, b]) => ({ model, blockedUntil: b.blockedUntil, reason: b.reason }))
 }
 
+// ==================== N3 — PRE-CHECK EXPLICIT-PIN MODEL (trả nợ OBS-2 2026-10-21) ====================
+// BẰNG CHỨNG GỐC (OBSERVE-PROTOCOL-2, 2026-10-20): model pin explicit của job
+// (glm-5.3-flash) stall 300s MỖI CỬA SỔ BREAKER MỚI — sau khi breaker 10' hết
+// hạn, lần call kế phải stall 150-300s ĐỦ SỐ strike (2) mới trip lại → 3 cửa
+// sổ = 15' đốt trắng cho cùng một model chết. F2 ladder chỉ cứu SAU khi attempt
+// 1 đã tốn stall; N3 pre-check TRƯỚC KHI call: model đang breaker-block HOẶC có
+// timeout-strike gần đây (dấu hiệu hang còn nóng) HOẶC Q-history học phản ánh
+// model này hỏng (softmax q-learn từ trải nghiệm thật) → caller goal-loop BỎ
+// QUA attempt model pin, ladder phục vụ NGAY (log + result.model trung thực).
+// CHỈ dùng cho model pin CỦA JOB trong goal-loop (main call / evaluator S3.2 /
+// final-report S3.3 / CTO consult) — KHÔNG đụng đường chat user chọn model tay
+// (R19: user muốn lỗi rõ để tự chọn — indicator honesty tuyệt đối).
+
+export interface ExplicitModelHealth {
+  model: string
+  /** Breaker đang mở (429-hard-block / timeout-hang)? */
+  breakerBlocked: boolean
+  breakerReason?: string
+  breakerRemainingMs?: number
+  /** Số timeout-strike tích lũy (chưa đủ trip hoặc vừa bị reset sau trip) */
+  timeoutStrikes: number
+  /** Timestamp strike gần nhất (null = chưa từng) */
+  lastTimeoutAt: number | null
+  /** Cửa sổ strike (MODEL_TIMEOUT_STRIKE_WINDOW_MS) — để caller/decision tính "còn nóng?" */
+  strikeWindowMs: number
+}
+
+/** Đọc trạng thái sức khỏe model pin — THUẦN getter (0 side-effect, 0 spawn). */
+export function getExplicitModelHealth(model: string): ExplicitModelHealth {
+  const now = Date.now()
+  const b = modelBlockBreakers.get(model)
+  const blocked = !!b && b.blockedUntil > now
+  const strikes = modelTimeoutStrikes.get(model) ?? 0
+  const lastAt = modelTimeoutLastAt.get(model) ?? null
+  return {
+    model,
+    breakerBlocked: blocked,
+    ...(blocked ? { breakerReason: b!.reason, breakerRemainingMs: b!.blockedUntil - now } : {}),
+    timeoutStrikes: strikes,
+    lastTimeoutAt: lastAt,
+    strikeWindowMs: MODEL_TIMEOUT_STRIKE_WINDOW_MS,
+  }
+}
+
+/** Ngưỡng Q-history: đủ lượt học VÀ Q đủ âm → model này HỌC LÀ HỎNG cho runtime agent. */
+export const EXPLICIT_PRECHECK_Q_MIN_VISITS = 2
+export const EXPLICIT_PRECHECK_Q_MAX_Q = -0.15
+
+export type ExplicitPreSkipSource = 'breaker' | 'strikes' | 'q-history' | 'ok'
+export interface ExplicitPreSkipDecision {
+  skip: boolean
+  source: ExplicitPreSkipSource
+  reason: string
+}
+
+/**
+ * Quyết định pre-skip (THUẦN — test trực tiếp): caller truyền health từ
+ * getExplicitModelHealth + Q entry của model (null khi chưa có dữ liệu/fail-open).
+ * Thứ tự ưu tiên: breaker (chắc chắn chết) > strikes còn nóng (hang mới xảy ra
+ * — mỗi lần thử lại đốt 150-300s stall) > q-history (học từ trải nghiệm: fail
+ * reward -1, 2 fails với alpha ~0.3 → Q ≈ -0.5).
+ * Strike NGOÀI cửa sổ → coi như 0 (model có thể đã hồi — cho thử lại).
+ */
+export function decideExplicitModelPreSkip(
+  health: ExplicitModelHealth,
+  qEntry: { q: number; visits: number } | null,
+  nowMs: number = Date.now(),
+): ExplicitPreSkipDecision {
+  if (health.breakerBlocked) {
+    return {
+      skip: true,
+      source: 'breaker',
+      reason: `circuit breaker đang mở (còn ${Math.ceil((health.breakerRemainingMs ?? 0) / 1000)}s): ${health.breakerReason ?? 'unknown'}`,
+    }
+  }
+  const strikeHot = health.timeoutStrikes >= 1
+    && health.lastTimeoutAt !== null
+    && nowMs - health.lastTimeoutAt <= health.strikeWindowMs
+  if (strikeHot) {
+    return {
+      skip: true,
+      source: 'strikes',
+      reason: `${health.timeoutStrikes} timeout-strike(s) gần đây (cách ${Math.round((nowMs - (health.lastTimeoutAt ?? nowMs)) / 1000)}s < cửa sổ ${Math.round(health.strikeWindowMs / 60000)}') — model HANG chưa hồi; thử lại = đốt stall 150-300s trước khi trip lại`,
+    }
+  }
+  if (qEntry && qEntry.visits >= EXPLICIT_PRECHECK_Q_MIN_VISITS && qEntry.q <= EXPLICIT_PRECHECK_Q_MAX_Q) {
+    return {
+      skip: true,
+      source: 'q-history',
+      reason: `Q-history học từ trải nghiệm: Q=${qEntry.q.toFixed(2)} sau ${qEntry.visits} lượt (ngưỡng ≤ ${EXPLICIT_PRECHECK_Q_MAX_Q} với ≥ ${EXPLICIT_PRECHECK_Q_MIN_VISITS} lượt) — model này hỏng cho runtime agent`,
+    }
+  }
+  return { skip: false, source: 'ok', reason: 'không có dấu hiệu hỏng (breaker đóng, không strike nóng, Q-history đủ tốt/chưa đủ mẫu)' }
+}
+
 // ==================== MODEL HEALTH PROBER (Task 20 — 2026-09-03) ====================
 // Root-cause "chờ một lúc rồi Agents không tạo được output do LLM call thất bại"
 // (user report 2026-09-03): khi các lõi đầu chuỗi HANG phía NIM (0 bytes — sự cố

@@ -219,7 +219,7 @@ describe('r96 · D — GET /api/observation/timeline', () => {
     // + NAS/EVO); PIN UPDATE Task 33: 17 → 18 thêm run.heart nhóm run — nhịp
     // sống EXECUTE nuôi rule stall D1.1; PIN UPDATE R5 2026-10-14: 18 → 19
     // thêm model.sync — Đài quan sát thấy diff đồng bộ danh sách model free)
-    expect(json.kinds.length).toBe(25)
+    expect(json.kinds.length).toBe(28) // PIN UPDATE KPI#2 (trả nợ 2026-10-21): 27 → 28 (kpi.tx — snapshot p95 interactive tx) —_pin này TRỄ 2 vòng: §7.10 bump 25→27 ba file r95/r99/r122 nhưng BỎ SÓT r96 (gate đỏ BUG2-316 che mất — hermetic fix lộ ra); PIN UPDATE R34 OBS-V3: 19 → 25
   })
 
   test('D2 filter kind + actor', async () => {

@@ -110,6 +110,23 @@ export NODE_OPTIONS="--max-old-space-size=1024 --expose-gc"
 # không có flag này tier-2 chỉ log được (bằng chứng restart 19/10: cold-compile
 # spike 2413/2228MB chạm HARD-RSS trong khi gc "chưa expose").
 
+# =============================================================================
+# §7.10 PHẦN 2 (trả nợ 2026-10-21) — WARMUP TUẦN TỰ cold-compile:
+# Browser poll ~15 route cùng lúc lúc boot → turbopack compile song song →
+# RSS next-server spike 2330-2603MB ≥ HARD 2100 (boot-grace §7.10 phải tha).
+# Warmup nền curl TỪNG route (2s cách) → compile tuần tự → đỉnh RSS thấp xa.
+# Kèm đo peak RSS (KPI #4b before/after — log [pm2-warmup] trong dev.log).
+# Detached setsid: không giữ wrapper (exec sang node ngay dưới đây); warmup
+# tự chống chồng lặp + time-box 120s + tắt được bằng TMO_BOOT_WARMUP=0.
+# =============================================================================
+if [ "${TMO_BOOT_WARMUP:-1}" != "0" ]; then
+  WARMUP_SCRIPT="$(cd "$(dirname "$0")" && pwd)/boot-warmup.sh"
+  if [ -x "$WARMUP_SCRIPT" ]; then
+    setsid nohup bash "$WARMUP_SCRIPT" >/dev/null 2>&1 &
+    echo "[pm2-start] Đã kích hoạt boot-warmup nền (serialized cold-compile — §7.10-p2)."
+  fi
+fi
+
 # Khởi động Next.js — exec để PM2 sở hữu trực tiếp process node next
 cd "$(dirname "$0")/.."
 exec node node_modules/next/dist/bin/next dev -p "$PORT"

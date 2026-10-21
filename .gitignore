@@ -108,6 +108,10 @@ worklog.md
 # chạy được `pm2 start ecosystem.config.cjs` (wrapper tự dọn orphan process giữ
 # port 3000 trước khi start, chống EADDRINUSE crash-loop).
 !/scripts/pm2-start.sh
+# NGOẠI LỆ (§7.10-p2 — trả nợ 2026-10-21): warmup tuần tự cold-compile lúc boot
+# (serialized compile pipeline thay storm song song 15 route → giảm peak RSS
+# 2603MB). pm2-start.sh spawn nền — phải đi kèm repo để fresh clone có ngay.
+!/scripts/boot-warmup.sh
 # NGOẠI LỆ: PM2 keepalive watchdog là script DEPLOYMENT (được start bằng
 # `pm2 start scripts/tmo-keepalive.sh --name tmo-keepalive`) — lớp phòng thủ
 # 2 đảm bảo "PM2 duy trì hiển thị giao diện app": phát hiện app không phục vụ

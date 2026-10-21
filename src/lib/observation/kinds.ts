@@ -89,6 +89,10 @@ export const OBS_KINDS: readonly ObsKindDef[] = [
   // sức khỏe process, không phải cảnh báo cần action.
   { kind: 'mem.soft_tier', group: 'impact', label: 'Mem soft-tier' },
   { kind: 'mem.boot_grace', group: 'impact', label: 'Mem boot-grace' },
+  // KPI #2 (BLUEPRINT-R17BC §6 — trả nợ 2026-10-21): snapshot p95 interactive
+  // tx (ledger + trace) mỗi 1000 write từ drain ledger — tích lũy dài hạn sống
+  // sót restart; ops tức thời qua /api/observation/interactive-tx.
+  { kind: 'kpi.tx', group: 'impact', label: 'KPI interactive tx' },
 ]
 
 const KIND_BY_NAME = new Map<string, ObsKindDef>(OBS_KINDS.map(k => [k.kind, k]))

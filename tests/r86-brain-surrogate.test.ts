@@ -550,6 +550,10 @@ describe('r86 · C trainBrainSurrogate — pipeline đầy đủ (DB cô lập)'
     expect(v2.specJson).toBe(v1.specJson)
   })
 
+  // TIMEOUT 20s (trả nợ 2026-10-21 — BUG2-316 lộ ra sau khi race chết): 5 train
+  // tuần tự × 400-750ms (đo live C4/C5) + prune ≈ 4-5.5s — sát nút timeout 5s
+  // mặc định theo tải box (app + worker + qdrant cùng chạy) → flaky theo scheduling.
+  // 20s đúng khối lượng việc (integration nặng — tiền lệ B1 1.4s vẫn trong default).
   test('C6 prune A2: 7 lần train (tổng cộng) → giữ 5 bản mới nhất (v1+v2 bị dọn), active là bản mới nhất', async () => {
     for (let i = 0; i < 4; i++) await trainBrainSurrogate() // v3..v6
     const res = await trainBrainSurrogate() // lần 7 → v7
@@ -564,7 +568,7 @@ describe('r86 · C trainBrainSurrogate — pipeline đầy đủ (DB cô lập)'
     expect(rows.map(r => r.version)).toEqual([7, 6, 5, 4, 3]) // v1+v2 bị prune
     expect(rows[0].active).toBe(true)
     expect(rows.filter(r => r.active).length).toBe(1)
-  })
+  }, 20_000) // TIMEOUT — xem comment đầu C6 (5 train tuần tự vượt default 5s theo tải box)
 
   test('C7 NOISE train sau SIGNAL → bản mới active=false KHÔNG đụng bản active cũ', async () => {
     await seedAgentRuns(synthRuns(120, 51, false)) // thay dữ liệu bằng noise
@@ -614,7 +618,7 @@ describe('r86 · C trainBrainSurrogate — pipeline đầy đủ (DB cô lập)'
     expect(json.heads.success.improved).toBe(true)
     expect(json.sampleSize).toBe(120)
     expect(json.version).toBe(10)
-  })
+  }, 20_000) // TIMEOUT — seed 120 run + train qua route round-trip (nặng như C6)
 
   test('C10 POST /api/brain/train brain lạ → 400 (liệt kê supported đủ 3 sau P4)', async () => {
     // 'policy' từ BRAIN-P4 đã HỢP LỆ — dùng tên thật sự lạ để đo nhánh 400
