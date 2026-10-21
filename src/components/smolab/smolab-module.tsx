@@ -372,17 +372,23 @@ export function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: RunTod
 
   // ━━━ R18 — LAZY-FETCH TRAIL TỪ ĐĨA ("Thought Process biến mất") ━━━
   // Run tái tạo từ AgentRunRecord (source='record', events=[], trailAvailable)
-  // → khi user MỞ panel lần đầu, fetch /api/agent-run?runId= đọc JSONL trail
-  // bền vững (agent-runs/<runId>.jsonl — sống qua restart + không evict) →
-  // panel hiển thị ĐẦY ĐỦ thought/tool như lúc live. Fail-open: lỗi fetch →
-  // giữ events rỗng (header vẫn hiện counters từ record).
+  // → khi user MỞ panel, fetch /api/agent-run?runId= đọc JSONL trail bền vững
+  // (agent-runs/<runId>.jsonl — sống qua restart + không evict) → panel hiển
+  // thị ĐẦY ĐỦ thought/tool như lúc live. Fail-open: lỗi fetch → giữ events
+  // rỗng (header vẫn hiện counters từ record).
+  //
+  // ━━━ R43 FIX-LIVE-TP — Thought Process LIVE cho job split-mode ━━━
+  // Run 'running' có trailAvailable (record-run của job durable chạy trong
+  // worker process — registry API trống nhưng trail JSONL nằm trên ĐĨA
+  // DÙNG CHUNG) → khi user mở panel: POLL 3s lấy events mới nhất (worker
+  // append, API process đọc) — user thấy agent "làm đến đâu, như thế nào"
+  // TRONG LÚC chạy, đúng yêu cầu R43. Run terminal → fetch 1 lần (đủ events
+  // cuối từ finalize). Bản cũ skip fetch khi status==='running' → split-mode
+  // không bao giờ có events live.
   const [trailEvents, setTrailEvents] = useState<AgentRunEventData[] | null>(null)
   const [trailLoading, setTrailLoading] = useState(false)
-  const trailFetchedRef = useRef(false)
   useEffect(() => {
-    if (!open || trailFetchedRef.current) return
-    if (!run.trailAvailable || run.events.length > 0 || run.status === 'running') return
-    trailFetchedRef.current = true
+    if (!open || !run.trailAvailable || run.events.length > 0) return
     // async-wrapper pattern (precedent R15 runtime-metrics-panel): setState
     // KHÔNG gọi đồng bộ trong body effect — tránh cascading render
     const loadTrail = async (): Promise<void> => {
@@ -395,6 +401,15 @@ export function AgentRunPanel({ run, todos }: { run: AgentRunData; todos: RunTod
       } catch { /* fail-open — giữ events rỗng */ }
       finally { setTrailLoading(false) }
     }
+    // ĐANG CHẠY (record-run split-mode) → poll live 3s; dọn interval khi đóng
+    // panel / run terminal (dep run.status đổi → effect chạy lại → nhánh dưới)
+    if (run.status === 'running') {
+      void loadTrail()
+      const interval = setInterval(() => { void loadTrail() }, 3000)
+      return () => { clearInterval(interval) }
+    }
+    // TERMINAL → fetch một lần mỗi lần mở (bắt events cuối từ finalize — kể cả
+    // sau khi live poll đã dừng ở tick cuối)
     void loadTrail()
   }, [open, run.runId, run.trailAvailable, run.events.length, run.status])
 
@@ -1664,6 +1679,9 @@ export interface GoalLoopJobApiData {
   completedAt: string | null
   ageMs: number
   stallWarning: boolean
+  /** R43 — agent phụ trách (server parse từ input) — hiện "agent nào đang
+   * làm việc" ngay từ lúc queued/running. */
+  agentName?: string | null
   /** CHỈ khi completed — projection kết quả (content = câu trả lời thật) */
   result?: {
     content: string
@@ -1725,9 +1743,13 @@ export function replaceDurablePlaceholder(
 
 
 /**
- * Placeholder bubble trong message flow — job durable đang chạy (14-e Mảnh 2+3):
- * spinner + progressHint live + cảnh báo stall (KHÔNG tự hủy) + nút Dừng riêng
+ * R43 (user directive "chỉ cần rõ ràng agent nào đang làm việc + Thought
+ * Process — KHÔNG hiển thị 'Tác vụ nền'"): bubble trạng thái agent trong
+ * message flow — thay cho placeholder job durable cũ. Gọn: tên agent +
+ * spinner + việc đang làm (progressHint) + tuổi + ⚠ stall + nút Dừng riêng
  * (touch target 44px — nút Gửi/Dừng chính không đổi vì isLoading đã tắt).
+ * Chi tiết diễn biến tư duy nằm trong panel Thought Process (AgentRunPanel)
+ * ngay bên dưới — đây chỉ là dòng trạng thái.
  */
 export function DurableGoalLoopBubble({
   msg, job, onCancel,
@@ -1738,22 +1760,30 @@ export function DurableGoalLoopBubble({
 }) {
   const cancelling = job.cancelRequested
   const queued = job.status === 'queued'
+  const agentLabel = job.agentName || 'Agent'
   return (
     <div className="max-w-[85%] p-2.5 bg-slate-950/50 border border-emerald-400/35 border-l-2 border-l-emerald-400">
-      <div className="flex items-center gap-1.5 mb-1">
-        <Loader2 className="h-3 w-3 animate-spin text-emerald-400" aria-hidden="true" />
-        <span className="text-[11px] text-emerald-300 font-medium">⚙️ Tác vụ nền</span>
-        {job.agentName && <span className="text-[10px] text-stone-400 truncate">{job.agentName}</span>}
+      <div className="flex items-center gap-1.5 mb-1 flex-wrap">
+        {cancelling || queued ? (
+          <Loader2 className="h-3 w-3 animate-spin text-emerald-400" aria-hidden="true" />
+        ) : (
+          <span className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" aria-hidden="true" />
+        )}
+        <span className="text-[11px] text-emerald-300 font-semibold">🤖 {agentLabel}</span>
+        <span className="text-[10px] text-stone-400">
+          {cancelling ? 'đang dừng…' : queued ? 'đang chờ lượt…' : 'đang làm việc'}
+        </span>
         <Badge className={`text-[9px] h-3.5 px-1.5 ${GOAL_LOOP_STATUS_META[job.status]?.badgeClass || ''}`}>
           {GOAL_LOOP_STATUS_META[job.status]?.label || job.status}
         </Badge>
+        <span className="text-[10px] text-stone-500 ml-auto">{fmtRunDuration(job.ageMs) || 'mới'}</span>
       </div>
-      <p className="text-base whitespace-pre-wrap leading-relaxed text-stone-100">
+      <p className="text-xs whitespace-pre-wrap leading-relaxed text-stone-200">
         {cancelling
-          ? '⏳ Đang yêu cầu dừng… (agent sẽ kết thúc ở bước an toàn gần nhất)'
+          ? '⏳ Đang yêu cầu dừng — agent sẽ kết thúc ở bước an toàn gần nhất.'
           : queued
-          ? (msg.content || '⏳ Tác vụ đã vào hàng đợi nền — đang chờ worker nhận…')
-          : `⏳ Đang chạy — ${job.progressHint || 'đang khởi động…'}`}
+          ? (msg.content || 'Đang chờ lượt thực thi…')
+          : (job.progressHint || 'Đang khởi động…')}
       </p>
       {job.stallWarning && !cancelling && (
         <p className="mt-1 text-[11px] text-amber-400">
@@ -1766,96 +1796,13 @@ export function DurableGoalLoopBubble({
           variant="outline"
           onClick={() => onCancel(job.id)}
           disabled={cancelling}
-          aria-label={`Dừng tác vụ nền của ${job.agentName || 'Agent'}`}
-          title={cancelling ? 'Đang yêu cầu dừng…' : 'Dừng tác vụ nền này'}
+          aria-label={`Dừng ${agentLabel}`}
+          title={cancelling ? 'Đang yêu cầu dừng…' : `Dừng ${agentLabel}`}
           className="h-11 min-w-[44px] px-4 border-red-400/40 bg-red-950/30 text-red-300 hover:bg-red-900/50 hover:text-red-200 hover:border-red-400/60"
         >
           <Square className="h-3 w-3 fill-current" aria-hidden="true" />
-          <span className="text-[12px]">Dừng</span>
+          <span className="text-[12px]">Dừng {agentLabel}</span>
         </Button>
-        <span className="text-[10px] text-stone-400 ml-auto">
-          {fmtRunDuration(job.ageMs) || 'mới'} · job {job.id.slice(0, 8)}…
-        </span>
-      </div>
-    </div>
-  )
-}
-
-
-/**
- * Panel "Tác vụ nền" (roadmap CI-5 B7) — chỉ render khi có job của phiên đang
- * mở (active, hoặc vừa terminal — purge khỏi state sau 15s → panel tự ẩn,
- * KHÔNG chiếm không gian khi rảnh). Mỗi job: tên agent, badge trạng thái,
- * progressHint, tuổi, ⚠ stall, nút hủy riêng (touch target 44px).
- */
-export function GoalLoopJobsPanel({
-  jobs, onCancel,
-}: {
-  jobs: GoalLoopJobViewData[]
-  onCancel: (jobId: string) => void
-}) {
-  const activeCount = jobs.filter(j => j.status === 'queued' || j.status === 'running').length
-  return (
-    <div
-      className="flex-shrink-0 mx-3 mt-2 p-2.5 chamfer-sm bg-slate-950/60 border border-emerald-400/30"
-      role="region"
-      aria-label={`Tác vụ nền — ${activeCount} đang chạy`}
-    >
-      <div className="flex items-center gap-1.5 mb-2">
-        <Activity className="h-3 w-3 text-emerald-400" aria-hidden="true" />
-        <span className="text-[11px] font-medium text-emerald-300 uppercase tracking-wider">Tác vụ nền</span>
-        <span className="text-[10px] text-stone-400 truncate">
-          {activeCount > 0 ? `${activeCount} đang chạy — chạy tiếp kể cả khi đóng tab` : 'vừa kết thúc'}
-        </span>
-      </div>
-      <div className="space-y-1.5 max-h-44 overflow-y-auto" style={{ scrollbarWidth: 'thin' }}>
-        {jobs.map(job => {
-          const meta = GOAL_LOOP_STATUS_META[job.status] || GOAL_LOOP_STATUS_META.queued
-          const active = job.status === 'queued' || job.status === 'running'
-          return (
-            <div key={job.id} className="flex items-center gap-2 p-1.5 bg-slate-900/40 border border-stone-700/40">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className="text-[12px] text-stone-200 font-medium truncate">{job.agentName || 'Agent'}</span>
-                  <Badge className={`text-[9px] h-3.5 px-1.5 ${meta.badgeClass}`}>{meta.label}</Badge>
-                  {job.attempts > 0 && (
-                    <span className="text-[9px] text-amber-400/80" title={`Đã tự thử lại ${job.attempts} lần sau crash`}>↻ {job.attempts}</span>
-                  )}
-                  {job.stallWarning && (
-                    <span className="text-[10px] text-amber-400" title={`Không cập nhật tín hiệu sống ${goalLoopStallMinutes(job)} phút — job vẫn chạy`}>
-                      ⚠ {goalLoopStallMinutes(job)} phút không tín hiệu
-                    </span>
-                  )}
-                </div>
-                <div className="text-[10px] text-stone-400 truncate">
-                  {job.status === 'queued'
-                    ? 'Đang chờ worker nhận…'
-                    : job.status === 'running'
-                    ? (job.progressHint || 'đang khởi động…')
-                    : job.status === 'failed'
-                    ? `Lỗi${job.error ? `: ${String(job.error).slice(0, 80)}` : ''}`
-                    : job.status === 'cancelled'
-                    ? 'Đã dừng theo yêu cầu'
-                    : 'Hoàn tất — câu trả lời đã vào khung chat'}
-                  {' · '}{fmtRunDuration(job.ageMs) || 'mới'}
-                </div>
-              </div>
-              {active && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => onCancel(job.id)}
-                  disabled={job.cancelRequested}
-                  aria-label={`Dừng tác vụ nền của ${job.agentName || 'Agent'}`}
-                  title={job.cancelRequested ? 'Đang yêu cầu dừng…' : 'Dừng tác vụ nền này'}
-                  className="h-11 w-11 p-0 shrink-0 border-red-400/40 bg-red-950/30 text-red-300 hover:bg-red-900/50 hover:text-red-200 hover:border-red-400/60"
-                >
-                  <Square className="h-3 w-3 fill-current" aria-hidden="true" />
-                </Button>
-              )}
-            </div>
-          )
-        })}
       </div>
     </div>
   )
@@ -2971,7 +2918,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
           const placeholderMsg: SmolabMessage = {
             id: `glj_${j.id}`,
             role: 'assistant',
-            content: '⏳ Tác vụ nền đang chạy…',
+            content: `🤖 ${j.agentName || j.result?.agentName || 'Agent'} đang nhận việc…`,
             timestamp: new Date(j.startedAt || j.createdAt || Date.now()),
             goalLoopJobId: j.id,
           }
@@ -3313,17 +3260,24 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       ])
 
       if (runsRes?.ok) {
-        const d = await runsRes.json().catch(() => null) as { ok?: boolean; runs?: AgentRunData[]; hasActive?: boolean } | null
+        const d = await runsRes.json().catch(() => null) as { ok?: boolean; runs?: AgentRunData[]; recordRuns?: AgentRunData[]; hasActive?: boolean } | null
         if (d?.ok && Array.isArray(d.runs)) {
+          // R43 FIX-LIVE-TP — gộp recordRuns (AgentRunRecord DB — nguồn DUY NHẤT
+          // thấy job split-mode chạy trong worker process: registry in-memory
+          // của process API trống) vào mảng xử lý: poller giờ thấy run của
+          // worker job → panel Thought Process chèn đúng lúc + cập nhật trạng
+          // thái live. Registry thắng khi trùng runId (mirror loadSessionTail).
+          const recordRuns = Array.isArray(d.recordRuns) ? d.recordRuns : []
+          const allRuns = [...d.runs, ...recordRuns.filter(rr => !d.runs!.some(live => live.runId === rr.runId))]
           // 0. USER REQUEST 2026-09-01: phát hiện run vừa KẾT THÚC mà client
           //    không có fetch nào đang chờ cho session (tác vụ chạy nền xong)
           const hadRunning = Object.values(agentRunsRef.current).some(r => r.status === 'running')
-          const stillRunning = d.runs.some(r => r.status === 'running')
+          const stillRunning = allRuns.some(r => r.status === 'running')
           // FIX 2026-08-27: user vừa bấm DỪNG (stoppingRef) → KHÔNG reload tail —
           // reload sẽ replace messages bằng DB tail và XÓA mất thông báo ⏹ vừa
           // chèn (client-only). Client state đã đúng (spinner tắt + ⏹ + panel
           // "Đã dừng" ở poll kế). Chỉ reload khi run kết thúc THẬT ở nền.
-          const justStoppedByUser = (Date.now() - lastStoppedAtRef.current < 5000) && d.runs.some(r => r.status === 'cancelled')
+          const justStoppedByUser = (Date.now() - lastStoppedAtRef.current < 5000) && allRuns.some(r => r.status === 'cancelled')
           if (hadRunning && !stillRunning && !justStoppedByUser && !inFlightChatsRef.current.has(sid) && sid === currentSessionIdRef.current) {
             // Server đã chạy xong và lưu DB → reload tail để hiện response;
             // spinner (isLoading) do resume lúc mở session → tắt bây giờ.
@@ -3339,7 +3293,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
             setSessionsRefreshTick(t => t + 1)
           }
 
-          if (d.runs.length > 0) {
+          if (d.runs.length > 0 || recordRuns.length > 0) {
           // 1. Cập nhật dữ liệu run (kèm safeguard: run "running" quá 30 phút
           //    coi như lỗi client-side — tránh poller kẹt vĩnh viễn).
           //    GOAL LOOP (2026-09-01): nâng 10' → 30' vì vòng lặp mục tiêu dài hạn
@@ -3353,7 +3307,13 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
             const durableGoalLoopActive = Object.values(goalLoopJobsRef.current)
               .some(j => j.status === 'queued' || j.status === 'running')
             const staleRunThresholdMs = durableGoalLoopActive ? 24 * 60 * 60_000 : 30 * 60_000
-            for (const raw of d.runs!) {
+            for (const raw of allRuns) {
+              // R43: record-run KHÔNG đè run LIVE (registry — kèm events live)
+              // nhưng VẪN PHẢI đè record-state CŨ (cập nhật status running→done
+              // từ DB — bằng chứng live: panel job 1 kẹt "Không còn nhịp" vì
+              // record 'running' cũ chặn record 'done' mới). Điều kiện skip chỉ
+              // áp khi state hiện tại là run live (source !== 'record').
+              if (raw.source === 'record' && next[raw.runId] && next[raw.runId].source !== 'record') continue
               let run = raw
               if (run.status === 'running' && Date.now() - (run.startedAt || 0) > staleRunThresholdMs) {
                 run = { ...run, status: 'error' as const, endedAt: Date.now() }
@@ -3363,7 +3323,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
             // Reconcile: run client đang "running" nhưng server KHÔNG trả về nữa
             // (server restart / run bị LRU purge) → đánh dấu error để poller
             // không quay vô hạn và panel không kẹt "Đang chạy"
-            const serverRunIds = new Set(d.runs!.map(r => r.runId))
+            const serverRunIds = new Set(allRuns.map(r => r.runId))
             for (const [rid, run] of Object.entries(next)) {
               if (run.status === 'running' && !serverRunIds.has(rid)) {
                 next[rid] = { ...run, status: 'error' as const, endedAt: Date.now() }
@@ -3376,8 +3336,14 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
           //    thực thi tiếp theo"): panel KHÔNG hiện ngay khi gửi tin nhắn nữa —
           //    chỉ chèn khi run đã có event thought/tool/todo ĐẦU TIÊN (= agent
           //    nghĩ xong bước 1, bắt đầu thực thi) hoặc run đã kết thúc.
+          //    R43 FIX-LIVE-TP: run record (split-mode worker job) có
+          //    trailAvailable → CHO HIỆN NGAY khi đang chạy (events live sẽ đổ
+          //    vào qua poll 3s trong AgentRunPanel — user yêu cầu R43 "xem
+          //    Thought Process của agent đấy làm đến đâu" TRONG LÚC chạy).
+          //    Run inline (registry) không có trail ban đầu → giữ hành vi cũ.
           const hasVisibleActivity = (r: AgentRunData) =>
             r.status !== 'running' ||
+            r.trailAvailable === true ||
             (r.events || []).some(e => e.type === 'thought' || e.type === 'tool' || e.type === 'todo_update')
           setMessages(prev => {
             // GUARD 2026-09-01: user đã đổi phiên giữa chừng → KHÔNG chèn panel
@@ -3397,7 +3363,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
                 break
               }
             }
-            const newRuns = d.runs!.filter(r =>
+            const newRuns = allRuns.filter(r =>
               r.runId && !knownRunIds.has(r.runId) && hasVisibleActivity(r) &&
               r.startedAt >= lastUserTs - 5000
             )
@@ -3478,8 +3444,9 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
         [job.id]: {
           ...job,
           result: job.result ?? null,
-          // Giữ tên agent client-side (server chỉ trả tên trong result khi completed)
-          agentName: existing?.agentName || job.result?.agentName,
+          // Giữ tên agent: seed client (lúc gửi) > API agentName (R43 — server
+          // parse từ input, có ngay lúc queued/running) > result khi completed
+          agentName: existing?.agentName || job.agentName || job.result?.agentName,
         },
       }
     })
@@ -3536,7 +3503,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       }
       setSessionsRefreshTick(t => t + 1)
     } else if (job.status === 'failed') {
-      const errMsg = `❌ Tác vụ nền thất bại${job.error ? `: ${String(job.error).slice(0, 300)}` : ' (không rõ nguyên nhân)'}${job.attempts > 0 ? ` — đã thử lại ${job.attempts} lần sau crash.` : ''}`
+      const errMsg = `❌ ${job.agentName || job.result?.agentName || 'Agent'} gặp lỗi${job.error ? `: ${String(job.error).slice(0, 300)}` : ' (không rõ nguyên nhân)'}${job.attempts > 0 ? ` — đã tự thử lại ${job.attempts} lần sau crash.` : ''}`
       if (onSession) {
         setMessages(prev => replaceDurablePlaceholder(prev, job.id, { role: 'error', content: errMsg }))
       }
@@ -3545,7 +3512,7 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       if (onSession) {
         setMessages(prev => replaceDurablePlaceholder(prev, job.id, {
           role: 'assistant',
-          content: '⏹ Tác vụ nền đã dừng theo yêu cầu của bạn.',
+          content: `⏹ ${job.agentName || job.result?.agentName || 'Agent'} đã dừng theo yêu cầu của bạn.`,
         }))
       }
       setSessionsRefreshTick(t => t + 1)
@@ -3697,11 +3664,10 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
     return () => { clearInterval(interval) }
   }, [goalLoopActiveKey, pollGoalLoopJob])
 
-  // Job list cho panel "Tác vụ nền" — job của phiên đang mở (active + terminal
-  // chưa purge 15s), cũ nhất trước.
-  const goalLoopPanelJobs = useMemo(() => Object.values(goalLoopJobs)
-    .filter(j => j.sessionId === currentSessionId)
-    .sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1)), [goalLoopJobs, currentSessionId])
+  // R43 (user directive "quá nhiều nơi hiển thị Tác vụ nền — chỉ cần agent
+  // đang làm việc + Thought Process"): panel "Tác vụ nền" riêng ĐÃ BỎ —
+  // trạng thái agent hiển thị qua DurableGoalLoopBubble trong message flow
+  // (ngay dưới câu hỏi của user) + Thought Process panel (AgentRunPanel).
 
   // ===== USER REQUEST 2026-08-31 — DỪNG tác vụ Agents bằng cách bấm nút Gửi lần nữa =====
   // Khi agent đang chạy (isLoading), nút Gửi biến thành nút DỪNG:
@@ -5509,7 +5475,22 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
     const readyAtts = pendingAttachments.filter(a => a.status === 'ready')
     // r73 — cho phép gửi khi có tệp đính kèm dù ô nhập trống (yêu cầu chỉ là
     // "phân tích tệp") — manifest là phần nội dung chính
-    if ((!rawText && readyAtts.length === 0) || isLoading) return
+    if (!rawText && readyAtts.length === 0) return
+    // R43 FIX-MSG-1 (user report "tin nhắn sau của tôi không thấy hiển thị
+    // trong khung chat"): isLoading trước đây return NGẪM LẶNG — user gõ tin
+    // tiếp trong lúc agent đang chạy (goal-loop 60-120s/LMM call, job nền
+    // 20-45 phút) → bấm Enter → KHÔNG có gì xảy ra: không bubble, không lỗi,
+    // không clear ô nhập → tưởng tin nhắn "không hiển thị". Giờ: toast rõ
+    // lý do + GIỮ nguyên nội dung ô nhập (user bấm Dừng rồi gửi lại, hoặc
+    // chờ xong). Bằng chứng live 2026-10-21: request 89s của session
+    // sess_1792574101652 — mọi tin nhắn sau đều bị nuốt im lặng (0 POST).
+    if (isLoading) {
+      toast({
+        title: 'Agent đang làm việc',
+        description: 'Chờ tác vụ hiện tại hoàn tất, hoặc bấm nút Dừng rồi gửi lại tin nhắn này.',
+      })
+      return
+    }
     // r73 — manifest đính kèm nằm TRONG message content: mọi đường (single
     // chat / team workflow / research) đều thấy — agent đọc được nội dung
     // tệp, replay phiên cũ (DB) cũng nguyên vẹn.
@@ -5804,7 +5785,7 @@ ${manifest}` : rawText
       if (data.durable && data.jobId) {
         const jobId = String(data.jobId)
         const placeholderContent = String(
-          data.content || `⏳ Tác vụ đã vào hàng đợi nền (job ${jobId.slice(0, 12)}…) — Phiên chat sẽ tự cập nhật khi hoàn tất.`
+          data.content || `🤖 ${String(chatBody.agentProfileName || 'Agent')} đã nhận việc — đang bắt đầu…`
         )
         setMessages(prev => [...prev, {
           id: crypto.randomUUID(),
@@ -7159,14 +7140,6 @@ ${manifest}` : rawText
                 )
               })()}
             </div>
-
-            {/* ===== GĐ4 CI-5 (14-e) — Panel "Tác vụ nền" (durable goal-loop job
-                monitor — roadmap B7): chỉ hiện khi có job của phiên đang mở
-                (active hoặc vừa kết thúc — purge khỏi state sau 15s → panel tự
-                ẩn, KHÔNG chiếm không gian khi rảnh). ===== */}
-            {goalLoopPanelJobs.length > 0 && (
-              <GoalLoopJobsPanel jobs={goalLoopPanelJobs} onCancel={cancelGoalLoopJob} />
-            )}
 
             {/* Messages List — USER REQUEST 2026-09-01: onScroll theo dõi vị trí
                 (gần cuối → auto-scroll tin mới; chạm đầu → load tin cũ hơn) */}

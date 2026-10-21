@@ -281,10 +281,28 @@ async function getAgentRunData(sessionId: string, limit: number): Promise<Respon
         incomplete: 'error',
         running: 'error',
       }
+      // ━━━ R43 FIX-LIVE-TP (Thought Process LIVE cho job split-mode) ━━━
+      // Worker split-mode chạy job trong process KHÁC → registry in-memory
+      // của process API trống → run của job rơi vào recordRuns. Map cứng
+      // 'running'→'error' (dành cho mồ côi thật) khiến job ĐANG CHẠY hiện
+      // "Lỗi" trong panel Thought Process suốt lúc agent làm việc. Phân biệt:
+      // session có GoalLoopJob queued/running → record 'running' là run SỐNG
+      // (worker đang giữ) → giữ status 'running' + trailAvailable → panel
+      // hiện "đang chạy" + lazy-fetch JSONL trail (đĩa dùng chung 2 process)
+      // cho thought process live. Fail-open: lỗi truy vấn → map cũ.
+      let sessionHasActiveGoalLoopJob = false
+      try {
+        const activeJob = await db.goalLoopJob.findFirst({
+          where: { sessionId, status: { in: ['queued', 'running'] } },
+          select: { id: true },
+        })
+        sessionHasActiveGoalLoopJob = !!activeJob
+      } catch { /* fail-open — dùng map cũ */ }
       for (const row of rows) {
         if (!row.runId || liveRunIds.has(row.runId)) continue
         if (recordRuns.length >= 20) break
         const startedAt = row.startedAt?.getTime() ?? row.createdAt.getTime()
+        const isLiveWorkerRun = row.status === 'running' && sessionHasActiveGoalLoopJob
         recordRuns.push({
           runId: row.runId,
           sessionId,
@@ -294,7 +312,7 @@ async function getAgentRunData(sessionId: string, limit: number): Promise<Respon
           mode: row.parentRunId ? 'team' : 'standalone',
           startedAt,
           endedAt: undefined,
-          status: statusMap[row.status || ''] || 'error',
+          status: isLiveWorkerRun ? ('running' as const) : (statusMap[row.status || ''] || 'error'),
           events: [],
           counters: {
             iterations: row.cycles ?? 0,

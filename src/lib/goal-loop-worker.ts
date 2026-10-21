@@ -871,6 +871,57 @@ class GoalLoopWorker {
       }
       if (fresh.cancelRequestedAt) meta.cancelRequested = true
 
+      // 3.5 R43 FIX-MSG-2b — HEAL user message mồ côi (job.messageId=null khi
+      //     early-save ở route thất bại dưới SQLite contention — bằng chứng
+      //     live 2026-10-21 08:25:40: job cmvhukohx chạy 43 phút, user message
+      //     "Kiểm tra dữ liệu xác định có nợ kỹ thuật không…" KHÔNG BAO GIỜ vào
+      //     DB → loadSessionTail REPLACE xóa bubble khỏi khung chat + placeholder
+      //     mất anchor). Worker là chủ sở hữu job lúc này → tìm ChatMessage user
+      //     cùng session khớp nội dung (prefix 60 ký tự — directive-guard có thể
+      //     đã gắn scaffold "Nghiệm thu:" VÀO CUỐI message gốc) trong ±15' quanh
+      //     lúc tạo job; thiếu → tạo mới; cập nhật job.messageId để finalize +
+      //     attachSessionGoalLoopJobs neo đúng chỗ. Fail-open tuyệt đối: heal
+      //     lỗi KHÔNG giết job (agent vẫn chạy — chỉ hiển thị thiếu anchor).
+      if (!fresh.messageId && jobInput.userMessage) {
+        try {
+          const windowStart = new Date(fresh.createdAt.getTime() - 15 * 60_000)
+          const prefix = jobInput.userMessage.slice(0, 60)
+          const existing = await db.chatMessage.findFirst({
+            where: {
+              sessionId: job.sessionId,
+              role: 'user',
+              content: { startsWith: prefix },
+              createdAt: { gte: windowStart },
+            },
+            orderBy: { createdAt: 'desc' },
+            select: { id: true },
+          })
+          let healedId = existing?.id ?? null
+          if (!healedId) {
+            const created = await withSqliteRetry(
+              () => db.chatMessage.create({
+                data: { sessionId: job.sessionId, role: 'user', content: jobInput.userMessage },
+              }),
+              { label: `goal-loop heal user msg job ${job.id}` },
+            )
+            healedId = created.id
+            console.log(
+              `[GoalLoopWorker] job ${job.id}: HEAL user message mồ côi (early-save thất bại lúc enqueue) — đã tạo ChatMessage ${healedId}`
+            )
+          }
+          if (healedId) {
+            await db.goalLoopJob
+              .update({ where: { id: job.id }, data: { messageId: healedId } })
+              .catch(() => { /* fail-open — anchor là best-effort */ })
+          }
+        } catch (healErr) {
+          console.warn(
+            `[GoalLoopWorker] job ${job.id}: heal user message lỗi (fail-open — job vẫn chạy):`,
+            healErr instanceof Error ? healErr.message : String(healErr)
+          )
+        }
+      }
+
       console.log(
         `[GoalLoopWorker] chạy job ${job.id} — session ${job.sessionId} — goal: "${jobInput.userMessage.slice(0, 80)}"` +
           (resumeState

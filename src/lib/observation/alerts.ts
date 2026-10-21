@@ -502,6 +502,40 @@ export interface SalvageRunRow {
  * Mỗi bước fail-open riêng — salvage không được phép throw.
  */
 export async function salvageCrashedRun(r: SalvageRunRow, now: number): Promise<void> {
+  // ━━━ R43 FIX-SPLIT-SWEEP (split-mode blindspot — cùng họ R42 BUG2-320) ━━━
+  // Run của session có GoalLoopJob queued/running thuộc WORKER process —
+  // registry in-memory của process API MÙ với nó. Bằng chứng live 2026-10-21
+  // 10:29: MemWatchdog self-exit (MemAvailable 300MB) → app boot → boot
+  // sweeper thấy run_1792578502053_2 'running' (job 2 cmvhysv7g đang chạy
+  // TỐT trong worker) → salvage oan: lật failed/crashed + chat trace "Tác vụ
+  // bị gián đoạn" + REOPEN nợ kỹ thuật "Run Omega crashed" (recurrence 3) —
+  // trong khi agent vẫn đang làm việc. Guard: job active + workerPid sống
+  // (hoặc queued chưa kịp claim) → BỎ QUA — vòng đời run do worker nắm.
+  // workerPid CHẾT (worker crash thật) → vẫn salvage (record thật sự mồ côi;
+  // job riêng bị recoverPending xử lý khi worker boot lại). Fail-open: query
+  // lỗi → salvage như cũ (giữ hành vi cũ cho runs thường).
+  try {
+    if (r.sessionId) {
+      const activeJob = await db.goalLoopJob.findFirst({
+        where: { sessionId: r.sessionId, status: { in: ['queued', 'running'] } },
+        select: { id: true, workerPid: true },
+      })
+      if (activeJob) {
+        const pid = activeJob.workerPid
+        let pidAlive = false
+        if (typeof pid === 'number' && pid > 0) {
+          try { process.kill(pid, 0); pidAlive = true } catch { pidAlive = false }
+        }
+        // pid null/0 = job queued chưa claim → run chưa/chờ worker → không mồ côi
+        if (!pid || pidAlive) {
+          console.log(
+            `[R4-Salvage] BỎ QUA run ${r.runId ?? r.id} — session ${r.sessionId} có goal-loop job ${activeJob.id} ${pid ? `(worker pid ${pid} còn sống)` : '(queued)'} — split-mode: run thuộc worker process (R43 FIX-SPLIT-SWEEP)`
+          )
+          return
+        }
+      }
+    }
+  } catch { /* fail-open — query lỗi → salvage như cũ */ }
   // (1) UPDATE row + salvage metadata (dedup alert 1h — boot sweep + runtime
   // sweep có thể cùng bắt 1 run trong cửa sổ restart: chỉ alert lần đầu)
   try {

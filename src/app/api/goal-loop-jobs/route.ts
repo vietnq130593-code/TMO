@@ -75,6 +75,9 @@ interface GoalLoopJobApiItem {
   completedAt: string | null
   ageMs: number
   stallWarning: boolean
+  /** R43 — tên agent phụ trách (parse từ input) để UI hiện "agent nào đang
+ *  làm việc" ngay từ lúc queued/running (không phải đợi completed). */
+  agentName?: string
   /** CHỈ khi completed — projection kết quả cho UI render lượt chat */
   result?: GoalLoopJobResultProjection
 }
@@ -158,6 +161,7 @@ async function GET_impl(request: NextRequest) {
         completedAt: view.completedAt,
         ageMs: view.ageMs,
         stallWarning: view.stallWarning,
+        agentName,
       }
       if (view.status === 'completed' && view.result) {
         item.result = {
@@ -220,6 +224,7 @@ async function GET_impl(request: NextRequest) {
           completedAt: view.completedAt,
           ageMs: view.ageMs,
           stallWarning: view.stallWarning,
+          agentName: agentNameByJob.get(view.id),
         }
         if (view.status === 'completed') {
           const res = resultByJob.get(view.id)

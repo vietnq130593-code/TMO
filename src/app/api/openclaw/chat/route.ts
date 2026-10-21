@@ -20,7 +20,7 @@ import { ensureGatewayRunning } from '@/lib/openclaw-ondemand'
 import { isOpenCodeOnline, createOpenCodeSession, opencodeFetch } from '@/lib/opencode'
 import { enrichCodeContext, isCodeQuery as isCodeQueryAdvanced, detectCodeConfidence } from '@/lib/opencode-knowledge-context'
 import { generateOpenCodeSystemPrompt } from '@/lib/opencode-system-prompt'
-import { db } from '@/lib/db'
+import { db, withSqliteRetry } from '@/lib/db'
 import { addTokensUsed, addTokensUsedByAgent, callLLMForAgent } from '@/lib/llm'
 // R11 (F4 — Giáo thức Thầy truyền lại, Bước 1 TRIAGE): phân loại yêu cầu tại cửa API
 import { classifyChatRequest } from '@/lib/execution/triage'
@@ -475,34 +475,47 @@ export async function POST(request: NextRequest) {
         // DEDUPE (fix E2E 2026-09-08): user bấm Dừng rồi GỬI LẠI cùng nội dung
         // (hoặc cancel giữa chừng rồi retry) → request cũ đã early-save user
         // message này rồi → KHÔNG lưu bản trùng (E2E thấy 2 rows y hệt nhau).
+        //
+        // R43 FIX-MSG-2 (user report "tin nhắn sau không hiển thị trong khung
+        // chat"): dup-check + create bọc withSqliteRetry — bằng chứng live
+        // 2026-10-21 08:25:40, session sess_1792570683751_v1i66j: early-save
+        // THẤT BẠI dưới SQLite contention (worker đang ghi dồn) → jobId vẫn
+        // enqueue với messageId=null → user message KHÔNG BAO GIỜ vào DB →
+        // heartbeat loadSessionTail REPLACE messages bằng DB tail → bubble
+        // user message BIẾN MẤT khỏi khung chat (agent vẫn chạy + trả lời, chỉ
+        // câu hỏi của user mất dấu). Dup-check nằm TRONG op retry → idempotent:
+        // lần retry thấy row đã commit (nếu create thật sự thành công nhưng
+        // timeout trả về) → skip, không nhân đôi.
         const threeMinAgo = new Date(Date.now() - 3 * 60_000)
-        const dup = await db.chatMessage.findFirst({
-          where: {
-            sessionId,
-            role: 'user',
-            content: lastUserContent,
-            createdAt: { gte: threeMinAgo },
-          },
-          select: { id: true },
-        })
-        if (!dup) {
-          const savedUserMsg = await db.chatMessage.create({ data: { sessionId, role: 'user', content: lastUserContent } })
-          savedUserMessageId = savedUserMsg.id
-          db.agentSession
-            .updateMany({
-              where: { sessionId },
-              data: { messageCount: { increment: 1 }, updatedAt: new Date() },
-            })
-            .catch(() => {})
-          // r73 — liên kết tệp đính kèm về đúng phiên + tin nhắn (fail-open:
-          // lỗi link KHÔNG ảnh hưởng flow chat — manifest đã nằm trong content)
-          if (attachmentIdList.length > 0) {
-            db.chatAttachment.updateMany({
-              where: { id: { in: attachmentIdList }, messageId: null },
-              data: { sessionId, messageId: savedUserMsg.id },
-            }).catch(() => {})
+        await withSqliteRetry(async () => {
+          const dup = await db.chatMessage.findFirst({
+            where: {
+              sessionId,
+              role: 'user',
+              content: lastUserContent,
+              createdAt: { gte: threeMinAgo },
+            },
+            select: { id: true },
+          })
+          if (!dup) {
+            const savedUserMsg = await db.chatMessage.create({ data: { sessionId, role: 'user', content: lastUserContent } })
+            savedUserMessageId = savedUserMsg.id
+            db.agentSession
+              .updateMany({
+                where: { sessionId },
+                data: { messageCount: { increment: 1 }, updatedAt: new Date() },
+              })
+              .catch(() => {})
+            // r73 — liên kết tệp đính kèm về đúng phiên + tin nhắn (fail-open:
+            // lỗi link KHÔNG ảnh hưởng flow chat — manifest đã nằm trong content)
+            if (attachmentIdList.length > 0) {
+              db.chatAttachment.updateMany({
+                where: { id: { in: attachmentIdList }, messageId: null },
+                data: { sessionId, messageId: savedUserMsg.id },
+              }).catch(() => {})
+            }
           }
-        }
+        }, { label: 'chat-early-save-user-msg' })
       } catch (err) {
         console.warn('[OpenClaw Chat] Early user-message save failed:', err instanceof Error ? err.message : String(err))
       }
@@ -1237,15 +1250,50 @@ export async function POST(request: NextRequest) {
         //       DB, tick sẽ claim khi worker được bật.
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
         if (DURABLE_GOAL_LOOP && sessionId) {
+          // ━━━ R43 FIX-MSG-3 (user report "tin nhắn sau không hiển thị" — lớp 2)
+          // ━━ IDEMPOTENT ENQUEUE: session đã có job queued/running với CÙNG
+          // userMessage → TRẢ LẠI jobId đó, KHÔNG enqueue bản trùng. Bằng chứng
+          // live 2026-10-21 session sess_1792570683751_v1i66j: user gửi lại
+          // cùng nội dung sau 1'44" (job 1 còn chạy) → job 2 TRÙNG NỘI DUNG
+          // enqueue thêm → worker chạy 2 job giống hệt nhau nối tiếp nhau 20+
+          // phút mỗi job (đốt chu kỳ + placeholder nhân đôi). Mutex 409 của
+          // đường inline KHÔNG phủ đường durable — đây là lớp chặn tương đương.
+          // (Nội dung KHÁC → enqueue bình thường — worker tự serialize cùng
+          // session, user vẫn xếp hàng được nhiều việc.) Fail-open tuyệt đối:
+          // lỗi truy vấn → enqueue như cũ.
+          let dedupedJobId: string | null = null
+          try {
+            const activeJobs = await db.goalLoopJob.findMany({
+              where: { sessionId, status: { in: ['queued', 'running'] } },
+              select: { id: true, input: true },
+              take: 10,
+            })
+            for (const aj of activeJobs) {
+              try {
+                const parsedInput = JSON.parse(aj.input || '{}') as { userMessage?: string }
+                if (parsedInput?.userMessage && parsedInput.userMessage === goalLoopUserMessage) {
+                  dedupedJobId = aj.id
+                  break
+                }
+              } catch { /* input hỏng JSON → bỏ qua job này */ }
+            }
+          } catch { /* fail-open — không chặn enqueue */ }
+          if (dedupedJobId) {
+            console.log(
+              `[OpenClaw Chat] Durable dedupe: job ${dedupedJobId} (cùng nội dung) đang ${'queued/running'} — trả jobId hiện có, không enqueue trùng (R43 FIX-MSG-3)`,
+            )
+          }
+
           // REVIEW 14-g M1 — try HẸP CHỈ BAO enqueue (job row ĐÃ tạo mà throw
           // thì tuyệt đối KHÔNG rơi xuống inline: job queued + inline chạy =
           // DOUBLE-RUN cùng 1 request). Mọi bước sau enqueue (upsert/return)
           // nằm NGOÀI try: sai lệch nhỏ (upsert fail...) được nuốt im lặng,
           // response durable vẫn trả về jobId — đúng tinh thần fail-open của
           // kiến trúc worker (job nằm queued, tick claim khi worker bật).
-          let durableJobId: string | null = null
+          let durableJobId: string | null = dedupedJobId
           try {
-            durableJobId = await goalLoopWorker.enqueue({
+            if (!durableJobId) {
+              durableJobId = await goalLoopWorker.enqueue({
               sessionId,
               messageId: savedUserMessageId ?? undefined,
               jobInput: {
@@ -1262,7 +1310,8 @@ export async function POST(request: NextRequest) {
                 agentTools,
                 agentSessionId: sessionId,
               },
-            })
+              })
+            }
           } catch (enqueueErr) {
             // FAIL-OPEN: enqueue lỗi (DB nghẽn/schema lệch...) → LOG + chạy
             // inline như cũ ngay bên dưới — user vẫn được phục vụ, KHÔNG 500.
@@ -1309,10 +1358,12 @@ export async function POST(request: NextRequest) {
             // Response giữ MỌI field frontend đang đọc (page.tsx sendMessage:
             // content/model/provider/sources/confidence/agentRun) + thêm
             // durable:true + jobId để UI (14-e) poll /api/goal-loop-jobs.
-            // content = placeholder tiếng Việt — kết quả thật arrive qua poll
-            // (finalize lưu ChatMessage assistant vào session gốc).
+            // content = thông báo tập trung AGENT (R43 — user directive "chỉ
+            // cần rõ agent nào đang làm việc + Thought Process, không hiện
+            // 'Tác vụ nền'") — kết quả thật arrive qua poll (finalize lưu
+            // ChatMessage assistant vào session gốc).
             return NextResponse.json({
-              content: `⏳ Tác vụ đã vào hàng đợi nền (job ${jobId.slice(0, 12)}…) — Phiên chat sẽ tự cập nhật khi hoàn tất.`,
+              content: `🤖 ${agentProfileName || 'Agent'} đã nhận việc — đang bắt đầu…`,
               model: agentModel,
               provider: agentProvider,
               sessionId: sessionId || `session-${Date.now()}`,
