@@ -310,6 +310,13 @@ async function writeOne(evt: ObserveEventInput): Promise<void> {
   const txT0 = Date.now()
   try {
     await withSqliteRetry(
+      // BUG2-330 (quan sát R45): mặc định Prisma tx timeout=5s/maxWait=2s chết
+      // dưới stall khóa ghi run-close (đo thật: verdict.add chờ 30037ms — tx
+      // hết hạn 5000ms từ lâu, retry withSqliteRetry chỉ nhân bản gánh nặng).
+      // Nâng timeout 30s + maxWait 15s: tx CHỜ cho tới khi khóa nhả rồi commit
+      // 1 lần — hết lớp lỗi "expired transaction" + retry amplification.
+      // KPI #2 vẫn đo TRỌT thời gian chờ (noteInteractiveTxMs bọc ngoài) —
+      // trung thực, không che số.
       () => db.$transaction(async tx => {
         const last = await tx.observationEvent.findFirst({
           orderBy: { seq: 'desc' },
@@ -328,7 +335,7 @@ async function writeOne(evt: ObserveEventInput): Promise<void> {
             rowKey: evt.rowKey ?? null,
           },
         })
-      }),
+      }, { timeout: 30_000, maxWait: 15_000 }),
       { label: `ledger.writeOne(${evt.kind})` },
     )
   } finally {

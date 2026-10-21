@@ -1242,7 +1242,12 @@ class GoalLoopWorker {
             heartbeatAt: new Date(),
           },
         }),
-        { label: `goal-loop mark-completed job ${job.id}` },
+        // BUG2-330 (quan sát R45 — job cmviaaywl…): bão socket-timeout run-close
+        // sống lâu hơn 3 retry cũ (mỗi attempt chờ 15s + backoff) → job chạy
+        // đủ 5 chu kỳ vẫn bị đánh FAILED + mất result. Nâng 5 retry (backoff
+        // 400ms→1.2s→3.6s→10.8s→32.4s) — kết hợp synchronous=NORMAL everywhere
+        // (db.ts BUG2-330) thì bão fsync không còn; đây là lưới dự phòng.
+        { label: `goal-loop mark-completed job ${job.id}`, retries: 5 },
       )
       if (completed.count === 0) {
         console.warn(

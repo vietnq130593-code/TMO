@@ -137,13 +137,35 @@ const SQLITE_BUSY_TIMEOUT_S = (() => {
   return Number.isFinite(raw) && raw >= 1 && raw <= 120 ? raw : 15
 })()
 
-/** Thêm ?socket_timeout=N cho URL file: (SQLite) — không đụng URL đã có sẵn
- *  socket_timeout do user tự cấu hình; URL không phải file: trả nguyên bản. */
+/** SQLITE_CONN_LIMIT (BUG2-330 — quan sát R45, 2026-10-21): ép pool SQLite
+ *  MỖI PROCESS về đúng 1 connection. Vì sao: PRAGMA raw ở khối applyPragmas
+ *  (synchronous=NORMAL…) chỉ bám connection THỰC THI nó — pool nhiều
+ *  connection spin-up lúc tải bùng nổ chạy synchronous=FULL (fsync từng
+ *  commit, đo thật R45: connection mới = 2/FULL) → stall fsync 10-30s giữ
+ *  khóa ghi duy nhất → chuỗi Socket timeout/ expired transaction + retry
+ *  60-90s (bằng chứng: verdict.add 30037ms quá hạn 5000ms; run-close job
+ *  cmviaaywl… mark-completed chết sau 3 retry; flushP95 26s). connection_limit=1
+ *  qua URL (áp MỌI connection — unlike raw PRAGMA) + SQLite vốn 1 writer →
+ *  pool 1 không mất throughput ghi, chỉ bỏ cạnh tranh nội bộ giữa connection
+ *  của chính process. Rollback: SQLITE_CONN_LIMIT=0 (không append param). */
+const SQLITE_CONN_LIMIT = (() => {
+  const raw = parseInt(process.env.SQLITE_CONN_LIMIT || '', 10)
+  return Number.isFinite(raw) && raw >= 0 && raw <= 16 ? raw : 1
+})()
+
+/** Thêm ?socket_timeout=N (+?connection_limit=1 mặc định — BUG2-330) cho URL
+ *  file: (SQLite) — không đụng URL user đã tự cấu hình param; URL không phải
+ *  file: trả nguyên bản. */
 function urlWithSqliteBusyTimeout(url: string): string {
   if (!url.startsWith('file:')) return url
-  if (/[?&]socket_timeout=/.test(url)) return url
-  const sep = url.includes('?') ? '&' : '?'
-  return `${url}${sep}socket_timeout=${SQLITE_BUSY_TIMEOUT_S}`
+  let out = url
+  if (!/[?&]socket_timeout=/.test(out)) {
+    out += `${out.includes('?') ? '&' : '?'}socket_timeout=${SQLITE_BUSY_TIMEOUT_S}`
+  }
+  if (SQLITE_CONN_LIMIT > 0 && !/[?&]connection_limit=/.test(out)) {
+    out += `${out.includes('?') ? '&' : '?'}connection_limit=${SQLITE_CONN_LIMIT}`
+  }
+  return out
 }
 
 export const db =
@@ -206,7 +228,7 @@ if (!globalForPrisma.sqlitePragmasApplied) {
       await db.$queryRawUnsafe('PRAGMA synchronous=NORMAL')
       await db.$queryRawUnsafe('PRAGMA cache_size=-64000')
       await db.$queryRawUnsafe('PRAGMA temp_store=MEMORY')
-      console.log(`[DB] SQLite PRAGMAs applied: WAL, busy_timeout=${SQLITE_BUSY_TIMEOUT_S * 1000} (P-NEW-1 R15 — URL socket_timeout=${SQLITE_BUSY_TIMEOUT_S}s áp mọi connection pool), synchronous=NORMAL, cache_size=64MB, temp_store=MEMORY`)
+      console.log(`[DB] SQLite PRAGMAs applied: WAL, busy_timeout=${SQLITE_BUSY_TIMEOUT_S * 1000} (P-NEW-1 R15 — URL socket_timeout=${SQLITE_BUSY_TIMEOUT_S}s áp mọi connection pool), synchronous=NORMAL, cache_size=64MB, temp_store=MEMORY${SQLITE_CONN_LIMIT > 0 ? ` · connection_limit=${SQLITE_CONN_LIMIT} (BUG2-330 — pool 1 conn/process → PRAGMA bám đủ mọi connection)` : ''}`)
     } catch (err) {
       console.warn('[DB] SQLite PRAGMA setup error (non-critical):', err instanceof Error ? err.message : String(err))
     }
