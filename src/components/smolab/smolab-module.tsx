@@ -5476,6 +5476,21 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
     // r73 — cho phép gửi khi có tệp đính kèm dù ô nhập trống (yêu cầu chỉ là
     // "phân tích tệp") — manifest là phần nội dung chính
     if (!rawText && readyAtts.length === 0) return
+    // R44 FIX-SUGGEST-1 (user follow-up 2026-10-21): chip gợi ý 💬 trên welcome
+    // screen gọi sendMessage TRỰC TIẾP — canChat=false chỉ che Ô NHẬP (r73) chứ
+    // không che chip → tin nhắn rơi đường generic /api/openclaw/chat KHÔNG agent
+    // → mock response gateway gây hiểu lầm "agent trả lời thật" (bằng chứng
+    // R42-GOLDEN-PATH-UI: click suggestion chưa chọn agent → mock response).
+    // Giờ: chặn tại nguồn + toast chỉ dẫn chọn Agent/Team trước.
+    if (!canChat) {
+      toast({
+        title: 'Chưa chọn Agent',
+        description: chatMode === 'single'
+          ? 'Chọn một Agent trong danh sách bên trên để bắt đầu trò chuyện.'
+          : 'Chọn một Team để các Agents phối hợp làm việc.',
+      })
+      return
+    }
     // R43 FIX-MSG-1 (user report "tin nhắn sau của tôi không thấy hiển thị
     // trong khung chat"): isLoading trước đây return NGẪM LẶNG — user gõ tin
     // tiếp trong lúc agent đang chạy (goal-loop 60-120s/LMM call, job nền
@@ -5888,7 +5903,7 @@ ${manifest}` : rawText
       // background → isLoading giữ nguyên đúng với phiên đó
       setIsLoading(inFlightChatsRef.current.has(currentSessionIdRef.current))
     }
-  }, [input, isLoading, messages, selectedModel, currentSessionId, chatMode, selectedAgentId, selectedTeam, smolabAgents, pendingAttachments, startWorkflow, refreshAgentRuns, seedGoalLoopJob])
+  }, [input, isLoading, canChat, messages, selectedModel, currentSessionId, chatMode, selectedAgentId, selectedTeam, smolabAgents, pendingAttachments, startWorkflow, refreshAgentRuns, seedGoalLoopJob])
 
   // ===== LIVE VOICE (user request 2026-08-28) — nút Live cạnh nút Gửi =====
   // Nói tiếng Việt → ASR → văn bản trong khung nhập. Tự gửi khi thỏa CẢ HAI:
