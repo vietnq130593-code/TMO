@@ -28,12 +28,18 @@
 PORT="${PORT:-3000}"
 LOG="${TMO_WARMUP_LOG:-/home/z/my-project/dev.log}"
 
-# Chống chạy chồng (restart-loop spawn wrapper mỗi vòng — chỉ 1 warmup sống)
-for pid in $(pgrep -f "boot-warmup.sh" 2>/dev/null); do
-  if [ "$pid" != "$$" ]; then
-    exit 0
-  fi
-done
+# Chống chạy chồng (restart-loop spawn wrapper mỗi vòng — chỉ 1 warmup sống).
+# FB-DEBT4-LIVE-01: bản pgrep tự ĐÁNH CHẾT CHÍNH MÌNH — `$(pgrep -f "boot-warmup.sh")`
+# fork subshell có CÙNG cmdline "bash .../boot-warmup.sh" với script cha → pgrep
+# trả 2 pid (cha + fork tạm) → pid khác $$ → exit 0 ngay (bằng chứng live
+# 06:14: 2 lần spawn đều chết im, 0 dòng [pm2-warmup]). flock kernel-managed
+# thay thế: lock tự nhả khi process chết — an toàn cả crash-loop.
+LOCK_FILE="${TMO_WARMUP_LOCK:-/tmp/tmo-boot-warmup.lock}"
+exec 200>"$LOCK_FILE"
+if ! flock -n 200; then
+  # Warmup khác đang giữ lock (đang chờ port/đang warm) — thoát NGAY
+  exit 0
+fi
 
 log() { echo "[pm2-warmup] $(date -u '+%H:%M:%S') $*" >> "$LOG"; }
 
