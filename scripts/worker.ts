@@ -128,11 +128,21 @@ async function main(): Promise<void> {
   // /api/observation/write-queue chỉ thấy stats process API): log stats
   // write-queue chu kỳ 1 dòng JSON (flushP95Ms/dropCount/salvageSplits/
   // poisonCount) — không mở port, nguyên tắc 0 IPC giữ nguyên.
-  const { getWriteQueueStats } = await import('../src/lib/db-write-batcher')
+  // KPI #2 (trả nợ 2026-10-21 — FB-DEBT4): log THÊM interactive-tx stats
+  // (p95 ledger/trace writeOne — job chạy trong process này) cùng nhịp —
+  // route /api/observation/interactive-tx chỉ thấy process API.
+  const [{ getWriteQueueStats }, { getInteractiveTxStats }] = await Promise.all([
+    import('../src/lib/db-write-batcher'),
+    import('../src/lib/observation/tx-stats'),
+  ])
   const statsEveryMs = readNumEnv(ROOT, 'WORKER_STATS_LOG_MS', 300_000, 60_000)
   setInterval(() => {
     try {
       console.log('[theopus-worker] write-queue stats', JSON.stringify(getWriteQueueStats()))
+      const tx = getInteractiveTxStats()
+      if (tx.labels.length > 0) {
+        console.log('[theopus-worker] interactive-tx stats (KPI #2)', JSON.stringify(tx))
+      }
     } catch { /* fail-open — stats là đo lường, không được phá process */ }
   }, statsEveryMs).unref?.()
 }
