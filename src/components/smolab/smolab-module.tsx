@@ -3599,6 +3599,11 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
   // Nút Dừng của 1 job durable — POST /api/goal-loop-jobs {jobId, cancel}.
   // Optimistic: placeholder + panel hiện "Đang yêu cầu dừng…" ngay; poll kế
   // (≤3s) thấy status cancelled → ⏹ thay placeholder.
+  // R42 FIX-STOP-3 — fetch KHÔNG reject trên HTTP 500 (chỉ network error):
+  // bản cũ bỏ qua res → 2 lần server 500 (socket-timeout SQLite 15s) để
+  // optimistic flag treo "Đang yêu cầu dừng…" VĨNH VIỄN không toast (bằng
+  // chứng live: user bấm Dừng ×2 đều im lặng). Giờ check res.ok + body.ok +
+  // cancelled → rollback + toast destructive.
   const cancelGoalLoopJob = useCallback((jobId: string) => {
     setGoalLoopJobs(prev => (prev[jobId]
       ? { ...prev, [jobId]: { ...prev[jobId], cancelRequested: true } }
@@ -3607,13 +3612,30 @@ export default function SmolabModule({ sidebarOpen }: { sidebarOpen: boolean }) 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jobId, action: 'cancel' }),
-    }).catch(() => {
-      // Lỗi mạng — rollback optimistic flag (job vẫn đang chạy)
-      setGoalLoopJobs(prev => (prev[jobId]
-        ? { ...prev, [jobId]: { ...prev[jobId], cancelRequested: false } }
-        : prev))
-      toast({ title: 'Không gửi được yêu cầu dừng', description: 'Lỗi kết nối — thử lại sau', variant: 'destructive' })
     })
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = (await res.json().catch(() => null)) as { ok?: boolean; cancelled?: number } | null
+        if (!data?.ok || data.cancelled !== 1) {
+          // Server xử lý nhưng không có job nào bị hủy (job vừa terminal /
+          // status đổi giữa chừng) — rollback optimistic, poll sẽ cập nhật
+          setGoalLoopJobs(prev => (prev[jobId]
+            ? { ...prev, [jobId]: { ...prev[jobId], cancelRequested: false } }
+            : prev))
+          toast({
+            title: 'Chưa dừng được tác vụ',
+            description: 'Job vừa đổi trạng thái — đang tải lại; nếu vẫn chạy hãy bấm Dừng lại',
+            variant: 'destructive',
+          })
+        }
+      })
+      .catch(() => {
+        // Lỗi mạng / HTTP 5xx — rollback optimistic flag (job vẫn đang chạy)
+        setGoalLoopJobs(prev => (prev[jobId]
+          ? { ...prev, [jobId]: { ...prev[jobId], cancelRequested: false } }
+          : prev))
+        toast({ title: 'Không gửi được yêu cầu dừng', description: 'Lỗi kết nối/máy chủ — thử lại sau vài giây', variant: 'destructive' })
+      })
   }, [])
 
   // Seed job state NGAY từ response chat durable (trước lần poll đầu) —

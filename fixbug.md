@@ -591,3 +591,19 @@
 - **Live verify boot sau deploy (FB-DEBT4-LIVE-01 — vòng R3 ngoài gate):** bản warmup đầu (pgrep guard) TỰ ĐÁNH CHẾT CHÍNH MÌNH — `$(pgrep -f "boot-warmup.sh")` fork subshell có CÙNG cmdline "bash .../boot-warmup.sh" với script cha → pgrep trả 2 pid (cha + fork tạm trong command-substitution) → pid khác $$ → exit 0 ngay lập tức; bằng chứng live 06:14: 2 lần spawn đều chết im, 0 dòng [pm2-warmup] trong dev.log. Fix: flock kernel-managed (/tmp/tmo-boot-warmup.lock, -n non-block, tự nhả khi process chết — an toàn crash-loop); test 2 instance đồng thời: instance-2 exit 0 NGAY tại lock + 0 dòng log (nhường), instance-1 warm trọn 8 route. **KPI #4b SAU WARMUP: peak RSS next-server = 1443MB so baseline storm song song 2603MB (−45%) — dưới xa HARD 2100 (boot-grace không còn phải tha!).** 8/8 route HTTP 200 trong 19s (bao gồm route ops mới /api/observation/interactive-tx).
 
 - **FB-DEBT4-LIVE-02 (cùng họ BUG2-319):** `ENABLE_DURABLE_GOAL_LOOP=false` (default .env.example) sót theo reset #3 — reset #2 runbook B2 từng ghi rõ cần `true`; hậu quả: chat chạy INLINE trong process API thay vì durable-enqueue qua worker split (KPI #4 cách ly không hiệu lực cho mission mới). Fix .env=true + restart cả 2 process. Bài học runbook reset #4: checklist deployment-state = 4 biến (softmax · UTILITY_NIM_MODEL · MAX_ATTEMPTS=5 · DURABLE_GOAL_LOOP=true) + xoá 2 default sai (=2, =false).
+
+### ĐỢT R42 — NÚT DỪNG KHÔNG DỪNG ĐƯỢC AGENT SPLIT-MODE (user report 2026-10-21 "khi tôi bấm dừng nhưng không thể dừng được agents") — 4 lỗi lớp chồng
+
+> Điều tra nguồn: user report trực tiếp. Điều kiện lộ: KPI #4 split-mode (job chạy process worker, nút Dừng phát từ process API) + DB bận khi agent chạy. Chi tiết từng phát hiện: Bug_v2 BUG2-320..323.
+
+| Phát hiện | Lớp | Mức | Bản chất | Fix |
+|---|---|---|---|---|
+| BUG2-320 | H | **P1** | cancel() ở process API thấy job không thuộc Map mình → nhánh orphan → flip status 'cancelled' trong khi agent vẫn chạy trong worker — UI nói đã dừng, agent không dừng (ĐÚNG bệnh user) | Đọc row fresh + phân nhánh workerPid-alive (chỉ set cancelRequestedAt, KHÔNG flip) / orphan-thật (pid chết) mới cancel thẳng; cancelSessionJobs tách 3 nhóm |
+| BUG2-321 | H | P2 | 2 lần bấm Dừng đều POST 500 socket-timeout 15s — cancel path 0 retry, kẹt lock SQLite khi worker ghi dồn | 9 nhánh DB access bọc withSqliteRetry |
+| BUG2-322 | C | P2 | UI fetch không check res.ok → 500 nuốt im lặng, optimistic "Đang yêu cầu dừng…" treo vĩnh viễn, không toast | check !res.ok + body {ok,cancelled} → rollback + toast destructive |
+| BUG2-323 | C | P2 | FIX-STOP-2 bản đầu poll cancelRequestedAt bám onSignal — LLM call dài 60-120s không bắn signal → trễ thêm cả vòng | Timer poll độc lập 5s/job (setInterval, ngoài try + clearInterval finally, 0=tắt) + onSignal làm lưới dự phòng |
+
+- **Regression:** r145 mới 12 test (source-scan pin 4 lớp + behavioral constant) — 12/12; tsc 0 · eslint 0 (3 file đụng).
+- **E2E chặng A (queued):** enqueue job test (session riêng sess_e2e_stop_r145, goal 1 câu) → POST cancel đúng path UI → `{ok:true,cancelled:1}` 200 nhanh dưới DB tải (job khác đang chạy) → status cancelled + completedAt ✓ — nhánh queued + retry + response shape.
+- **E2E chặng B (running cross-process — nhánh P1):** đợi slot rảnh (job user đang chiếm 1/1) — verify: cancelRequestedAt set + status KHÔNG flip + worker log "timer poll bắt được cancelRequestedAt" ≤5s + terminal mark cancelled tại ranh giới an toàn.
+- Ghi nhận ngoài scope: agent-event-bus ring in-memory trống ở process API trong split-mode (không UI tiêu thụ — nguồn chuẩn là timeline DB + trail JSONL, cả 2 sống); cancelSessionRuns registry in-memory chỉ hiệu lực process phát (đường inline cũ — durable đã covered DB flag).

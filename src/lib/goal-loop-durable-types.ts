@@ -281,6 +281,11 @@ export const GOAL_LOOP_MAX_ATTEMPTS = Math.max(1, intEnvWithDefault('GOAL_LOOP_M
 export const GOAL_LOOP_CHECKPOINT_MIN_INTERVAL_MS = Math.max(0, intEnvWithDefault('GOAL_LOOP_CHECKPOINT_MIN_INTERVAL_MS', 3000))
 /** Throttle ghi heartbeat (ms) */
 export const GOAL_LOOP_HEARTBEAT_MIN_INTERVAL_MS = Math.max(0, intEnvWithDefault('GOAL_LOOP_HEARTBEAT_MIN_INTERVAL_MS', 15000))
+/** R42 FIX-STOP-2 — nhịp poll cancelRequestedAt từ DB (ms) của timer ĐỘC LẬP
+ * mỗi job (không bám onSignal — LLM call dài 60-120s không bắn signal nào,
+ * poll bám signal sẽ trễ thêm cả 1 vòng). SELECT 1 row theo PK — rẻ, fail-open.
+ * Đặt 0 để tắt timer (poll onSignal 15s vẫn còn làm lưới dự phòng). */
+export const GOAL_LOOP_CANCEL_POLL_MIN_INTERVAL_MS = Math.max(0, intEnvWithDefault('GOAL_LOOP_CANCEL_POLL_MIN_INTERVAL_MS', 5000))
 
 // ==================== TASK C — STARVATION PREEMPTION (per-session mutex) ====================
 

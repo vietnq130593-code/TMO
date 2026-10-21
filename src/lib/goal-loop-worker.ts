@@ -62,6 +62,7 @@ import { readFile, stat } from 'node:fs/promises'
 import {
   GOAL_LOOP_CHECKPOINT_MIN_INTERVAL_MS,
   GOAL_LOOP_HEARTBEAT_MIN_INTERVAL_MS,
+  GOAL_LOOP_CANCEL_POLL_MIN_INTERVAL_MS,
   GOAL_LOOP_MAX_ATTEMPTS,
   GOAL_LOOP_MAX_CONCURRENT,
   GOAL_LOOP_STALL_WARN_MS,
@@ -157,6 +158,10 @@ interface RunningJobMeta {
   lastWrittenCyclesDone: number
   /** Flag cancel set bởi cancel()/cancelSessionJobs() — cancelCheck() đọc */
   cancelRequested: boolean
+  /** R42 FIX-STOP-2 — epoch ms lần poll cancelRequestedAt từ DB cuối
+   * (split-mode: cancel() chạy ở process API khác không với được flag
+   * in-memory của process này — onSignal poll DB theo nhịp heartbeat). */
+  lastCancelPollAt: number
   /** TASK C — flag preempt-pause set bởi noteSessionMutexBlocked() khi job này
    *  giữ mutex session mà follower starvation + heartbeat của job này stale
    *  ≥ GOAL_LOOP_STALL_PREEMPT_MS (wedged). cancelCheck() đọc → loop thoát ở
@@ -804,6 +809,7 @@ class GoalLoopWorker {
       startedAt: Date.now(),
       lastHeartbeatWrite: 0,
       lastCheckpointWrite: 0,
+      lastCancelPollAt: 0,
       lastWrittenCyclesDone: job.cyclesDone ?? 0,
       cancelRequested: false,
       pauseRequested: false,
@@ -818,6 +824,9 @@ class GoalLoopWorker {
       sessionId: job.sessionId,
       runId: null,
     }
+    // R42 FIX-STOP-2b — timer poll cancel cross-process (khai báo NGOÀI try
+    // để finally dọn được — return sớm trong try sẽ bỏ qua đoạn khai báo gốc)
+    let cancelPollTimer: ReturnType<typeof setInterval> | null = null
     try {
       // 1. Parse input đầy đủ để re-run (GoalLoopJobInput)
       let jobInput: GoalLoopJobInput
@@ -932,7 +941,52 @@ class GoalLoopWorker {
         void db.goalLoopJob
           .update({ where: { id: job.id }, data: { heartbeatAt: new Date() } })
           .catch(() => {})
+        // R42 FIX-STOP-2 — SPLIT-MODE CANCEL POLL: cancel() từ process khác
+        // (API pm2 riêng — GOAL_LOOP_WORKER_MODE=split) không thể set flag
+        // in-memory của process này; nó set cancelRequestedAt trong DB. Poll
+        // theo nhịp heartbeat (cùng throttle 15s — SELECT rẻ, fail-open im
+        // lặng) đọc lại flag → meta.cancelRequested → cancelCheck() cho loop
+        // thoát ở ranh giới an toàn kế tiếp (bằng chứng gốc: user bấm Dừng ×2
+        // đều 500 socket-timeout, và kể cả khi write thành công thì nhánh
+        // orphan cũ flip status 'cancelled' mà worker vẫn chạy tiếp).
+        void db.goalLoopJob
+          .findUnique({ where: { id: job.id }, select: { cancelRequestedAt: true } })
+          .then((fresh) => {
+            if (fresh?.cancelRequestedAt && !meta.cancelRequested) {
+              meta.cancelRequested = true
+              console.log(
+                `[GoalLoopWorker] job ${job.id}: bắt được cancelRequestedAt từ DB (cancel cross-process split-mode) → loop sẽ thoát ở ranh giới an toàn kế`
+              )
+            }
+          })
+          .catch(() => {})
       }
+
+      // R42 FIX-STOP-2b — TIMER POLL ĐỘC LẬP 5s/lỗi-cancel: onSignal chỉ bắn
+      // ở ranh giới iteration/tool_batch/compression/cycle — LLM call dài
+      // 60-120s không bắn signal nào → poll bám onSignal (15s throttle) có
+      // thể trễ tới HẾT vòng hiện tại mới thấy flag. Timer này chạy nền suốt
+      // đời job, độc lập nhịp loop → độ trễ phát hiện cancel tối đa 5s kể cả
+      // giữa LLM call. Khi flag bật: cancelCheck() (đọc meta.cancelRequested)
+      // sẽ cắt loop ở ranh giới an toàn kế tiếp; vòng LLM đang bay tiếp tục
+      // bay (không abort giữa dòng — giữ nguyên chính sách an toàn cũ).
+      // Fail-open tuyệt đối; GOAL_LOOP_CANCEL_POLL_MIN_INTERVAL_MS=0 tắt.
+      cancelPollTimer = GOAL_LOOP_CANCEL_POLL_MIN_INTERVAL_MS > 0
+          ? setInterval(() => {
+              meta.lastCancelPollAt = Date.now()
+              void db.goalLoopJob
+                .findUnique({ where: { id: job.id }, select: { cancelRequestedAt: true } })
+                .then((fresh) => {
+                  if (fresh?.cancelRequestedAt && !meta.cancelRequested) {
+                    meta.cancelRequested = true
+                    console.log(
+                      `[GoalLoopWorker] job ${job.id}: timer poll bắt được cancelRequestedAt từ DB (split-mode cross-process) → loop thoát ở ranh giới an toàn kế`
+                    )
+                  }
+                })
+                .catch(() => {}) // fail-open — DB bận không được phép giết timer
+            }, GOAL_LOOP_CANCEL_POLL_MIN_INTERVAL_MS)
+          : null
 
       // 6. Cancel check — đọc flag in-memory (set bởi cancel()/cancelSession-
       //    Jobs() qua Map). KHÔNG query DB mỗi vòng (đắt) — cancel() đã update
@@ -1195,6 +1249,9 @@ class GoalLoopWorker {
       const msg = err instanceof Error ? err.message : String(err)
       await this.markFailed(job.id, msg, jobInputCrashContext)
     } finally {
+      // R42 FIX-STOP-2b — dọn timer poll cancel (không dọn = leak timer mỗi
+      // job + giữ event loop khỏi exit sạch)
+      if (cancelPollTimer) clearInterval(cancelPollTimer)
       this.running.delete(job.id)
       // R7-M2 (S4, audit R7-M1): job terminal → dọn counter preempt của job
       // (Map keyed jobId không bao giờ bị delete trước đây — mọc chậm).
@@ -1320,91 +1377,192 @@ class GoalLoopWorker {
    *   - queued     → cancelled thẳng (chưa chạy thì không cần chạy nữa)
    *   - running trong Map → set cancelRequestedAt (DB) + flag (Map) — loop
    *     tự thoát ở vòng cancelCheck kế tiếp
-   *   - running KHÔNG trong Map (orphan) → cancelled thẳng
+   *   - running ở process KHÁC còn sống (split-mode R42 FIX-STOP-2) → CHỈ set
+   *     cancelRequestedAt (KHÔNG flip status — flip là láo: worker vẫn đang
+   *     chạy) — worker poll flag này ở onSignal (nhịp heartbeat) rồi tự thoát
+   *     + tự mark cancelled ở terminal mark
+   *   - running KHÔNG trong Map + pid chủ đã chết (orphan thật) → cancelled thẳng
+   *
+   * R42 FIX-STOP-1 — mọi DB write/read trong đường cancel bọc withSqliteRetry
+   * (mirror pattern checkpoint R36-ACT). Bằng chứng gốc: 2 lần user bấm Dừng
+   * đều POST 500 sau 15.1s "Socket timeout" — write cancel không retry kẹt
+   * lock SQLite dưới contention (worker đang ghi heartbeat/checkpoint/obs).
    */
   async cancel(jobId: string): Promise<boolean> {
-    // 1. Job còn queued → cancelled ngay
-    const queuedCancel = await db.goalLoopJob.updateMany({
-      where: { id: jobId, status: 'queued' },
-      data: { status: 'cancelled', completedAt: new Date() },
-    })
-    if (queuedCancel.count === 1) {
-      console.log(`[GoalLoopWorker] cancel job ${jobId} — queued → cancelled`)
-      return true
+    // 0. Read fresh (retry) — mọi quyết định nhánh dựa row HIỆN TẠI: trạng
+    //    thái + workerPid. Bản cũ updateMany mù + chỉ nhìn Map local process
+    //    này — split-mode đi nhánh orphan SAI cho job worker đang chạy.
+    let row: { status: string; workerPid: number | null; cancelRequestedAt: Date | null } | null = null
+    try {
+      row = await withSqliteRetry(
+        () => db.goalLoopJob.findUnique({
+          where: { id: jobId },
+          select: { status: true, workerPid: true, cancelRequestedAt: true },
+        }),
+        { label: `goal-loop cancel-read job ${jobId}` },
+      )
+    } catch (err) {
+      console.warn(
+        `[GoalLoopWorker] cancel job ${jobId}: đọc row lỗi sau retry:`,
+        firstErrLine(err)
+      )
+      throw err // route → 500 — UI (FIX-STOP-3) giờ rollback + toast lỗi rõ ràng
     }
+    if (!row) return false // không tồn tại
+    if (row.status !== 'queued' && row.status !== 'running') return false // đã terminal
+    if (row.cancelRequestedAt) return true // idempotent — flag đã bật từ lần bấm trước
+
+    // 1. Job còn queued → cancelled ngay
+    if (row.status === 'queued') {
+      const queuedCancel = await withSqliteRetry(
+        () => db.goalLoopJob.updateMany({
+          where: { id: jobId, status: 'queued' },
+          data: { status: 'cancelled', completedAt: new Date() },
+        }),
+        { label: `goal-loop cancel-queued job ${jobId}` },
+      )
+      if (queuedCancel.count === 1) {
+        console.log(`[GoalLoopWorker] cancel job ${jobId} — queued → cancelled`)
+        return true
+      }
+      // Status đổi giữa chừng (vd worker vừa claim → running) — lần bấm kế
+      // xử lý nhánh running; không coi là lỗi
+      return false
+    }
+
     // 2. Job đang chạy trong process này → DB flag + in-memory flag
     const meta = this.running.get(jobId)
     if (meta) {
       meta.cancelRequested = true
-      await db.goalLoopJob
-        .update({ where: { id: jobId }, data: { cancelRequestedAt: new Date() } })
-        .catch((err) => {
-          // Flag in-memory đã set — loop vẫn sẽ thoát; DB flag chỉ để bền qua
-          // restart (nếu process chết ngay sau đó, job requeue rồi bị hủy lúc claim)
-          console.warn(
-            `[GoalLoopWorker] cancel job ${jobId}: set cancelRequestedAt lỗi (flag in-memory vẫn đã bật):`,
-            err instanceof Error ? err.message : String(err)
-          )
-        })
-      console.log(`[GoalLoopWorker] cancel job ${jobId} — running: đã bật cancelRequestedAt, loop thoát ở vòng check kế`)
+      await withSqliteRetry(
+        () => db.goalLoopJob.update({ where: { id: jobId }, data: { cancelRequestedAt: new Date() } }),
+        { label: `goal-loop cancel-flag job ${jobId}` },
+      ).catch((err) => {
+        // Flag in-memory đã set — loop vẫn sẽ thoát; DB flag chỉ để bền qua
+        // restart (nếu process chết ngay sau đó, job requeue rồi bị hủy lúc claim)
+        console.warn(
+          `[GoalLoopWorker] cancel job ${jobId}: set cancelRequestedAt lỗi (flag in-memory vẫn đã bật):`,
+          firstErrLine(err)
+        )
+      })
+      console.log(`[GoalLoopWorker] cancel job ${jobId} — running (process này): đã bật cancelRequestedAt, loop thoát ở vòng check kế`)
       return true
     }
-    // 3. Job running mồ côi (process cũ chết) → cancelled thẳng
-    const orphanCancel = await db.goalLoopJob.updateMany({
-      where: { id: jobId, status: 'running' },
-      data: { status: 'cancelled', completedAt: new Date() },
-    })
+
+    // 3. R42 FIX-STOP-2 — running KHÔNG trong Map process này, split-mode:
+    //    workerPid còn sống (process khác đang chạy job) → CHỈ set
+    //    cancelRequestedAt. Worker process poll flag (onSignal) rồi tự thoát
+    //    + tự mark cancelled. Flip status 'cancelled' ở đây sẽ LÁO (agent vẫn
+    //    chạy tiếp ở worker — đúng bệnh "bấm dừng không dừng được").
+    const pidAlive = Boolean(
+      row.workerPid && row.workerPid !== process.pid && this.isWorkerPidAlive(row.workerPid)
+    )
+    if (pidAlive) {
+      await withSqliteRetry(
+        () => db.goalLoopJob.updateMany({
+          where: { id: jobId, status: 'running' },
+          data: { cancelRequestedAt: new Date() },
+        }),
+        { label: `goal-loop cancel-cross-process job ${jobId}` },
+      )
+      console.log(
+        `[GoalLoopWorker] cancel job ${jobId} — running ở process ${row.workerPid} (split-mode): đã set cancelRequestedAt — worker poll sẽ thoát loop ở ranh giới an toàn`
+      )
+      return true
+    }
+
+    // 4. Orphan thật (pid chủ đã chết / null — process cũ chết giữa chừng,
+    //    không ai chạy job này) → cancelled thẳng
+    const orphanCancel = await withSqliteRetry(
+      () => db.goalLoopJob.updateMany({
+        where: { id: jobId, status: 'running' },
+        data: { status: 'cancelled', completedAt: new Date() },
+      }),
+      { label: `goal-loop cancel-orphan job ${jobId}` },
+    )
     if (orphanCancel.count === 1) {
-      console.log(`[GoalLoopWorker] cancel job ${jobId} — running mồ côi (không thuộc process này) → cancelled`)
+      console.log(
+        `[GoalLoopWorker] cancel job ${jobId} — running mồ côi (pid ${row.workerPid ?? 'null'} đã chết) → cancelled`
+      )
       return true
     }
-    return false // job không tồn tại hoặc đã terminal
+    return false // status đổi giữa chừng — lần bấm kế xử lý
   }
 
   /**
    * Nút Dừng mọi job của 1 session (dùng bởi 14-c ở agent-run cancel route):
    * queued → cancelled; running trong Map → flag + cancelRequestedAt; running
-   * mồ côi → cancelled thẳng. Return số job affected.
+   * ở process khác còn sống (split-mode R42) → chỉ cancelRequestedAt (worker
+   * tự thoát qua poll); running mồ côi (pid chết) → cancelled thẳng.
+   * Return số job affected. Mọi write bọc withSqliteRetry (FIX-STOP-1).
    */
   async cancelSessionJobs(sessionId: string): Promise<number> {
     // Mọi job queued của session → cancelled
-    const queuedCancel = await db.goalLoopJob.updateMany({
-      where: { sessionId, status: 'queued' },
-      data: { status: 'cancelled', completedAt: new Date() },
-    })
-    // Job running của session — tách 2 nhóm: trong Map (bật flag, loop tự thoát)
-    // vs mồ côi process cũ (không ai chạy → cancel thẳng)
-    const runningRows = await db.goalLoopJob.findMany({
-      where: { sessionId, status: 'running' },
-      select: { id: true },
-    })
+    const queuedCancel = await withSqliteRetry(
+      () => db.goalLoopJob.updateMany({
+        where: { sessionId, status: 'queued' },
+        data: { status: 'cancelled', completedAt: new Date() },
+      }),
+      { label: `goal-loop cancel-session-queued ${sessionId}` },
+    )
+    // Job running của session — tách 3 nhóm: trong Map (bật flag, loop tự
+    // thoát) / process khác còn sống (chỉ cancelRequestedAt — worker poll)
+    // / mồ côi pid chết (cancel thẳng)
+    const runningRows = await withSqliteRetry(
+      () => db.goalLoopJob.findMany({
+        where: { sessionId, status: 'running' },
+        select: { id: true, workerPid: true },
+      }),
+      { label: `goal-loop cancel-session-read ${sessionId}` },
+    )
     const inMapIds: string[] = []
+    const crossProcessIds: string[] = []
     const orphanIds: string[] = []
     for (const row of runningRows) {
       const meta = this.running.get(row.id)
       if (meta) {
         meta.cancelRequested = true
         inMapIds.push(row.id)
+      } else if (
+        row.workerPid &&
+        row.workerPid !== process.pid &&
+        this.isWorkerPidAlive(row.workerPid)
+      ) {
+        crossProcessIds.push(row.id) // R42 — worker khác đang chạy, không flip status
       } else {
         orphanIds.push(row.id)
       }
     }
     if (inMapIds.length > 0) {
-      await db.goalLoopJob
-        .updateMany({ where: { id: { in: inMapIds } }, data: { cancelRequestedAt: new Date() } })
-        .catch(() => {})
+      await withSqliteRetry(
+        () => db.goalLoopJob.updateMany({
+          where: { id: { in: inMapIds } },
+          data: { cancelRequestedAt: new Date() },
+        }),
+        { label: `goal-loop cancel-session-flag ${sessionId}` },
+      ).catch(() => {})
+    }
+    if (crossProcessIds.length > 0) {
+      await withSqliteRetry(
+        () => db.goalLoopJob.updateMany({
+          where: { id: { in: crossProcessIds } },
+          data: { cancelRequestedAt: new Date() },
+        }),
+        { label: `goal-loop cancel-session-cross ${sessionId}` },
+      ).catch(() => {})
     }
     if (orphanIds.length > 0) {
-      await db.goalLoopJob
-        .updateMany({
+      await withSqliteRetry(
+        () => db.goalLoopJob.updateMany({
           where: { id: { in: orphanIds } },
           data: { status: 'cancelled', completedAt: new Date() },
-        })
-        .catch(() => {})
+        }),
+        { label: `goal-loop cancel-session-orphan ${sessionId}` },
+      ).catch(() => {})
     }
-    const affected = queuedCancel.count + inMapIds.length + orphanIds.length
+    const affected = queuedCancel.count + inMapIds.length + crossProcessIds.length + orphanIds.length
     console.log(
-      `[GoalLoopWorker] cancelSessionJobs ${sessionId}: ${queuedCancel.count} queued → cancelled, ${inMapIds.length} running bật flag cancel, ${orphanIds.length} running mồ côi → cancelled`
+      `[GoalLoopWorker] cancelSessionJobs ${sessionId}: ${queuedCancel.count} queued → cancelled, ${inMapIds.length} running bật flag cancel, ${crossProcessIds.length} running cross-process set cancelRequestedAt (split), ${orphanIds.length} running mồ côi → cancelled`
     )
     return affected
   }

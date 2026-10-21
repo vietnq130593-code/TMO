@@ -1937,3 +1937,35 @@
 - **Tác động:** Restore "code + keys" là KHÔNG ĐỦ — deployment state pin-bởi-test phải được khôi phục đúng nếu không gate đỏ ngay đợt đầu sau reset (chính là điều đã xảy ra).
 - **Fix:** .env bổ khối "DEPLOYMENT STATE PIN" 3 biến (softmax · UTILITY_NIM_MODEL · MAX_ATTEMPTS=5) + COMMENT-out dòng =2 cũ (r136-B3 cấm =2 tồn tại). Runbook my-project recovery/RESTORE-TMO.md mục reset #3 cập nhật checklist B2 tương ứng (bài học cho reset #4+).
 - **Kiểm chứng:** r130/r135/r136 43/43 sau fix; gate stage tests PASS.
+
+---
+
+## ĐỢT R42 — NÚT DỪNG KHÔNG DỪNG ĐƯỢC AGENT TRONG SPLIT-MODE (user report 2026-10-21) — FIX-STOP-1/2/2b/3
+
+> Nguồn: user report trực tiếp "khi tôi bấm dừng nhưng không thể dừng được agents". Điều tra live cùng lúc phát hiện 3 lớp lỗi độc lập chồng nhau trên đường cancel của goal-loop durable job split-mode (KPI #4 — job chạy trong process `theopus-worker`, nút Dừng gửi từ process app `theopusflashlite`). Regression: r145 (12 test — source-scan pin 4 lớp fix + behavioral constant).
+
+### BUG2-320 · H·P1 — cancel() flip status 'cancelled' cho job ĐANG CHẬY trong worker process khác (nhánh orphan đo mù) — agent KHÔNG DỪNG, UI nói đã dừng — FIX-STOP-2 (2026-10-21)
+- **Hiện tượng:** `cancel()` chạy ở process API: job running KHÔNG có trong `this.running` Map (Map của process API rỗng trong split-mode — job chạy ở worker) → rơi nhánh orphan → `updateMany({status:'cancelled'})` — trong khi agent vẫn đang chạy trong worker. UI hiện job đã dừng nhưng agent tiếp tục đốt token/làm việc: ĐÚNG bệnh "bấm dừng nhưng không thể dừng được agents".
+- **Tác động:** P1 — user mất quyền kiểm soát tác vụ đã kích hoạt; DB state nói dối (cancelled nhưng vẫn ghi checkpoint/heartbeat/kết quả ghi đè lẫn nhau khi job hoàn thành tự nhiên sau đó).
+- **Fix:** cancel() đọc row FRESH (`findUnique` + withSqliteRetry) TRƯỚC phân nhánh; nhánh mới cross-process: `workerPid` còn sống + ≠ process.pid → CHỈ set `cancelRequestedAt` (KHÔNG flip status — flip là láo); nhánh orphan thật (pid chết/null) mới được cancel thẳng. cancelSessionJobs() tách 3 nhóm tương tự (inMap/crossProcess/orphan).
+- **Kiểm chứng:** r145-3/3b/5; E2E chặng B (job thật chạy trong worker → POST cancel → cancelRequestedAt set, status KHÔNG đổi, worker tự mark cancelled tại terminal).
+
+### BUG2-321 · H·P2 — cancel path 0 retry: 2 lần user bấm Dừng đều POST 500 "Socket timeout 15s" (write kẹt lock SQLite khi worker ghi dồn heartbeat/checkpoint/obs) — FIX-STOP-1 (2026-10-21)
+- **Hiện tượng:** Bằng chứng live (phiên trước): user bấm Dừng ×2 đều 500 sau 15.1s `Socket timeout (the database failed to respond...)` — mọi write trong cancel()/cancelSessionJobs() đều bare `db.goalLoopJob.*` không retry, trong khi worker đang ghi dồn (checkpoint 50k chars + heartbeat + obs ledger) dưới SQLite lock.
+- **Tác động:** Nút Dừng chết hẳn dưới đúng lúc cần nhất (agent đang chạy = DB đang bận); user không có đường dừng nào.
+- **Fix:** Toàn bộ 9 nhánh DB access trong cancel()/cancelSessionJobs() bọc `withSqliteRetry` (mirror pattern checkpoint R36-ACT — transient SQLite retry 3 lần).
+- **Kiểm chứng:** r145-1/2; E2E chặng A+B POST cancel trả 200 nhanh dưới DB đang tải (job khác đang chạy).
+
+### BUG2-322 · C·P2 — UI cancelGoalLoopJob không check res.ok: fetch KHÔNG reject trên HTTP 500 → 2 lần server 500 làm optimistic flag "Đang yêu cầu dừng…" treo VĨNH VIỄN, không toast — FIX-STOP-3 (2026-10-21)
+- **Hiện tượng:** Bản cũ `.catch()` chỉ bắt network error; HTTP 500 (BUG2-321) đi vào `.then()` ngầm im lặng — panel giữ "Đang yêu cầu dừng…" mãi, user không biết đã thất bại (bằng chứng: user bấm ×2 đều im lặng).
+- **Tác động:** Trạng thái UI nói dối "đang dừng" — user chờ vô ích; không có tín hiệu để thử lại.
+- **Fix:** check `!res.ok` throw + body `{ok, cancelled}` — mọi nhánh thất bại rollback optimistic flag + toast destructive rõ ràng (lỗi kết nối/máy chủ hoặc job đổi trạng thái giữa chừng).
+- **Kiểm chứng:** r145-10.
+
+### BUG2-323 · C·P2 — worker KHÔNG bao giờ thấy cancelRequestedAt kịp thời: poll chỉ bám onSignal (chỉ bắn ở ranh giới vòng) — LLM call dài 60-120s kéo dài độ trễ dừng thêm cả vòng — FIX-STOP-2b (2026-10-21)
+- **Hiện tượng:** FIX-STOP-2 bản đầu poll `cancelRequestedAt` trong onSignal — nhưng onSignal chỉ bắn ở ranh giới iteration/tool_batch/compression/cycle; 1 LLM call dài 60-120s không bắn signal nào → flag bật giữa chừng call phải chờ call xong + ranh giới kế MỚI được đọc (thêm cả vòng iteration).
+- **Tác động:** Độ trễ dừng không chốt trên được (phụ thuộc độ dài LLM call), trải nghiệm "dừng không dừng được" kéo dài.
+- **Fix:** Timer poll ĐỘC LẬP mỗi job (`setInterval` GOAL_LOOP_CANCEL_POLL_MIN_INTERVAL_MS default 5s, 0=tắt) chạy nền suốt đời job — khai báo NGOÀI try + clearInterval trong finally (return sớm không leak timer); onSignal poll giữ làm lưới dự phòng. Loop vẫn chỉ thoát ở RANH GIỚI AN TOÀN (không abort giữa LLM call — giữ chính sách cũ).
+- **Kiểm chứng:** r145-6/7/8/9; E2E chặng B: log worker "timer poll bắt được cancelRequestedAt từ DB" trong ~5s sau POST cancel.
+
+> Ghi nhận NGOÀI scope (không fix đợt này): (1) `agent-event-bus` in-memory ring rỗng ở process API trong split-mode (job events phát trong worker) — KHÔNG có UI nào tiêu thụ `/api/agent-events` (chỉ API ops); nguồn chuẩn xuyên process là ObservationEvent DB (timeline) + trail JSONL đĩa — 2 nguồn đều sống. (2) `cancelSessionRuns` (registry in-memory) flag chỉ có hiệu lực trong process phát — đường inline cũ; goal-loop durable đã covered bởi cancelRequestedAt DB flag.
