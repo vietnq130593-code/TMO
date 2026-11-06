@@ -4,7 +4,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript)](https://www.typescriptlang.org/)
 [![Neo4j](https://img.shields.io/badge/Neo4j-5.x-018BFF?logo=neo4j)](https://neo4j.com/)
 [![Qdrant](https://img.shields.io/badge/Qdrant-1.14+-DC2C5A?logo=qdrant)](https://qdrant.tech/)
-[![License](https://img.shields.io/badge/License-Private-red)]()
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 
 **Version**: 2.0.0
 
@@ -329,4 +329,6 @@ The `z-ai-web-dev-sdk` package đã được loại bỏ hoàn toàn khỏi code
 
 ## License
 
-Private project. All rights reserved.
+Copyright (c) 2026 Nguyen Quoc Viet
+
+This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)** — the strictest OSI-approved open-source license: any derivative work, including one offered over a network (SaaS), must be released under AGPL-3.0 with full source code. See the [LICENSE](LICENSE) file for details.
